@@ -14,8 +14,7 @@
   let { onclose = () => {} } = $props();
 
   const sb = uiApp().use(sidebarDecl);
-  const peers = $derived(hostState.list.filter((h) => !h.local));
-  const here = $derived(hostState.list.find((h) => h.local));
+  const peers = $derived(hostState.list);
   const editing = $derived($sb.descAt?.startsWith('h:') ? $sb.descAt.slice(2) : null);
   let root = $state(null);
   $effect(() => { refreshHosts(); });
@@ -49,9 +48,6 @@
     <span>Hosts</span>
     <InfoTip testid="host-help" label="About hosts" text="Each chat runs on one host. New chats can be routed to a checked host that has a description." />
   </div>
-  {#if here}
-    <div class="item static" data-testid="host-local"><span class="mark"></span><span class="name">{here.label}</span></div>
-  {/if}
   {#each peers as h (h.id)}
     <div class="item" class:open={editing === h.id} data-testid="host-row" data-host={h.id}>
       <button class="pick press" role="menuitemcheckbox" aria-checked={h.auto === true} data-testid="host-auto"
@@ -70,7 +66,7 @@
       </div>
     {/if}
   {:else}
-    <div class="item static empty">No other hosts</div>
+    <div class="item static empty">No hosts</div>
   {/each}
 </div>
 

@@ -284,6 +284,12 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
       const picked = await askHost({ title: conversation.title, transcript, hosts: candidates });
       const host = picked ? candidates.find((h) => h.id === picked) : null;
       let confirmed = false;
+      if (host?.local) {
+        // This machine is a candidate like any host; picking it is the default placement, so there is nothing to file or confirm.
+        console.log(`[autoroute] ${JSON.stringify({ event: 'router-host', chat: id, candidates: candidates.map((h) => h.id), picked: host.id, local: true })}`);
+        hostDeclined.set(id, conversation.turns || 0);
+        return null;
+      }
       if (host) {
         try { confirmed = await confirm({ title: conversation.title, transcript, host }); } catch (cause) { console.error(`[autoroute] ${id}: host confirmation failed:`, cause?.message || cause); }
       }

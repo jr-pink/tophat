@@ -60,7 +60,10 @@ export function loadRuntimes({ file = FILE(), peers = hubPeers(), self = selfDev
 /** What the host menu and the router read: the local entry first, then every hub peer, each with its address state and notes. */
 export function listHosts({ file = FILE(), peers = hubPeers(), self = selfDevice() } = {}) {
   const all = readHosts(file);
-  const out = [{ id: '', label: self || 'this machine', local: true, configured: true, description: '', auto: false }];
+  // This machine is a host like any other: its description and auto-routing flag live under its own device id.
+  const mine = (self && all[self]) || {};
+  const out = [{ id: '', label: String(mine.label || self || 'this machine'), local: true, configured: true,
+    description: String(mine.description || ''), auto: mine.auto === true, at: mine.at || null }];
   for (const p of peers) {
     if (p.id === self) continue;
     const v = all[p.id] || {};
@@ -73,7 +76,8 @@ export function listHosts({ file = FILE(), peers = hubPeers(), self = selfDevice
 }
 
 /** Hosts the router may choose: reachable by this instance, opted in, and described in words (a host with no description is never a candidate). */
-export const autoCandidates = (hosts) => hosts.filter((h) => !h.local && h.configured && h.auto && h.description.trim());
+export const autoCandidates = (hosts, self = selfDevice()) => hosts.filter((h) => h.configured && h.auto && h.description.trim())
+  .map((h) => (h.local ? { ...h, id: self || 'this-machine' } : h));
 
 /** His edit from the host menu: `description` and/or `auto`. The newest `at` per host wins, so an offline replay changes nothing newer. */
 export function setNote(id, { description, auto, at = null } = {}, file = FILE()) {

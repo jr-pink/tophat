@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { app } from '$lib/server/app.js';
-import { listHosts, setNote } from '$lib/server/hosts.js';
+import { listHosts, selfDevice, setNote } from '$lib/server/hosts.js';
 
 // GET: the hosts a chat can live on ({ hosts: [{ id, label, local, configured, description, auto, online?, chats? }] }): this machine
 // first, then every peer on the hub, with whether this server can reach it. POST { id, description?, auto?, at }: his edit from the host
@@ -16,8 +16,9 @@ export async function GET() {
 
 export async function POST({ request }) {
   const body = await request.json().catch(() => ({}));
-  if (!body?.id || !listHosts().some((h) => h.id === body.id)) return json({ error: 'unknown host' }, { status: 400 });
-  setNote(String(body.id), {
+  const id = typeof body?.id === 'string' ? body.id : null;
+  if (id === null || !listHosts().some((h) => h.id === id)) return json({ error: 'unknown host' }, { status: 400 });
+  setNote(id === '' ? selfDevice() : id, {
     ...(typeof body.description === 'string' ? { description: body.description } : {}),
     ...(typeof body.auto === 'boolean' ? { auto: body.auto } : {}),
     at: typeof body.at === 'string' ? body.at : null

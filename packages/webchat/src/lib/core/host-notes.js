@@ -21,7 +21,7 @@ function write(storage, key, value) {
 export function overlay(hosts, outbox) {
   return (hosts || []).map((h) => {
     const e = outbox?.[h.id];
-    if (!e || h.local) return h;
+    if (!e) return h;
     return { ...h, ...(typeof e.description === 'string' ? { description: e.description } : {}), ...(typeof e.auto === 'boolean' ? { auto: e.auto } : {}), pending: true };
   });
 }
@@ -31,7 +31,7 @@ export const readOutbox = (storage) => read(storage, OUTBOX, {});
 
 /** Records an edit durably (a later field replaces an earlier one for the same host) and returns the hosts as they now read. */
 export function queueEdit(id, fields, { storage, now = () => new Date().toISOString() } = {}) {
-  if (!id) return readCached(storage);
+  if (typeof id !== 'string') return readCached(storage);
   const outbox = read(storage, OUTBOX, {});
   const next = { ...(outbox[id] || {}), at: now() };
   if (typeof fields.description === 'string') next.description = fields.description.replace(/\s+/gu, ' ').trim().slice(0, 300);
