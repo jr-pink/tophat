@@ -38,7 +38,7 @@ html.demo-intro body > div[style*="contents"] { background: transparent !importa
 html.demo-intro-out body > div[style*="contents"] { transition: background-color var(--di-ms) var(--di-ease), box-shadow var(--di-ms) var(--di-ease); }
 
 /* the opener never shows a pending state: no "sending" while the scripted message goes in */
-html.demo-opener [data-testid="activity"][data-phase="queued"] { visibility: hidden; }
+html.demo-opener [data-testid="activity"][data-phase="queued"], html.demo-opener [data-testid="activity"][data-phase="starting"] { visibility: hidden; }
 html.demo-opener [data-testid="user-text"].queued { opacity: 1 !important; }
 
 /* the typing caret: fixed at the middle of the screen, steady while typing, blinking after */

@@ -21,6 +21,8 @@ the thin layer that makes that safe and gives it a first impression. It renders 
    once; reduced-motion visitors never get it. The opener never shows "sending". The shim answers that one action
    itself: the message and the description (`content/description.md` with a widget after each feature, `widgets/`) are stored as an ordinary
    turn and streamed through the real event feed in token-sized deltas. No model call.
+   A page for a guest this browser has not shown yet first clears the webchat's per-browser leftovers of earlier guests (IndexedDB `tophat-engine*`,
+   `qk:*` keys; `src/guest-reset.js`, inline in the page's first script) and starts with the Inbox folded.
    A request for the page with no session and no html `Accept` (a link preview, curl) gets the description as a plain 200 page with title,
    description and og: tags (`og.png` in `public/`) and no guest is made for it.
 5. Every later message is a real runner turn. The runner is the demo user's, with its tools cut to `memory_search` and `memory_read`

@@ -23,6 +23,8 @@ import { hostname } from 'node:os';
 import { createHash } from 'node:crypto';
 import { SqliteBackend } from '@tophat-md/linknotes';
 import { hybridSearch } from '@tophat-md/linknotes/hybrid';
+import { withDatedPass } from '@tophat-md/linknotes/recency';
+import { ownerZone } from '../rev6/base/clock.mjs';
 
 const SCOPE_RE = /^[a-z][a-z0-9-]{1,47}$/;
 export const DEFAULT_SCOPE = 'local';
@@ -141,7 +143,9 @@ function dispatch(s, command, req, readOnly, env) {
   if (command === 'ingest') return s.ingest((req.records || []).map(asRecord), req.groups ? { acl: req.groups } : {});
   // Lexical search, plus dense retrieval fused by RRF when memory-embeddings.json beside the store turns it on (linknotes
   // hybrid.mjs; no file: the store's own search). `derived` gives derived memory its own allowance beside the raw hits.
-  if (command === 'search') return hybridSearch(s, req.query, { kind: req.kind, limit: req.limit || 20, asOf: req.as_of, allTerms: Boolean(req.all_terms), derived: req.derived });
+  // Then the dated pass (linknotes recency.mjs): a latest-value query gets the newest records about its topic first; a
+  // period, count or superlative gets every matching dated record; any other query gets the newest few the ranking missed.
+  if (command === 'search') return withDatedPass(s, hybridSearch(s, req.query, { kind: req.kind, limit: req.limit || 20, asOf: req.as_of, allTerms: Boolean(req.all_terms), derived: req.derived }), req, { tz: ownerZone(env) });
   if (command === 'read') return s.read(req.kind, String(req.id ?? ''), { nodes: req.nodes, budget: req.budget, asOf: req.as_of, history: Boolean(req.history) });
   if (command === 'apply') {
     // The evidence row cite() writes and the notes citing it land together or not at all: a refused batch leaves no

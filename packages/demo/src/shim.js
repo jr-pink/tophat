@@ -89,7 +89,6 @@
     v.caret.remove(); v.mirror.remove(); if (v.clone) v.clone.remove();
     if (v.bubble) v.bubble.style.visibility = '';
     window.removeEventListener('resize', v.onResize);
-    setTimeout(() => root.classList.remove('demo-opener'), 4000);
   };
   const dropIntro = () => { if (visual) cleanupVisual(); else root.classList.remove('demo-intro'); };
   /** Measures the real layout (the app untransformed) and sets the scale, the origin and the narrow bar. Idempotent: a resize measures again. */
@@ -273,6 +272,8 @@
   function update() {
     if (!st) return;
     if (st.verified && checkDeadline) { clearInterval(checkDeadline); checkDeadline = null; const h = document.getElementById('demo-check'); if (h) h.remove(); }
+    // the opener's answer has finished: its pending-state rules (intro.css) end
+    if (!st.intro && !st.running && !visual && st.turns === 0) root.classList.remove('demo-opener');
     if (st.turns >= st.cap && !st.running) overlay();
     else if (st.resting && !st.running && st.turns >= 1) overlay();
   }

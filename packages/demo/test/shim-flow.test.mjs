@@ -196,4 +196,17 @@ describe('the first minute, against a scratch demo', { skip }, () => {
     assert.ok(html.includes('<title>'));
     assert.equal((await fetch(`${base()}/og.png`)).status, 200);
   });
+  test('a new guest in the same browser starts from nothing: old qk:* keys and engine databases are gone, the Inbox folded', { timeout: 120_000 }, async () => {
+    const v = await visitor({ fake: 'pass', url: '/?fresh=1' });
+    try {
+      await until(async () => v.ev("localStorage.getItem('demo-guest')"), 20_000, 'the first guest');
+      const g1 = await v.ev("localStorage.getItem('demo-guest')");
+      await v.ev("localStorage.setItem('qk:marker','old');localStorage.setItem('tophat-workspaces:chats:main-folded','0');new Promise((r)=>{const q=indexedDB.open('tophat-engine-old-guest',1);q.onupgradeneeded=()=>{};q.onsuccess=()=>{q.result.close();r(1)}})");
+      await v.ev("location.href='/?fresh=1'");
+      await until(async () => (await v.ev("localStorage.getItem('demo-guest')")) !== g1, 20_000, 'a new guest');
+      assert.equal(await v.ev("localStorage.getItem('qk:marker')"), null, 'the old guest\'s device state is gone');
+      assert.equal(await v.ev("localStorage.getItem('tophat-workspaces:chats:main-folded')"), '1');
+      await until(async () => !(await v.ev("indexedDB.databases().then((l)=>l.some((d)=>d.name==='tophat-engine-old-guest'))")), 10_000, 'the old database deleted');
+    } finally { await v.close(); }
+  });
 });
