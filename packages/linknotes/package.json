@@ -17,6 +17,8 @@
     "./interface": "./src/interface.mjs",
     "./hybrid": "./core/vendor/rev6/push/hybrid.mjs",
     "./recency": "./core/vendor/rev6/push/recency.mjs",
+    "./support": "./core/vendor/rev6/push/support.mjs",
+    "./usage": "./core/vendor/rev6/push/usage.mjs",
     "./testing": "./test/kit.mjs"
   },
   "scripts": {

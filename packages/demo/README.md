@@ -6,7 +6,7 @@ the thin layer that makes that safe and gives it a first impression. It renders 
 ## How a visit works
 
 1. The edge (`edge/`, a Cloudflare Worker on tophat.md) proxies to the demo origin. If the origin is unreachable (connection error, 5xx, 52x,
-   no answer in 6 s) a page navigation gets `edge/fallback.html` instead: plain monospace prose, the original copy only.
+   no answer in 6 s) a page navigation gets `fallback/fallback.html` (charts filled by `fallback/render.mjs`) instead: plain monospace prose, the original copy only.
 2. The origin is `src/serve.mjs`, a shim in front of the demo instance's webchat. It is the sign-in service the webchat's own scope gate
    asks, so every visitor is a guest account with a personal scope; the app's scoping then keeps each visitor to their own chats. The
    registry of guests is a file the shim writes and the webchat re-reads.

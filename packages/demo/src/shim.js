@@ -78,14 +78,14 @@
 
   // ---- the opening motion (intro.css holds the look; this holds the numbers) ----
   // One duration and one easing for everything that moves back: the app's scale and slide, the black, the bar's width, the message.
-  const INTRO_MS = 900, INTRO_EASE = 'cubic-bezier(.65,.05,.2,1)';
+  const INTRO_MS = 900, INTRO_EASE = 'cubic-bezier(.55,0,.25,1)';
   const root = document.documentElement;
   let visual = null;
   const cleanupVisual = () => {
     const v = visual; if (!v) return; visual = null;
     clearTimeout(v.timer); clearTimeout(v.idle);
-    root.classList.remove('demo-intro', 'demo-ready', 'demo-intro-out', 'demo-measure');
-    for (const k of ['ox', 'oy', 'dx', 'dy', 's', 'pl', 'ms', 'ease']) root.style.removeProperty('--di-' + k);
+    root.classList.remove('demo-intro', 'demo-ready', 'demo-intro-out', 'demo-intro-in', 'demo-measure');
+    for (const k of ['ox', 'oy', 'dx', 'dy', 's', 'pl', 'ms', 'ease', 'delay', 'flight', 'in']) root.style.removeProperty('--di-' + k);
     v.caret.remove(); v.mirror.remove(); if (v.clone) v.clone.remove();
     if (v.bubble) v.bubble.style.visibility = '';
     window.removeEventListener('resize', v.onResize);
@@ -168,28 +168,82 @@
     const to = setTimeout(() => { mo.disconnect(); res(find()); }, 1500);
     mo.observe(document.body, { childList: true, subtree: true });
   });
-  /** The motion back: the app slides and scales to its real place, the black fades, the bar widens, and the message flies from the bar to its place at the top. */
+  /**
+   * The send-off, one continuous motion. The world stays black (a few stars drift down past it). The message is the hero, in its own colours
+   * the whole way: a quick dip (anticipation), then up along a gentle curve bowing toward the middle of the screen, slow to start, fast, long
+   * slowing, one small overshoot and settle in its place. Meanwhile the bar fades to half and slides down to its place and width. When the
+   * message has landed the interface comes in (`demo-intro-in`: the black, the bar's fade and the window frame go away).
+   */
+  const FLIGHT_MS = 1000, DIP_MS = 120, IN_MS = 320, LAND_AT = 0.78; // LAND_AT: the share of the climb after which it has reached its place and only the bounce is left
+  const bezier = (x1, y1, x2, y2) => (t) => {
+    if (t <= 0) return 0; if (t >= 1) return 1;
+    const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx, cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+    let a = t;
+    for (let i = 0; i < 8; i++) { const x = ((ax * a + bx) * a + cx) * a - t, d = (3 * ax * a + 2 * bx) * a + cx; if (Math.abs(x) < 1e-5) break; a -= x / (d || 1); }
+    return ((ay * a + by) * a + cy) * a;
+  };
+  const flightEase = bezier(.55, 0, .25, 1); // the same curve as INTRO_EASE: the bar and the message arrive together
+  /** The message's path as one keyframe per ~16 ms: top-left corner and scale, so the curve, the dip and the settle are plain arithmetic. */
+  function flightFrames(P0, P1, S, vw) {
+    const travel = Math.hypot(P1.x - P0.x, P1.y - P0.y), bow = Math.min(vw * 0.1, 90) * Math.min(1, travel / 400);
+    const dip = Math.min(16, Math.max(8, S * 3)), over = Math.min(26, Math.max(10, travel * 0.045)), n = Math.round(FLIGHT_MS / 16), frames = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n * FLIGHT_MS;
+      let x, y, sc;
+      if (t < DIP_MS) { // anticipation: down and a touch smaller
+        const k = Math.sin(Math.PI / 2 * (t / DIP_MS)); x = P0.x; y = P0.y + dip * k; sc = S * (1 - 0.03 * k);
+      } else {
+        const u = (t - DIP_MS) / (FLIGHT_MS - DIP_MS), p = flightEase(Math.min(1, u / LAND_AT)), rest = 1 - p;
+        x = P0.x + (P1.x - P0.x) * p - bow * Math.sin(Math.PI * p); // the bow leans toward the middle (left), then it swings into its place
+        y = P0.y + (P1.y - P0.y) * p + dip * rest * rest;
+        sc = S + (1 - S) * p;
+        const w = Math.max(0, (u - LAND_AT) / (1 - LAND_AT)); // the landing: one overshoot past its place (up) and a small swell, settling to rest
+        if (w > 0) { const b = Math.sin(Math.PI * w) * (1 - 0.3 * w); y -= over * b; sc *= 1 + 0.05 * b; }
+      }
+      frames.push({ transform: `translate(${x.toFixed(2)}px,${y.toFixed(2)}px) scale(${sc.toFixed(4)})`, offset: i / n });
+    }
+    return frames;
+  }
   function exitVisual(bubble) {
     const v = visual; if (!v) return;
     const S = v.S;
+    root.style.setProperty('--di-flight', FLIGHT_MS + 'ms'); root.style.setProperty('--di-in', IN_MS + 'ms');
+    root.style.setProperty('--di-delay', DIP_MS + 'ms'); root.style.setProperty('--di-ms', FLIGHT_MS - DIP_MS + 'ms'); root.style.setProperty('--di-ease', INTRO_EASE);
+    let landing = null;
     if (bubble) {
       // where the bubble will rest once the app is back (its layout box: undo the app's current transform), and where it starts (the typed text, on the bar)
-      const br = bubble.getBoundingClientRect(), bs = getComputedStyle(bubble);
+      const br = bubble.getBoundingClientRect(), hadQueued = bubble.classList.contains('queued');
+      bubble.classList.remove('queued'); // its colours as they will be, not as the pending message is drawn
+      const bs = getComputedStyle(bubble), st0 = {};
+      for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius', 'borderTopWidth', 'borderTopColor', 'boxShadow', 'whiteSpace', 'overflowWrap', 'textAlign', 'backgroundColor', 'color']) st0[k] = bs[k];
+      if (hadQueued) bubble.classList.add('queued');
+      const pageBg = getComputedStyle(root).getPropertyValue('--bg').trim() || '#fff'; // the bubble is a tint over the page: on black it must stay the colour it is on the page
       const fx = v.p0x + (br.left - v.p0x - v.dx) / S, fy = v.p0y + (br.top - v.p0y - (v.cy - v.p0y)) / S, fw = br.width / S, fh = br.height / S;
       const clone = document.createElement('div');
       clone.textContent = bubble.textContent;
-      for (const k of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'padding', 'borderRadius', 'border', 'boxShadow', 'whiteSpace', 'overflowWrap', 'textAlign']) clone.style[k] = bs[k];
-      Object.assign(clone.style, { position: 'fixed', left: '0', top: '0', margin: '0', boxSizing: 'border-box', width: fw + 'px', height: fh + 'px', zIndex: '2147482500', pointerEvents: 'none', transformOrigin: '0 0' });
-      const x0 = v.cx - v.textW * S - (parseFloat(bs.paddingLeft) || 0) * S, y0 = v.cy - fh * S / 2;
+      Object.assign(clone.style, st0, { opacity: '1', borderStyle: 'solid', borderWidth: st0.borderTopWidth, borderColor: st0.borderTopColor, backgroundColor: 'transparent', backgroundImage: `linear-gradient(${st0.backgroundColor},${st0.backgroundColor}), linear-gradient(${pageBg},${pageBg})`, position: 'fixed', left: '0', top: '0', margin: '0', boxSizing: 'border-box', width: fw + 'px', height: fh + 'px', zIndex: '2147482500', pointerEvents: 'none', transformOrigin: '0 0', willChange: 'transform' });
+      const x0 = v.cx - v.textW * S - (parseFloat(st0.paddingLeft) || 0) * S, y0 = v.cy - fh * S / 2;
       document.body.append(clone);
-      clone.animate([{ transform: `translate(${x0}px,${y0}px) scale(${S})` }, { transform: `translate(${fx}px,${fy}px) scale(1)` }], { duration: INTRO_MS, easing: INTRO_EASE, fill: 'both' });
-      clone.animate([{ backgroundColor: 'rgba(0,0,0,0)', color: v.color }, { backgroundColor: bs.backgroundColor, color: bs.color }], { duration: 260, easing: 'linear', fill: 'both' });
+      const frames = flightFrames({ x: x0, y: y0 }, { x: fx, y: fy }, S, root.clientWidth);
+      const fly = clone.animate(frames, { duration: FLIGHT_MS, easing: 'linear', fill: 'both' });
+      // the bubble takes its colours in the dip and keeps them: full colour, the one thing in view
+      clone.animate([{ opacity: 0.0, color: v.color }, { opacity: 1, color: st0.color }], { duration: DIP_MS, easing: 'linear', fill: 'both' });
       bubble.style.visibility = 'hidden'; v.bubble = bubble; v.clone = clone;
+      landing = fly.finished.then(() => land(v), () => land(v));
     }
     v.caret.classList.remove('idle'); v.caret.classList.add('gone');
-    root.style.setProperty('--di-ms', INTRO_MS + 'ms'); root.style.setProperty('--di-ease', INTRO_EASE);
     root.classList.add('demo-intro-out'); root.classList.remove('demo-intro');
-    v.timer = setTimeout(cleanupVisual, INTRO_MS + 150);
+    if (!landing) v.timer = setTimeout(() => land(v), FLIGHT_MS);
+    else v.timer = setTimeout(() => land(v), FLIGHT_MS + 400); // never later than this, whatever the animation does
+  }
+  /** The message is in its place: the interface comes in around it. */
+  function land(v) {
+    if (visual !== v || root.classList.contains('demo-intro-in')) return;
+    clearTimeout(v.timer);
+    if (v.bubble) v.bubble.style.visibility = '';
+    // the flying copy stays on top, whole, until the black has gone (cleanupVisual removes it): the real bubble comes up under it as the interface fades in
+    root.classList.add('demo-intro-in');
+    v.timer = setTimeout(cleanupVisual, IN_MS + 120);
   }
   async function introFlow() {
     const t0 = Date.now(), text = st.openerText;
@@ -273,7 +327,9 @@
     if (!st) return;
     if (st.verified && checkDeadline) { clearInterval(checkDeadline); checkDeadline = null; const h = document.getElementById('demo-check'); if (h) h.remove(); }
     // the opener's answer has finished: its pending-state rules (intro.css) end
-    if (!st.intro && !st.running && !visual && st.turns === 0) root.classList.remove('demo-opener');
+    // (the page's own view, not only the server's: a pending label stays hidden until the activity line has left its queued and starting phases)
+    const phase = (document.querySelector('[data-testid="activity"]') || {}).dataset?.phase;
+    if (!st.intro && !st.running && !visual && st.turns === 0 && phase !== 'queued' && phase !== 'starting') root.classList.remove('demo-opener');
     if (st.turns >= st.cap && !st.running) overlay();
     else if (st.resting && !st.running && st.turns >= 1) overlay();
   }
@@ -301,7 +357,7 @@
     // no session (the page came from the app's cache after the cookie expired): ask for one, then load the app again with it
     if (st && st.gone) return newSession(false);
     if (!st) return fail('state-unreachable');
-    if (!st.intro) dropIntro();
+    if (!st.intro) dropIntro(); else root.classList.add('demo-opener'); // the opener never shows a pending label, motion or not
     // a page of the app's own cache can name an intro chat that has since been played and replaced, or none at all: go to the live one
     const here = new URLSearchParams(location.search).get('chat');
     if (st.turns === 0 && wantsIntro() && here !== st.opener) return location.replace('/?chat=' + encodeURIComponent(st.opener));

@@ -1,0 +1,640 @@
+{
+ "personal_flooded_with_services": {
+  "caption": "99 questions about one person's real messages, workouts, sleep and code history, with the answers buried in about 300k tokens of everyday text; memory systems and chat-assistant services on the same questions; same answering model and judge for every memory system, each service answers with its own model.",
+  "note": "Every row except the evidence-only assistant holds the whole flooded haystack (7,326 events): the memory systems by ingest, the three chat-assistant services sent it through their normal chat interface (Grok Bot as file attachments). One assistant, marked separately, was sent only the 137 events that hold the answers and is scored on the questions she was asked.",
+  "n": 99,
+  "categories": [
+   "single_fact",
+   "multi_session",
+   "temporal",
+   "knowledge_update",
+   "abstention"
+  ],
+  "rows": [
+   {
+    "system": "tophat",
+    "score": 0.97,
+    "correct": 96,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.96,
+      "correct": 24,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.905,
+      "correct": 19,
+      "n": 21
+     },
+     "temporal": {
+      "score": 1.0,
+      "correct": 20,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 1.0,
+      "correct": 20,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    },
+    "ours": true
+   },
+   {
+    "system": "Mem0 OSS (Opus 5.5)",
+    "score": 0.879,
+    "correct": 87,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 1.0,
+      "correct": 25,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.762,
+      "correct": 16,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.8,
+      "correct": 16,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 0.85,
+      "correct": 17,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Mem0 OSS (Haiku 5.5)",
+    "score": 0.838,
+    "correct": 83,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.96,
+      "correct": 24,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.619,
+      "correct": 13,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.9,
+      "correct": 18,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 0.85,
+      "correct": 17,
+      "n": 20
+     },
+     "abstention": {
+      "score": 0.846,
+      "correct": 11,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Wiki notes (Opus 5.5)",
+    "score": 0.778,
+    "correct": 77,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.64,
+      "correct": 16,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.762,
+      "correct": 16,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.7,
+      "correct": 14,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 0.9,
+      "correct": 18,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Wiki notes (Haiku 5.5)",
+    "score": 0.687,
+    "correct": 68,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.48,
+      "correct": 12,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.667,
+      "correct": 14,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.75,
+      "correct": 15,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 0.7,
+      "correct": 14,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "all in context (baseline)",
+    "score": 0.97,
+    "correct": 96,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.96,
+      "correct": 24,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.905,
+      "correct": 19,
+      "n": 21
+     },
+     "temporal": {
+      "score": 1.0,
+      "correct": 20,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 1.0,
+      "correct": 20,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Meta Muse",
+    "score": 0.818,
+    "correct": 81,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.84,
+      "correct": 21,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.524,
+      "correct": 11,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.85,
+      "correct": 17,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 0.95,
+      "correct": 19,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Instinct",
+    "score": 0.838,
+    "correct": 83,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 0.92,
+      "correct": 23,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.619,
+      "correct": 13,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.8,
+      "correct": 16,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 0.9,
+      "correct": 18,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Grok Bot",
+    "score": 0.939,
+    "correct": 93,
+    "n": 99,
+    "answered": 99,
+    "categories": {
+     "single_fact": {
+      "score": 1.0,
+      "correct": 25,
+      "n": 25
+     },
+     "multi_session": {
+      "score": 0.857,
+      "correct": 18,
+      "n": 21
+     },
+     "temporal": {
+      "score": 0.85,
+      "correct": 17,
+      "n": 20
+     },
+     "knowledge_update": {
+      "score": 1.0,
+      "correct": 20,
+      "n": 20
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 13,
+      "n": 13
+     }
+    }
+   },
+   {
+    "system": "Evidence-only assistant",
+    "footnote": "different input: held only the 137 events that contain the evidence",
+    "separate": true,
+    "score": 0.963,
+    "correct": 77,
+    "n": 80,
+    "answered": 80,
+    "categories": {
+     "single_fact": {
+      "score": 0.947,
+      "correct": 18,
+      "n": 19
+     },
+     "multi_session": {
+      "score": 1.0,
+      "correct": 16,
+      "n": 16
+     },
+     "temporal": {
+      "score": 1.0,
+      "correct": 17,
+      "n": 17
+     },
+     "knowledge_update": {
+      "score": 0.875,
+      "correct": 14,
+      "n": 16
+     },
+     "abstention": {
+      "score": 1.0,
+      "correct": 12,
+      "n": 12
+     }
+    }
+   }
+  ]
+ },
+ "setB_longmemeval_hard15": {
+  "caption": "15 of the hardest questions from the public LongMemEval-S benchmark (about 115k tokens of chat history per question, chosen by how often published systems fail them), scored with the benchmark's official judge prompts; same answering model for every system.",
+  "note": "Public benchmark; the memory systems read each question's chat history in date order.",
+  "n": 15,
+  "categories": [
+   "single-session-user",
+   "single-session-assistant",
+   "single-session-preference",
+   "multi-session",
+   "knowledge-update",
+   "temporal-reasoning",
+   "abstention"
+  ],
+  "rows": [
+   {
+    "system": "tophat",
+    "score": 0.533,
+    "correct": 8,
+    "n": 15,
+    "answered": 15,
+    "categories": {
+     "single-session-user": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "single-session-assistant": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "single-session-preference": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "multi-session": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 3
+     },
+     "knowledge-update": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "temporal-reasoning": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "abstention": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     }
+    },
+    "ours": true
+   },
+   {
+    "system": "Mem0 OSS (Opus 5.5)",
+    "score": 0.4,
+    "correct": 6,
+    "n": 15,
+    "answered": 15,
+    "categories": {
+     "single-session-user": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "single-session-assistant": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "single-session-preference": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "multi-session": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 3
+     },
+     "knowledge-update": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "temporal-reasoning": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "abstention": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     }
+    }
+   },
+   {
+    "system": "Mem0 OSS (Haiku 5.5)",
+    "score": 0.267,
+    "correct": 4,
+    "n": 15,
+    "answered": 15,
+    "categories": {
+     "single-session-user": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "single-session-assistant": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     },
+     "single-session-preference": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "multi-session": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 3
+     },
+     "knowledge-update": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "temporal-reasoning": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "abstention": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     }
+    }
+   },
+   {
+    "system": "Wiki notes (Opus 5.5)",
+    "score": 0.4,
+    "correct": 6,
+    "n": 15,
+    "answered": 15,
+    "categories": {
+     "single-session-user": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "single-session-assistant": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     },
+     "single-session-preference": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "multi-session": {
+      "score": 0.333,
+      "correct": 1,
+      "n": 3
+     },
+     "knowledge-update": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     },
+     "temporal-reasoning": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "abstention": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     }
+    }
+   },
+   {
+    "system": "Wiki notes (Haiku 5.5)",
+    "score": 0.467,
+    "correct": 7,
+    "n": 15,
+    "answered": 15,
+    "categories": {
+     "single-session-user": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "single-session-assistant": {
+      "score": 0.0,
+      "correct": 0,
+      "n": 2
+     },
+     "single-session-preference": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "multi-session": {
+      "score": 0.333,
+      "correct": 1,
+      "n": 3
+     },
+     "knowledge-update": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "temporal-reasoning": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "abstention": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     }
+    }
+   },
+   {
+    "system": "all in context (baseline)",
+    "score": 0.6,
+    "correct": 9,
+    "n": 15,
+    "answered": 15,
+    "categories": {
+     "single-session-user": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "single-session-assistant": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "single-session-preference": {
+      "score": 1.0,
+      "correct": 2,
+      "n": 2
+     },
+     "multi-session": {
+      "score": 0.333,
+      "correct": 1,
+      "n": 3
+     },
+     "knowledge-update": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "temporal-reasoning": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     },
+     "abstention": {
+      "score": 0.5,
+      "correct": 1,
+      "n": 2
+     }
+    }
+   }
+  ]
+ }
+}

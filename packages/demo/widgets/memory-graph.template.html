@@ -8,118 +8,133 @@ figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
 figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
 figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
 /* this figure: ink on paper, one accent */
-:root{--bg:#fbfaf6;--ink:#1c1b19;--dim:#77736a;--line:#d9d5c9;--edge:#bcb7a6;--sheet:#ffffff;--hot:#c2410c}
-@media (prefers-color-scheme:dark){:root{--bg:#131312;--ink:#e9e6dd;--dim:#8f8b80;--line:#34332f;--edge:#4d4b44;--sheet:#1a1a18;--hot:#ff7a45}}
+:root{--bg:#fbfaf6;--ink:#1c1b19;--dim:#77736a;--line:#d9d5c9;--edge:#bcb7a6;--sheet:#ffffff;--hot:#a8305f}
+@media (prefers-color-scheme:dark){:root{--bg:#131312;--ink:#e9e6dd;--dim:#8f8b80;--line:#34332f;--edge:#4d4b44;--sheet:#1a1a18;--hot:#e8679a}}
 body{background:var(--bg);color:var(--ink);font:11px/1.45 ui-monospace,"SF Mono",Menlo,monospace}
 .art{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 272px}
 #g{position:relative;min-width:0;min-height:0}
 canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:pan-y}
-#pages{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}
-.sh{border-bottom:1px solid var(--line);background:var(--sheet);min-height:0;display:flex;flex-direction:column;flex:none}
-.sh:last-child{border-bottom:0}
-.sh.open{flex:1 1 0}
-.hd{display:flex;align-items:baseline;gap:8px;padding:6px 10px;cursor:pointer;white-space:nowrap;overflow:hidden}
-.hd b{font:700 12.5px/1.2 Georgia,"Iowan Old Style",serif;overflow:hidden;text-overflow:ellipsis}
-.hd u{margin-left:auto;text-decoration:none;color:var(--dim);font-size:10px;flex:none}
-.hd b{flex:0 1 auto;min-width:0}
-.sh:not(.open) .hd:hover b{color:var(--hot)}
-.sh.open .hd{cursor:default;padding-bottom:3px}
-.bd{flex:1;min-height:0;overflow:hidden;padding:0 10px 6px;display:none;position:relative}
-.sh.open .bd{display:block}
-.bd::after{content:"";position:absolute;left:0;right:0;bottom:0;height:18px;background:linear-gradient(transparent,var(--sheet));pointer-events:none}
-.ln{display:grid;grid-template-columns:34px minmax(0,1fr);gap:0 6px;padding:2px 0;border-top:1px dotted var(--line)}
-.ln:first-child{border-top:0}
-.ln span{color:var(--dim);font-size:10px;white-space:nowrap}
-.ln p{margin:0;max-height:2.8em;overflow:hidden;font-size:10.5px;line-height:1.4}
-.pv .hd u{color:var(--hot)}
-.none{padding:10px;color:var(--dim)}
+#cards{border-left:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;gap:14px;padding:12px 12px 12px 30px;min-height:0;min-width:0}
+.cd{position:relative;border:1px solid var(--hot);background:var(--sheet);padding:7px 10px 9px;min-width:0}
+.cd h4{margin:0 0 3px;font:600 9.5px/1.2 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.07em;text-transform:uppercase;color:var(--hot)}
+.cd h4 span{color:var(--dim);letter-spacing:0;text-transform:none;font-weight:400;margin-left:6px}
+.cd p{margin:0;font:12px/1.4 Georgia,"Iowan Old Style","Times New Roman",serif;color:var(--ink)}
+#lead{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.art{position:relative}
 @media (max-width:560px){
-  .art{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) 46%}
-  #pages{border-left:0;border-top:1px solid var(--line)}
-  .ln{grid-template-columns:34px minmax(0,1fr)}.ln p{white-space:nowrap;text-overflow:ellipsis}
+  .art{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}
+  #cards{border-left:0;border-top:1px solid var(--line);flex-direction:row;align-items:flex-start;gap:8px;padding:22px 8px 8px}
+  .cd{flex:1 1 0;padding:5px 7px 6px}.cd p{font-size:11px;line-height:1.33}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
-</style></head><body data-shots="page2|#pages .sh:nth-child(2) .hd|click;hover|@140_170|hover">
+</style></head><body data-shots="hover|@140_170|hover">
 <figure>
-<div class="art"><div id="g"><canvas id="c" aria-label="graph of the memory's entities"></canvas></div><div id="pages"></div></div>
-<figcaption><b>Fig. 1</b>The memory behind this site: a dot per entity, a line where notes mention two together. Hover a dot to read the page derived from its notes; click to keep it open.</figcaption>
+<div class="art"><div id="g"><canvas id="c" aria-label="graph of the memory's entities"></canvas></div>
+<div id="cards"><div class="cd" id="c-note"><h4>note<span>on one entity</span></h4><p>Derived pages are built per viewer, only from the notes that viewer may read.</p></div>
+<div class="cd" id="c-link"><h4>link<span>one note, three entities</span></h4><p>A replica encrypts every change before it leaves the device; the hub relays ciphertext and holds no key.</p></div></div>
+<svg id="lead" aria-hidden="true"></svg></div>
+<figcaption><b>Fig. 1</b>The memory behind this site: a dot per entity, a line where notes mention two together. A note about one entity (first arrow) and a note linking three (second arrow, outlined) both live inside this graph.</figcaption>
 </figure>
 <script>
 const DATA=/*DATA*/{"open":[],"nodes":[],"links":[],"notes":0,"at":""}/*END*/;
 (()=>{
-const cv=document.getElementById('c'),cx=cv.getContext('2d'),host=document.getElementById('pages');
+const cv=document.getElementById('c'),cx=cv.getContext('2d'),art=document.querySelector('.art'),lead=document.getElementById('lead');
 const N=DATA.nodes.map((n,i)=>({...n,i,x:0,y:0,r:2.6+Math.sqrt(n.n)*.62}));
 const L=DATA.links.map(([a,b,w])=>({a:N[a],b:N[b],w}));
+/* the two samples: a note about one entity, and one note that names three (a hyperedge); entities by name, else the best-linked */
+const byName=(s,k)=>{const f=N.findIndex(n=>n.name===s);return f>=0?f:k};
+const NOTE=byName('derived pages',4);
+let TRI=['replica sync','hub (ciphertext relay)','end-to-end encryption'].map((s,k)=>byName(s,k+5));
+TRI=[...new Set(TRI)];while(TRI.length<3){const f=N.findIndex((n,i)=>!TRI.includes(i)&&i!==NOTE);TRI.push(f)}
+/* the sample note is a real note of the graph: the three entities it names share it, so they sit together */
+for(let a=0;a<3;a++)for(let b=a+1;b<3;b++){const A=N[TRI[a]],B=N[TRI[b]];const l=L.find(l=>(l.a===A&&l.b===B)||(l.a===B&&l.b===A));if(l)l.w=Math.max(l.w,12);else L.push({a:A,b:B,w:12})}
 const adj=N.map(()=>new Set());L.forEach(l=>{adj[l.a.i].add(l.b.i);adj[l.b.i].add(l.a.i)});
-let W=0,H=0,dpr=1,hot=-1,drag=null,front=0;
-let pinned=DATA.open.slice(0,3);
+let W=0,H=0,dpr=1,hot=-1,drag=null;
+const key=new Set([NOTE,...TRI]);
 const narrow=()=>matchMedia('(max-width:560px)').matches;
-const maxPages=()=>narrow()?2:3;
 const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 /* layout: Fruchterman-Reingold, run to rest before the first paint, so nothing drifts or settles in view */
 function layout(){
   const pad=14,k=.9*Math.sqrt((W-2*pad)*(H-2*pad)/Math.max(1,N.length));
   N.forEach((n,i)=>{const t=i/N.length*Math.PI*2+.4;n.x=W/2+Math.cos(t)*W*.3;n.y=H/2+Math.sin(t)*H*.3;});
+  /* the two samples are placed first, near the cards that point at them; everything else settles around them */
+  {const nr=narrow(),s=Math.min(W,H)*(nr?.2:.18),cx0=W*(nr?.64:.6),cy0=H*(nr?.34:.3),pin=(n,x,y)=>{n.fx=x;n.fy=y;n.x=x;n.y=y};
+   pin(N[TRI[0]],cx0,cy0-s*.62);pin(N[TRI[1]],cx0-s*.78,cy0+s*.42);pin(N[TRI[2]],cx0+s*.78,cy0+s*.42);pin(N[NOTE],W*(nr?.24:.56),H*(nr?.8:.8))}
   let temp=Math.min(W,H)/6;
   for(let it=0;it<320;it++){
     const dx=N.map(()=>0),dy=N.map(()=>0);
     for(const a of N)for(const b of N){if(a===b)continue;let x=a.x-b.x,y=a.y-b.y,d=Math.hypot(x,y)||.01,f=k*k/d;dx[a.i]+=x/d*f;dy[a.i]+=y/d*f}
     for(const l of L){let x=l.a.x-l.b.x,y=l.a.y-l.b.y,d=Math.hypot(x,y)||.01,f=d*d/k*.2*(1+.35*Math.log(l.w));dx[l.a.i]-=x/d*f;dy[l.a.i]-=y/d*f;dx[l.b.i]+=x/d*f;dy[l.b.i]+=y/d*f}
-    for(const n of N){dx[n.i]+=(W/2-n.x)*.04;dy[n.i]+=(H/2-n.y)*.04;const m=Math.hypot(dx[n.i],dy[n.i])||1,s=Math.min(m,temp)/m;n.x+=dx[n.i]*s;n.y+=dy[n.i]*s;n.x=Math.max(pad+n.r,Math.min(W-pad-n.r,n.x));n.y=Math.max(pad+n.r,Math.min(H-pad-n.r,n.y))}
+    for(const n of N){if(n.fx!==undefined){n.x=n.fx;n.y=n.fy;continue}dx[n.i]+=(W/2-n.x)*.04;dy[n.i]+=(H/2-n.y)*.04;const m=Math.hypot(dx[n.i],dy[n.i])||1,s=Math.min(m,temp)/m;n.x+=dx[n.i]*s;n.y+=dy[n.i]*s;n.x=Math.max(pad+n.r,Math.min(W-pad-n.r,n.x));n.y=Math.max(pad+n.r,Math.min(H-pad-n.r,n.y))}
     temp*=.985;
   }
 }
-function size(){dpr=devicePixelRatio||1;const w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;const redo=Math.abs(w-W)>2||Math.abs(h-H)>2;W=w;H=h;cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);if(redo)layout();draw();pages()}
-const shown=()=>{const p=pinned.slice(0,maxPages());if(hot>=0&&!p.includes(hot))return{ids:[hot,...p].slice(0,maxPages()),open:hot,pv:hot};return{ids:p,open:hot>=0?hot:(p.includes(front)?front:p[0]),pv:-1}};
+function size(){dpr=devicePixelRatio||1;const w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;const redo=Math.abs(w-W)>2||Math.abs(h-H)>2;W=w;H=h;cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);if(redo)layout();draw()}
+const PAD=15;
+const mix=(a,b,k)=>{const p=s=>[1,3,5].map(i=>parseInt(s.slice(i,i+2),16));const A=p(a),B=p(b);return '#'+A.map((v,i)=>Math.round(v+(B[i]-v)*k).toString(16).padStart(2,'0')).join('')};
+const inHull=(p,P)=>{let c=false;for(let i=0,j=P.length-1;i<P.length;j=i++){const a=P[i],b=P[j];if((a.y>p.y)!==(b.y>p.y)&&p.x<(b.x-a.x)*(p.y-a.y)/(b.y-a.y)+a.x)c=!c}if(c)return true;
+  for(let i=0;i<P.length;i++){const a=P[i],b=P[(i+1)%P.length],dx=b.x-a.x,dy=b.y-a.y,u=Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy||1)));if(Math.hypot(p.x-a.x-u*dx,p.y-a.y-u*dy)<=PAD)return true}return false};
+/* diagram leaders: from each card to what it describes, an arrowhead on the dot (the note) and on the outline (the link) */
+function leaders(){
+  const ar=art.getBoundingClientRect(),cr=cv.getBoundingClientRect(),ox=cr.left-ar.left,oy=cr.top-ar.top,acc=css('--hot'),nar=narrow();
+  const from=id=>{const r=document.getElementById(id).getBoundingClientRect();return nar?{x:r.left+r.width/2-ar.left,y:r.top-ar.top}:{x:r.left-ar.left,y:r.top+r.height/2-ar.top}};
+  const n=N[NOTE],tri=TRI.map(i=>({x:N[i].x,y:N[i].y})),cen={x:(tri[0].x+tri[1].x+tri[2].x)/3,y:(tri[0].y+tri[1].y+tri[2].y)/3};
+  let s='';
+  const arrow=(a,b,len)=>{const d=Math.hypot(b.x-a.x,b.y-a.y)||1,ux=(b.x-a.x)/d,uy=(b.y-a.y)/d,bx=b.x-ux*len,by=b.y-uy*len;
+    return `<circle cx="${a.x}" cy="${a.y}" r="2.6" fill="${acc}"/><path d="M${a.x} ${a.y}L${bx} ${by}" stroke="${acc}" stroke-width="1.2" fill="none"/><path d="M${b.x} ${b.y}L${bx-uy*3.4} ${by+ux*3.4}L${bx+uy*3.4} ${by-ux*3.4}Z" fill="${acc}"/>`};
+  const a1=from('c-note'),t1={x:n.x+ox,y:n.y+oy},d1=Math.hypot(a1.x-t1.x,a1.y-t1.y)||1,e1={x:t1.x+(a1.x-t1.x)/d1*(n.r+.5),y:t1.y+(a1.y-t1.y)/d1*(n.r+.5)};
+  s+=arrow(a1,e1,7);
+  const a2=from('c-link');let p={x:a2.x-ox,y:a2.y-oy};
+  /* walk in from the card toward the hull's middle until the outline is met */
+  let e2={x:cen.x,y:cen.y};for(let k=0;k<=60;k++){const u=k/60,q={x:p.x+(cen.x-p.x)*u,y:p.y+(cen.y-p.y)*u};if(inHull(q,tri)){e2=q;break}}
+  s+=arrow(a2,{x:e2.x+ox,y:e2.y+oy},7);
+  lead.innerHTML=s;
+}
 function draw(){
   if(!W)return;
   cx.setTransform(dpr,0,0,dpr,0,0);cx.clearRect(0,0,W,H);
-  const line=css('--edge'),ink=css('--ink'),dim=css('--dim'),acc=css('--hot'),bg=css('--bg'),sh=shown(),on=sh.open;
+  const line=css('--edge'),ink=css('--ink'),acc=css('--hot'),bg=css('--bg'),on=hot;
   const lit=new Set([on]);if(on>=0)adj[on].forEach(i=>lit.add(i));
+  /* the hyperedge: one outlined region over the three entities its note names */
+  {const P=TRI.map(i=>N[i]);cx.beginPath();P.forEach((q,k)=>k?cx.lineTo(q.x,q.y):cx.moveTo(q.x,q.y));cx.closePath();cx.lineJoin='round';
+   cx.strokeStyle=mix(bg,acc,.62);cx.lineWidth=PAD*2+1.5;cx.stroke();
+   cx.strokeStyle=cx.fillStyle=mix(bg,acc,.12);cx.lineWidth=PAD*2-1;cx.stroke();cx.fill()}
   for(const l of L){const e=on>=0&&(l.a.i===on||l.b.i===on);cx.strokeStyle=e?acc:line;cx.globalAlpha=on>=0&&!e?.55:1;cx.lineWidth=e?1.3:Math.min(1.6,.6+l.w*.1);cx.beginPath();cx.moveTo(l.a.x,l.a.y);cx.lineTo(l.b.x,l.b.y);cx.stroke()}
   cx.globalAlpha=1;cx.font='10.5px ui-monospace,Menlo,monospace';cx.textBaseline='middle';
-  const placed=[],isOpen=i=>sh.ids.includes(i);
-  const order=[...N].sort((a,b)=>(isOpen(a.i)-isOpen(b.i))||(a.n-b.n));
+  const placed=[];
+  const order=[...N].sort((a,b)=>(key.has(a.i)-key.has(b.i))||(a.n-b.n));
   for(const n of order){
-    const o=isOpen(n.i),h=n.i===on;
-    cx.beginPath();cx.arc(n.x,n.y,n.r,0,7);cx.fillStyle=o?acc:(lit.has(n.i)&&on>=0?ink:ink);cx.globalAlpha=on>=0&&!lit.has(n.i)&&!o?.4:1;cx.fill();
-    if(o){cx.beginPath();cx.arc(n.x,n.y,n.r+3,0,7);cx.strokeStyle=acc;cx.lineWidth=1;cx.stroke()}
+    const o=key.has(n.i);
+    cx.beginPath();cx.arc(n.x,n.y,n.r,0,7);cx.fillStyle=o?acc:ink;cx.globalAlpha=on>=0&&!lit.has(n.i)&&!o?.4:1;cx.fill();
   }
   cx.globalAlpha=1;
-  /* labels: opened pages and the hovered entity first, then the best-linked while there is room */
-  const want=[...N].sort((a,b)=>(isOpen(b.i)-isOpen(a.i))||(b.n-a.n));
+  /* labels: the sample's entities first (left of the dot: the arrows come from the right), then the best-linked while there is room */
+  const want=[...N].sort((a,b)=>(key.has(b.i)-key.has(a.i))||(b.n-a.n));
   for(const n of want){
-    const o=isOpen(n.i),must=o||n.i===on;if(!must&&(narrow()||n.n<30))continue;
-    let t=n.name;if(t.length>24)t=t.slice(0,23)+'…';
+    const o=key.has(n.i),must=o||n.i===on;if(!must&&(narrow()||n.n<30))continue;
+    let t=n.name;if(t.length>24)t=t.slice(0,23)+'\u2026';
     const w=cx.measureText(t).width,hit=b=>placed.some(p=>b[0]<p[0]+p[2]&&b[0]+b[2]>p[0]&&b[1]<p[1]+p[3]&&b[1]+b[3]>p[1])||N.some(m=>m!==n&&m.x+m.r+1>b[0]&&m.x-m.r-1<b[0]+b[2]&&m.y+m.r+1>b[1]&&m.y-m.r-1<b[1]+b[3]);
-    let x=n.x+n.r+5,box=[x-2,n.y-7,w+4,14];
+    let x,box;
+    if(o){/* a sample entity: the first of these spots that touches no dot or label; the arrows come from the right */
+      const R=n.r+5,up=[n.x-w/2,n.y-n.r-10],dn=[n.x-w/2,n.y+n.r+10],lf=[n.x-R-w,n.y],rt=[n.x+R,n.y];
+      const spots=n.i===TRI[0]?[up,lf,rt]:n.i===TRI[1]?[lf,dn,up]:n.i===TRI[2]?[[n.x-w+8,n.y+n.r+10],dn,up]:[dn,lf,rt,up];
+      let pick=null;for(const [sx,sy] of spots){const b=[sx-2,sy-7,w+4,14];if(sx>=3&&sx+w<=W-3&&!hit(b)){pick=[sx,sy,b];break}}
+      if(!pick)pick=[spots[0][0],spots[0][1],[spots[0][0]-2,spots[0][1]-7,w+4,14]];
+      x=pick[0];box=pick[2];placed.push(box);cx.fillStyle=bg;cx.globalAlpha=.85;cx.fillRect(...box);cx.globalAlpha=1;cx.fillStyle=acc;cx.fillText(t,x,pick[1]+.5);continue}
+    x=n.x+n.r+5;box=[x-2,n.y-7,w+4,14];
     if(n.x+n.r+5+w>=W-3||(!must&&hit(box))){x=n.x-n.r-5-w;box=[x-2,n.y-7,w+4,14]}
     if(!must&&(x<2||hit(box)))continue;
     placed.push(box);cx.fillStyle=bg;cx.globalAlpha=.8;cx.fillRect(...box);cx.globalAlpha=1;cx.fillStyle=o?acc:ink;cx.fillText(t,x,n.y+.5);
   }
-}
-function pages(){
-  const sh=shown();let h='';
-  if(!sh.ids.length){host.innerHTML='<div class="none">click a dot to open its page</div>';return}
-  for(const id of sh.ids){
-    const n=N[id],open=id===sh.open,pg=n.page||{lines:[],total:0};
-    h+=`<section class="sh${open?' open':''}${id===sh.pv?' pv':''}" data-i="${id}"><div class="hd"><b>${esc(n.name)}</b><u>${id===sh.pv?'preview':esc(n.type)} · ${pg.total} notes</u></div>`;
-    if(open)h+='<div class="bd">'+pg.lines.map(([d,t])=>`<div class="ln"><span>${esc(d.slice(5))}</span><p>${esc(t)}</p></div>`).join('')+'</div>';
-    h+='</section>';
-  }
-  host.innerHTML=h;
+  leaders();
 }
 function at(e){const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=-1,bd=1e9;for(const n of N){const d=(n.x-x)**2+(n.y-y)**2;if(d<(n.r+7)**2&&d<bd){bd=d;best=n.i}}return best}
-function pin(i){pinned=[i,...pinned.filter(x=>x!==i)].slice(0,3);front=i}
-cv.addEventListener('pointermove',e=>{if(drag){const r=cv.getBoundingClientRect();drag.n.x=Math.max(8,Math.min(W-8,e.clientX-r.left));drag.n.y=Math.max(8,Math.min(H-8,e.clientY-r.top));drag.moved=true;draw();return}const h=at(e);if(h!==hot){hot=h;cv.style.cursor=h<0?'default':'pointer';draw();pages()}});
-cv.addEventListener('pointerleave',()=>{if(drag)return;if(hot!==-1){hot=-1;draw();pages()}});
-cv.addEventListener('pointerdown',e=>{const h=at(e);if(h>=0){drag={n:N[h],moved:false};hot=h;cv.setPointerCapture(e.pointerId);draw();pages()}});
-cv.addEventListener('pointerup',e=>{if(drag){pin(drag.n.i);drag=null;if(e.pointerType!=='mouse')hot=-1;draw();pages()}});
+cv.addEventListener('pointermove',e=>{if(drag){const r=cv.getBoundingClientRect();drag.n.x=Math.max(8,Math.min(W-8,e.clientX-r.left));drag.n.y=Math.max(8,Math.min(H-8,e.clientY-r.top));draw();return}const h=at(e);if(h!==hot){hot=h;cv.style.cursor=h<0?'default':'pointer';draw()}});
+cv.addEventListener('pointerleave',()=>{if(drag)return;if(hot!==-1){hot=-1;draw()}});
+cv.addEventListener('pointerdown',e=>{const h=at(e);if(h>=0){drag={n:N[h]};hot=h;cv.setPointerCapture(e.pointerId);draw()}});
+cv.addEventListener('pointerup',e=>{if(drag){drag=null;if(e.pointerType!=='mouse')hot=-1;draw()}});
 cv.addEventListener('pointercancel',()=>{drag=null});
-host.addEventListener('click',e=>{const s=e.target.closest('.sh');if(!s)return;const i=+s.dataset.i;if(e.target.closest('.hd')&&!s.classList.contains('open')){front=i;if(!pinned.includes(i))pin(i);draw();pages()}});
 new ResizeObserver(size).observe(cv);matchMedia('(prefers-color-scheme:dark)').addEventListener('change',draw);
-addEventListener('resize',()=>{pages()});
 size();
 })();
 </script></body></html>

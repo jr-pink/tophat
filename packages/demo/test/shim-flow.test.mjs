@@ -173,7 +173,8 @@ describe('the first minute, against a scratch demo', { skip }, () => {
       assert.match(seen.cls, /demo-intro/); assert.equal(seen.bg, 'rgb(0, 0, 0)');
       assert.equal(seen.caret, Math.round(seen.vw / 2), 'the caret holds at the middle of the screen');
       assert.equal(await settled(v), 'first answer');
-      await until(async () => v.ev("!/demo-/.test(document.documentElement.className)"), 5000, 'the opening cleaned up');
+      // (the page's own poll, every 2.5 s, ends the opener's pending-state rules once the activity line has left queued/starting)
+      await until(async () => v.ev("!/demo-/.test(document.documentElement.className)"), 9000, 'the opening cleaned up');
       assert.equal(await v.ev("document.querySelectorAll('#demo-caret').length"), 0);
     } finally { await v.close(); }
   });

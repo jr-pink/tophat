@@ -30,8 +30,10 @@ export function sections(file) {
 export const WIDGETS = {
   // the title is the label the chat shows above the figure; each widget carries its own figure caption underneath (widgets/*.html)
   '01': ['memory-graph.html', 'Memory graph'],
-  '02': ['runner-turn.html', 'Runner turn'],
-  '03': ['mac-apps.html', 'macOS apps'],
+  '01b': ['memory-bench.html', 'Memory benchmarks'],
+  '02': ['runner-qol.html', 'The chat interface, in detail'],
+  '03': ['mac-desktop.html', 'A Mac, driven'],
+  '03b': ['pushover.jpg', 'A notification'],
   '04': ['connectors.html', 'Connectors'],
   '05': ['sharing.html', 'Sharing'],
   '06': ['local.html', 'What runs where']
@@ -51,18 +53,19 @@ export function openerAnswer(file, widgetsDir) {
 }
 
 /**
- * Pieces for a model-like stream: each block cut into token-sized deltas (a word, or a few letters of a long one, with its leading space;
- * punctuation on its own), the way a model's text deltas arrive, and an image line or a code fence never split (a half-written `![`
- * would flash as text). Concatenated, the pieces are the markdown exactly.
+ * Pieces for a fast, natural stream: paragraph by paragraph, long paragraphs cut at word boundaries, and an image line or a
+ * code fence never split (a half-written `![` would flash as text).
  */
-export function pieces(markdown) {
+export function pieces(markdown, size = 70) {
   const out = [];
   const blocks = markdown.split(/\n{2,}/);
   blocks.forEach((b, bi) => {
     const tail = bi < blocks.length - 1 ? '\n\n' : '';
     if (/^!\[|^```/.test(b)) { out.push(b + tail); return; }
-    const toks = b.match(/\s*[\p{L}\p{N}']{1,6}|\s*[^\p{L}\p{N}'\s]|\s+/gu) || [b];
-    toks.forEach((t, ti) => out.push(ti === toks.length - 1 ? t + tail : t));
+    const words = b.split(/(?<=\s)/);
+    let cur = '';
+    for (const w of words) { if (cur.length + w.length > size && cur) { out.push(cur); cur = ''; } cur += w; }
+    if (cur) out.push(cur + tail);
   });
   return out;
 }

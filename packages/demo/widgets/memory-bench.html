@@ -1,0 +1,52 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: two plain bar charts, ink on paper, tophat in the brand colour, the all-in-context baseline in light gray, the other systems in darker gray */
+:root{--bg:#fbfaf6;--ink:#1c1b19;--dim:#77736a;--line:#d9d5c9;--track:#ece9df;--bar:#6f6b60;--all:#b9b5aa;--hot:#a8305f}
+@media (prefers-color-scheme:dark){:root{--bg:#131312;--ink:#e9e6dd;--dim:#8f8b80;--line:#34332f;--track:#222220;--bar:#6b685f;--all:#a39f94;--hot:#e8679a}}
+body{background:var(--bg);color:var(--ink);font:11px/1.35 ui-monospace,"SF Mono",Menlo,monospace}
+.art{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:0}
+.ch{min-width:0;padding:12px 14px 8px;display:flex;flex-direction:column}
+.ch+.ch{border-left:1px solid var(--line)}
+h3{margin:0 0 2px;font:700 12.5px/1.25 Georgia,"Iowan Old Style",serif}
+h3 i{font:600 10.5px/1 ui-monospace,Menlo,monospace;color:var(--hot);font-style:normal;margin-right:6px}
+.sub{color:var(--dim);font-size:10px;margin:0 0 8px}
+.rw{display:grid;grid-template-columns:146px minmax(0,1fr) 36px;align-items:center;gap:0 8px;height:25px}
+.rw span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:11.5px/1.2 system-ui,-apple-system,"Segoe UI",sans-serif}
+.rw b{font-weight:400;text-align:right;color:var(--dim)}
+.tr{height:9px;background:var(--track)}
+.tr i{display:block;height:100%;background:var(--bar)}
+.al .tr i{background:var(--all)}
+.us span,.us b{color:var(--hot);font-weight:700}.us .tr i{background:var(--hot)}
+.ap{margin-top:6px;padding-top:6px;border-top:1px solid var(--line)}
+.ap .tr i{background:repeating-linear-gradient(135deg,var(--bar) 0 2px,transparent 2px 4px)}
+.fn{margin:5px 0 0;color:var(--dim);font-size:9.5px;line-height:1.35}
+@media (max-width:560px){
+  .art{grid-template-columns:1fr;grid-template-rows:auto auto;overflow:auto}
+  .ch{padding:8px 12px 4px}.ch+.ch{border-left:0;border-top:1px solid var(--line)}
+  .rw{height:19px;grid-template-columns:146px minmax(0,1fr) 34px}
+  .sub{margin-bottom:4px}.ap{margin-top:3px;padding-top:3px}
+}
+</style></head><body>
+<figure>
+<div class="art"><section class="ch" id="a"></section><section class="ch" id="b"></section></div>
+<figcaption><b>Fig. 2</b>2a. Benchmarked on the hardest 15 questions in LongMemEval-S. 2b. Benchmarked against real traces: 99 questions in a haystack of about 300k tokens.</figcaption>
+</figure>
+<script>
+/* correct answers out of questions asked, as the bench published them (packages/demo/fallback/memory-bench-charts.json); bars are sized by correct/n */
+const DATA=/*DATA*/{"a":{"n":15,"rows":[{"system":"tophat","correct":8,"n":15,"ours":true},{"system":"Mem0 OSS (Opus 5.5)","correct":6,"n":15},{"system":"Mem0 OSS (Haiku 5.5)","correct":4,"n":15},{"system":"Wiki notes (Opus 5.5)","correct":6,"n":15},{"system":"Wiki notes (Haiku 5.5)","correct":7,"n":15},{"system":"all in context (baseline)","correct":9,"n":15}]},"b":{"n":99,"rows":[{"system":"tophat","correct":96,"n":99,"ours":true},{"system":"Meta Muse","correct":81,"n":99},{"system":"Instinct","correct":83,"n":99},{"system":"Grok Bot","correct":93,"n":99},{"system":"Evidence-only assistant","correct":77,"n":80,"separate":true}]}}/*END*/;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const row=r=>`<div class="rw${r.ours?' us':''}${/^all in context/.test(r.system)?' al':''}"><span title="${esc(r.system)}">${esc(r.system)}${r.separate?' *':''}</span><div class="tr"><i style="width:${(100*r.correct/r.n).toFixed(1)}%"></i></div><b>${r.correct}/${r.n}</b></div>`;
+function chart(id,tag,title,sub,d,foot){
+  const main=d.rows.filter(r=>!r.separate).sort((x,y)=>y.correct/y.n-x.correct/x.n||(y.ours?1:0)-(x.ours?1:0)),ap=d.rows.filter(r=>r.separate);
+  document.getElementById(id).innerHTML=`<h3><i>${tag}</i>${title}</h3><p class="sub">${sub}</p>${main.map(row).join('')}${ap.length?'<div class="ap">'+ap.map(row).join('')+'</div>':''}${foot?`<p class="fn">${foot}</p>`:''}`;
+}
+chart('a','2a','vs research memory systems','LongMemEval-S, hardest '+DATA.a.n+' questions; correct / asked',DATA.a);
+chart('b','2b','vs production assistants','real personal traces, '+DATA.b.n+' questions; correct / asked',DATA.b,'* given only the 137 events that hold the answers, not the full haystack; scored on the 80 questions those cover, so not ranked');
+</script></body></html>

@@ -16,7 +16,7 @@ Node 22.13 or newer. The core packages have no dependencies; the chat app (`runn
     tophat chat --config ~/.config/tophat/me/tophat.instance.json "Remember that my favourite tea is genmaicha."   # a first turn; it writes memory
     tophat graph --config ~/.config/tophat/me/tophat.instance.json                                                 # the memory graph on http://localhost:4179/graph
 
-Open http://localhost:4178 and enrol a passkey with the token in `~/.config/tophat/me/secrets/webchat-bootstrap-token`. Coding agents asked to review and install this repository: read [AGENTS.md](AGENTS.md), which covers the review, the install, verification and the trade-offs to tell the user about.
+Open http://localhost:4178 and enrol a passkey with the token in `~/.config/tophat/me/secrets/webchat-bootstrap-token`. Coding agents asked to review and install this repository: read [AGENTS.md](AGENTS.md), which covers the review, the install, verification and the trade-offs to tell the user about. **Install means fully setting up**: not just cloning and starting the server, but granting every macOS permission and connecting every stream until each one shows data flowing; AGENTS.md section 4 is the checklist.
 
 ## Packages
 

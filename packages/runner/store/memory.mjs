@@ -24,12 +24,14 @@ import { createHash } from 'node:crypto';
 import { SqliteBackend } from '@tophat-md/linknotes';
 import { hybridSearch } from '@tophat-md/linknotes/hybrid';
 import { withDatedPass } from '@tophat-md/linknotes/recency';
+import { ensureSupportSchema, reinforceNote, withPriors } from '@tophat-md/linknotes/support';
+import { runnerDbFor, syncUsage } from '@tophat-md/linknotes/usage';
 import { ownerZone } from '../rev6/base/clock.mjs';
 
 const SCOPE_RE = /^[a-z][a-z0-9-]{1,47}$/;
 export const DEFAULT_SCOPE = 'local';
-export const COMMANDS = ['tasks', 'ingest', 'search', 'read', 'apply', 'status', 'push', 'sync'];
-const WRITES = new Set(['ingest', 'apply', 'push']);
+export const COMMANDS = ['tasks', 'ingest', 'search', 'read', 'apply', 'status', 'push', 'sync', 'usage'];
+const WRITES = new Set(['ingest', 'apply', 'push', 'usage']);
 
 /** The scope and groups an environment names; an invalid name is an error, never silently replaced. */
 export function scopeOf(env = process.env) {
@@ -145,7 +147,14 @@ function dispatch(s, command, req, readOnly, env) {
   // hybrid.mjs; no file: the store's own search). `derived` gives derived memory its own allowance beside the raw hits.
   // Then the dated pass (linknotes recency.mjs): a latest-value query gets the newest records about its topic first; a
   // period, count or superlative gets every matching dated record; any other query gets the newest few the ranking missed.
-  if (command === 'search') return withDatedPass(s, hybridSearch(s, req.query, { kind: req.kind, limit: req.limit || 20, asOf: req.as_of, allTerms: Boolean(req.all_terms), derived: req.derived }), req, { tz: ownerZone(env) });
+  // Support priors (linknotes support.mjs): note hits carry { sources, first_seen, last_seen }; with memory-ranking.json
+  // beside the store, a small prior from source count and recency (usage behind its own flag) re-ranks them inside a
+  // widened candidate set, cut back to the allowance asked for. No file: the ranking as it was.
+  if (command === 'search') {
+    const limit = req.limit || 20, derived = req.derived, set = derived !== undefined && derived !== null && derived !== '';
+    const widened = (w) => hybridSearch(s, req.query, { kind: req.kind, limit: limit * w, asOf: req.as_of, allTerms: Boolean(req.all_terms), derived: set ? Number(derived) * w : derived });
+    return withDatedPass(s, withPriors(s, widened, { limit, derived, asOf: req.as_of }), req, { tz: ownerZone(env) });
+  }
   if (command === 'read') return s.read(req.kind, String(req.id ?? ''), { nodes: req.nodes, budget: req.budget, asOf: req.as_of, history: Boolean(req.history) });
   if (command === 'apply') {
     // The evidence row cite() writes and the notes citing it land together or not at all: a refused batch leaves no
@@ -153,12 +162,27 @@ function dispatch(s, command, req, readOnly, env) {
     const r = structuredClone(req);
     return atomically(s, () => {
       cite(s, r);
-      return s.apply(r.batch_id, r.changes || {}, { sourceRefs: r.source_refs ?? null, expectedVersions: r.expected_versions ?? null, ackRaw: r.ack_raw ?? null,
-        ...(r.groups !== undefined && r.groups !== null ? { groups: r.groups } : {}) });
+      // `reinforce` (linknotes support.mjs): a restated fact adds its raw records to an existing note's support, never a
+      // second note; applied beside the store's batch (the store itself knows the other change kinds only).
+      const { reinforce = [], ...changes } = r.changes || {};
+      const out = Object.keys(changes).length || !reinforce.length ? s.apply(r.batch_id, changes, { sourceRefs: r.source_refs ?? null, expectedVersions: r.expected_versions ?? null, ackRaw: r.ack_raw ?? null,
+        ...(r.groups !== undefined && r.groups !== null ? { groups: r.groups } : {}) }) : { ok: true, batch_id: r.batch_id };
+      if (reinforce.length) {
+        ensureSupportSchema(s.db);
+        out.reinforced = reinforce.map((it) => {
+          const id = String(it.note_id ?? it.note ?? '');
+          if (s.viewer && !s.aclVisible('notes', id)) throw new StoreErrorLike(`note ${id} is not visible to ${s.user}`);
+          return reinforceNote(s, id, it.source_refs || [], { batchId: r.batch_id ?? null, now: s.now() });
+        });
+      }
+      return out;
     });
   }
   if (command === 'sync') return { ok: false, reason: 'refused', detail: 'sync is asynchronous: call syncStore(db, env) or `store/cli.mjs sync`' };
   if (command === 'push') return consolidate(s, req);
+  // Note usage (linknotes usage.mjs): shown / opened / cited events from the runner transcripts beside the store, appended
+  // by code. Idempotent; run it from one job (on an instance, the push heartbeat's fast lane is that writer).
+  if (command === 'usage') return syncUsage(s, req.runner_db || runnerDbFor(s.path), { maxRows: req.max_rows ?? 5000, ...(req.since ? { sinceIso: req.since } : {}) });
   if (command === 'status') { const { scope, groups } = scopeOf(env); const hub = hubOf(env); return { ok: true, ...s.status(), hub: hub ? { url: hub.url } : null, scope: { user: s.user, write: s.writeGroups, groups, readable: s.viewer?.groups ?? [] }, default_scope: scope }; }
   throw new StoreErrorLike(`command must be one of ${COMMANDS.join(', ')}`);
 }

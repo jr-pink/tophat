@@ -16,8 +16,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { OPENER_GAPS_MS, OPENER_TEXT, metaTags, openerAnswer, pieces, textPage } from './answer.mjs';
+import { OPENER_GAPS_MS, OPENER_TEXT, metaTags, openerAnswer, textPage } from './answer.mjs';
+import { createFeed, pieceDelayMs, tokenPieces } from './stream.mjs';
 import { COOKIE_NAME, Guests, emailOf, scopeOf, scopeSettings, verifyTurnstile } from './guests.mjs';
+import { renderFallback } from '../fallback/render.mjs';
 import { pinAction } from './pin.mjs';
 import { OPENER_GEN_ID, OPENER_ID, loadTemplates, openStore, openerGenOf, seedGuest, seedOpener } from './seed-chats.mjs';
 
@@ -132,15 +134,12 @@ export async function serve(c) {
     store.markApplied({ actionId: action.action_id, conversationId: id, op: action.op, cursorBefore: before, cursorAfter: store.cursor() });
     const events = store.since(before);
     (async () => {
-      // like a model's stream: a beat of "thinking", then token-sized deltas (one to three at a time) at a few dozen a second
-      await new Promise((r) => setTimeout(r, 450));
-      const all = pieces(answer);
-      for (let i = 0; i < all.length;) {
-        const image = /^!\[/.test(all[i]);
-        const n = image ? 1 : 1 + Math.floor(Math.random() * 3);
-        store.append(id, 'assistant.delta', { itemId, text: all.slice(i, i + n).join('') }, { at: at() });
-        i += n;
-        await new Promise((r) => setTimeout(r, image ? 260 : 14 + Math.random() * 18));
+      // like a model's stream: the first token comes as the interface does (the send-off motion lands about a second after the click: shim.js
+      // FLIGHT_MS), then token-sized deltas at about 80 a second
+      await new Promise((r) => setTimeout(r, 1150));
+      for (const piece of tokenPieces(answer)) {
+        store.append(id, 'assistant.delta', { itemId, text: piece }, { at: at() });
+        await new Promise((r) => setTimeout(r, pieceDelayMs(piece)));
       }
       store.append(id, 'assistant.message', { itemId, text: answer }, { at: at() });
       store.append(id, 'run.completed', { costUsd: 0 }, { at: at() });
@@ -148,11 +147,21 @@ export async function serve(c) {
     return { events, cursor: store.cursor() };
   }
 
+  // The events the shim appends reach a page's open /api/events stream here (stream.mjs says why): to the guest whose scope owns the chat.
+  const feed = createFeed();
+  const scopeOfChat = new Map();
+  store.subscribe((event) => {
+    if (!feed.size()) return;
+    let scope = scopeOfChat.get(event.conversation_id);
+    if (scope === undefined) { scope = ro.prepare('SELECT scope FROM conversations WHERE id=?').get(event.conversation_id)?.scope ?? null; if (scope !== null) scopeOfChat.set(event.conversation_id, scope); }
+    feed.publish(event, (guestId) => scope !== null && scope === scopeOf(guestId));
+  });
   const pinModel = (a) => pinAction(a, { model, cwd: workspace });
 
   function proxy(req, res, { body, cookie, inject, session, countedTurn }) {
     const url = new URL(req.url, 'http://x');
-    const h = { ...req.headers, host: new URL(webchat).host, cookie, 'accept-encoding': inject ? 'identity' : req.headers['accept-encoding'] || 'identity' };
+    const liveFeed = Boolean(session) && url.pathname === '/api/events' && req.method === 'GET';
+    const h = { ...req.headers, host: new URL(webchat).host, cookie, 'accept-encoding': inject || liveFeed ? 'identity' : req.headers['accept-encoding'] || 'identity' };
     for (const k of ['x-tophat-edge', 'x-tophat-client-ip', 'cf-connecting-ip', 'x-forwarded-for']) delete h[k];
     if (body) h['content-length'] = String(body.length);
     delete h.origin; delete h.referer;
@@ -167,7 +176,7 @@ export async function serve(c) {
           const tag = `<script>window.__tophatSurfaces=${JSON.stringify(SURFACES)};</script>${metaTags(description)}<style id="demo-intro-css">${introCss()}</style><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><style id="demo-bigscreen">@media (min-width:1900px) and (min-height:950px){:root{--th-ww:min(108rem,calc(100vw - 160px));--th-wh:min(calc(var(--th-ww) * 0.62),calc(100vh - 140px));--th-tb:30px;--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}@media (prefers-color-scheme:dark){:root{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}}:root[data-theme=light]{--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}:root[data-theme=dark]{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}html,body{height:100%;background:var(--th-desk)!important}body{margin:0;display:grid;place-items:center;overflow:hidden}body>div[style*="contents"]{display:block!important;width:var(--th-ww);height:calc(var(--th-wh) - var(--th-tb));margin-top:var(--th-tb);position:relative;overflow:hidden;transform:translateZ(0);border-radius:0 0 10px 10px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 30px 90px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.12);background:var(--bg,#fff)}body::before,body::after{position:fixed;left:calc(50vw - var(--th-ww) / 2);top:calc(50vh - var(--th-wh) / 2);width:var(--th-ww);height:var(--th-tb);z-index:1;pointer-events:none}body::before{content:"";border-radius:10px 10px 0 0;box-shadow:0 0 0 1px rgba(0,0,0,.14);background:radial-gradient(circle at 18px 50%,#ff5f57 5.5px,transparent 6px),radial-gradient(circle at 38px 50%,#febc2e 5.5px,transparent 6px),radial-gradient(circle at 58px 50%,#28c840 5.5px,transparent 6px),var(--th-chrome)}body::after{content:"tophat";text-align:center;line-height:var(--th-tb);font:12px/30px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink)}}</style><noscript><meta http-equiv="refresh" content="0;url=/_demo/text?why=nojs"></noscript><script src="/_demo/shim.js?v=${shimVersion()}" defer></script>`;
           // First thing in the head, before any stylesheet (an inline script waits for those): the visitor's state request starts while the page parses,
           // not after the shim has loaded. The shim reads `window.__demoBoot` (same rule as its own `bootState`).
-          const early = `${session ? `<script>(function(){var G=${JSON.stringify(createHash('sha256').update(session.id).digest('hex').slice(0, 12))};${guestReset()}})();</script>` : ''}<script>(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&!(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)){var h=document.documentElement;h.classList.add('demo-intro');setTimeout(function(){if(!window.__demoIntroOwned)h.classList.remove('demo-intro')},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();</script>`;
+          const early = `<script>(function(){${guestReset()}})();</script><script>(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&!(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)){var h=document.documentElement;h.classList.add('demo-intro');setTimeout(function(){if(!window.__demoIntroOwned)h.classList.remove('demo-intro')},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();</script>`;
           html = html.replace(/<link[^>]*rel="(?:icon|apple-touch-icon|shortcut icon)"[^>]*>/g, '').replace(/<head[^>]*>/, (m) => m + early).replace('</head>', `${tag}</head>`);
           const buf = Buffer.from(html);
           delete out['content-length']; delete out['content-encoding']; delete out.etag;
@@ -179,7 +188,7 @@ export async function serve(c) {
       }
       if (session) { out['x-demo-turns'] = String(guests.turnsOf(session.id)); out['access-control-expose-headers'] = 'x-demo-turns'; }
       res.writeHead(r.statusCode, out);
-      r.pipe(res);
+      if (liveFeed && r.statusCode === 200) { const s = feed.attach(res, session.id); r.on('data', (d) => feed.chunk(s, d)); r.on('end', () => res.end()); r.on('error', () => res.destroy()); } else r.pipe(res);
       if (countedTurn && r.statusCode >= 500) guests.refundTurn(session);
     });
     up.on('error', () => { if (countedTurn) guests.refundTurn(session); if (!res.headersSent) { res.writeHead(502, { 'content-type': 'text/plain' }); res.end('the demo is starting up'); } else res.destroy(); });
@@ -228,7 +237,10 @@ export async function serve(c) {
         if (!made) return false;
         fresh(made.id);
         session = guests.verify(made.token);
-        setCookie = `${COOKIE}=${made.token}; Path=/; Max-Age=${guests.sessionHours * 3600}; HttpOnly; Secure; SameSite=Lax`;
+        // beside the session cookie, a readable one naming this guest (a hash of its id, no secret): the page's first script (guest-reset.js) compares it with
+        // what this browser last showed, so a new guest clears the old one's leftovers even on a page the app's service worker served from its cache
+        setCookie = [`${COOKIE}=${made.token}; Path=/; Max-Age=${guests.sessionHours * 3600}; HttpOnly; Secure; SameSite=Lax`,
+          `demo_guest=${createHash('sha256').update(made.id).digest('hex').slice(0, 12)}; Path=/; Max-Age=${guests.sessionHours * 3600}; Secure; SameSite=Lax`];
         req.headers.cookie = `${COOKIE}=${made.token}`;
         return true;
       }
@@ -250,7 +262,7 @@ export async function serve(c) {
         return json(res, 200, stateOf(guests.verify(cookieOf(req, COOKIE))));
       }
 
-      if (p === '/_fallback') { res.writeHead(200, headers('text/html; charset=utf-8', { 'cache-control': 'no-store' })); return res.end(readFileSync(path.join(DEMO, 'edge/fallback.html'))); }
+      if (p === '/_fallback') { res.writeHead(200, headers('text/html; charset=utf-8', { 'cache-control': 'no-store' })); return res.end(renderFallback()); }
       // A visitor who has sent nothing opens on a fresh intro: a bare address, or a link to one of their own (played) intro chats, goes to the live one.
       if (p === '/' && isPage && session && session.turns === 0) {
         const chat = u.searchParams.get('chat');
@@ -284,7 +296,7 @@ export async function serve(c) {
         if (p === '/api/file') {
           // the webchat masks the host's home as `~` in everything it sends (home-mask.js), so the page asks for `~/...`: resolve it here, as the webchat does
           const f = path.resolve(expand(u.searchParams.get('path') || ''));
-          if (!f.startsWith(widgetsDir + path.sep) || !/\.html$/.test(f)) return json(res, 403, { error: 'not available' });
+          if (!f.startsWith(widgetsDir + path.sep) || !/\.(html|jpe?g|png)$/.test(f)) return json(res, 403, { error: 'not available' });
         } else if (!API_ALLOW.some((re) => re.test(p))) return json(res, 403, { error: 'not available' });
         let body = null, countedTurn = false;
         if (req.method !== 'GET' && req.method !== 'HEAD') body = await readBody(req);

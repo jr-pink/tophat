@@ -15,11 +15,12 @@ test('the opener is the owner\'s own phrase and has one recorded gap per charact
   assert.ok(OPENER_GAPS_MS.every((n) => Number.isInteger(n) && n >= 0 && n < 1000));
 });
 
-test('the stream is token-sized deltas that rebuild the answer exactly, with images and fences whole', () => {
+test('the stream is modest deltas that rebuild the answer exactly, with images and fences whole', () => {
   const answer = openerAnswer(description, path.join(DEMO, 'widgets'));
   const out = pieces(answer);
   assert.equal(out.join(''), answer);
-  assert.ok(out.filter((p) => !/^!\[|^```/.test(p)).every((p) => p.length <= 24), 'no big chunks of prose');
+  // a link's target is one piece (a half-written `](` would flash as text), so a piece that carries one may be longer
+  assert.ok(out.filter((p) => !/^!\[|^```|\]\(/.test(p)).every((p) => p.length <= 90), 'prose in modest chunks');
   assert.ok(out.some((p) => /^!\[/.test(p) && p.trim().endsWith(')')), 'an image line arrives whole');
 });
 

@@ -49,13 +49,25 @@
 {:else}
 <figure class:expanded data-testid="rich-content">
   <figcaption>
-    <span>{content.title}</span>
+    <span class="title" title={content.title}>{content.title}</span>
     <div class="actions">
       {#if kind.startsWith('widget')}
-        <button type="button" onclick={() => showSource = !showSource}>{showSource ? 'Preview' : 'Source'}</button>
-        <button type="button" onclick={() => expanded = !expanded}>{expanded ? 'Collapse' : 'Expand'}</button>
+        <button type="button" title={showSource ? 'Preview' : 'Source'} aria-label={showSource ? 'Preview' : 'Source'} aria-pressed={showSource} onclick={() => showSource = !showSource}>
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">{#if showSource}<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" /><circle cx="8" cy="8" r="2" />{:else}<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />{/if}</svg>
+        </button>
+        <button type="button" title={expanded ? 'Collapse' : 'Expand'} aria-label={expanded ? 'Collapse' : 'Expand'} aria-pressed={expanded} onclick={() => expanded = !expanded}>
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">{#if expanded}<path d="M6.5 2v4.5H2M9.5 14V9.5H14" />{:else}<path d="M9.5 2H14v4.5M6.5 14H2V9.5M14 2 9.5 6.5M2 14l4.5-4.5" />{/if}</svg>
+        </button>
       {/if}
-      {#if remote}<a href={remote} target="_blank" rel="noreferrer noopener">Open</a>{:else if content.url}<a href={url + (url.startsWith('/api/file?') ? '&download=1' : '')} target="_blank" rel="noreferrer">Download</a>{/if}
+      {#if remote}
+        <a href={remote} target="_blank" rel="noreferrer noopener" title="Open" aria-label="Open">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" /></svg>
+        </a>
+      {:else if content.url}
+        <a href={url + (url.startsWith('/api/file?') ? '&download=1' : '')} target="_blank" rel="noreferrer" title="Download" aria-label="Download">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M2.5 13.5h11" /></svg>
+        </a>
+      {/if}
     </div>
   </figcaption>
   {#if kind === 'image'}
@@ -77,14 +89,21 @@
 {/if}
 
 <style>
-  figure { margin: 1rem 0; overflow: hidden; border: 1px solid var(--border, #aaa5); border-radius: 12px; max-width: 100%; background: var(--bg-sunken, #8881); }
-  figcaption { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .65rem .8rem; font-size: .8rem; border-bottom: 1px solid var(--border, #aaa5); }
-  figcaption > span { overflow-wrap: anywhere; }
-  .actions { display: flex; flex-shrink: 0; gap: .65rem; }
-  button, .actions a { font: inherit; color: inherit; cursor: pointer; background: none; border: 0; padding: .2rem 0; text-decoration: underline; }
+  /* The margin resets are !important on purpose: Markdown's ".prose > * + * > :first-child" and ".prose > * > * + *"
+     rules (paragraph gaps) outrank a scoped class selector (Svelte emits it inside :where()) and would otherwise
+     land on the header and the frame, which made the bar read as ~125px. */
+  figure { margin: 1rem 0; overflow: hidden; border: 1px solid var(--line, #aaa5); border-radius: 12px; max-width: 100%; background: var(--bg-sunken, #8881); }
+  figcaption { display: flex; align-items: center; justify-content: space-between; gap: .5rem; box-sizing: border-box; height: 34px; margin: 0 !important; padding: 0 .35rem 0 .8rem; font-family: var(--sans); font-size: .78rem; line-height: 1; color: var(--ink-dim, inherit); border-bottom: 1px solid var(--line, #aaa5); }
+  figcaption > .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .actions { display: flex; flex-shrink: 0; align-items: center; gap: .1rem; }
+  .actions :is(button, a) { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; margin: 0; border: 0; border-radius: 6px; background: none; color: var(--ink-faint, inherit); cursor: pointer; text-decoration: none; transition: color var(--tap, 90ms), background-color var(--tap, 90ms); }
+  .actions :is(button, a):hover { color: var(--ink, inherit); background: var(--accent-soft, #8882); }
+  .actions :is(button, a):focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: -2px; color: var(--ink, inherit); }
+  .actions svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  @media (pointer: coarse) { .actions :is(button, a) { width: 32px; height: 32px; } }
   img, video { display: block; max-width: 100%; max-height: 75vh; margin: auto; object-fit: contain; }
   audio { display: block; width: 100%; }
-  iframe { display: block; width: 100%; height: 420px; border: 0; background: white; }
+  iframe { display: block; width: 100%; height: 420px; margin: 0 !important; border: 0; background: white; }
   .expanded iframe { height: 80vh; }
   pre { max-height: 65vh; overflow: auto; padding: 1rem; font-size: .8rem; }
   p { padding: 1rem; }

@@ -292,10 +292,17 @@
     if (field) tick().then(resize);
   });
 
+  const COMPOSER_MAX_PX = 200; // the textarea's max-height below
+
   function resize() {
     if (!field) return;
+    // The box is border-box and scrollHeight leaves the border out, so the height has to add it back (two pixels short made the
+    // draft scroll by two pixels and show a bar on one line). The bar is for a draft past the max height only.
+    field.style.overflowY = 'hidden';
     field.style.height = 'auto';
-    field.style.height = `${Math.min(field.scrollHeight, 200)}px`;
+    const want = field.scrollHeight + (field.offsetHeight - field.clientHeight);
+    field.style.height = `${Math.min(want, COMPOSER_MAX_PX)}px`;
+    field.style.overflowY = want > COMPOSER_MAX_PX ? 'auto' : 'hidden';
   }
 
 
@@ -1144,6 +1151,13 @@
     transition: border-color var(--tap) var(--ease);
   }
   textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  /* a bar only once the draft passes the max height (resize() switches overflow on then): thin, round, no track or gutter */
+  textarea { overflow-y: hidden; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--ink) 28%, transparent) transparent; }
+  textarea::-webkit-scrollbar { width: 6px; height: 6px; background: transparent; }
+  textarea::-webkit-scrollbar-track { background: transparent; }
+  textarea::-webkit-scrollbar-corner { background: transparent; }
+  textarea::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ink) 28%, transparent); border-radius: 3px; border: 0; }
+  textarea::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ink) 45%, transparent); }
   
   .ghost {
     position: absolute;

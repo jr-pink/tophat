@@ -14,6 +14,8 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, r
 import path from 'node:path';
 
 export const RELEASES = '/Users/Shared/tophat-demo/releases';
+/** Source-only for the public archive, shipped in the demo hosting release (see build() below). */
+export const DEMO_HOST_FILES = ['packages/demo/widgets/build-graph.mjs'];
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
 
 export const headOf = (repo) => sh('git', ['-C', repo, 'rev-parse', 'HEAD']).trim();
@@ -39,6 +41,9 @@ export function release({ repo, out = RELEASES, node = process.execPath, npm = n
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   sh('sh', ['-c', `git -C '${repo}' archive HEAD | tar -x -C '${tmp}'`]);
+  // Files export-ignored from the public archive (.gitattributes) that the demo's own host still needs: the memory-graph widget's builder (the
+  // update regenerates the widget from the demo's snapshot with the shipped template). Taken from the committed HEAD, never the working tree.
+  for (const f of DEMO_HOST_FILES) { try { const body = sh('git', ['-C', repo, 'show', `HEAD:${f}`], { maxBuffer: 16 * 1024 * 1024 }); if (!existsSync(path.join(tmp, f))) { mkdirSync(path.dirname(path.join(tmp, f)), { recursive: true }); writeFileSync(path.join(tmp, f), body); } } catch { /* not in this commit */ } }
   // the build needs the repository's installed dependencies; link them rather than installing again
   symlinkSync(path.join(repo, 'node_modules'), path.join(tmp, 'node_modules'));
   log(`building ${sha.slice(0, 12)}`);

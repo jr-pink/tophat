@@ -52,8 +52,9 @@ if (cmd === 'export') {
   if (out.asked.some((a) => a.error)) process.exit(1);
 } else if (cmd === 'widgets') {
   const c = config();
-  const { buildGraph } = await import('../widgets/build-graph.mjs');
-  print(buildGraph({ snapshot: c.snapshot }));
+  // the builder is source-only in the public archive; the demo host's release carries it (release.mjs). A tree without it keeps the widget it has.
+  const mod = await import('../widgets/build-graph.mjs').catch((e) => { if (e && e.code === 'ERR_MODULE_NOT_FOUND') return null; throw e; });
+  print(mod ? mod.buildGraph({ snapshot: c.snapshot }) : { skipped: 'no widget builder in this tree' });
 } else if (cmd === 'instructions') {
   const c = config();
   const { writeInstructions } = await import('../src/instructions.mjs');

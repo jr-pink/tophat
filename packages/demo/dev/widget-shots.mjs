@@ -19,7 +19,7 @@ const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, all) => (
 const out = args.out || (console.error('--out DIR'), process.exit(2));
 const widths = String(args.widths || '700,360').split(',').map(Number);
 const height = Number(args.height || 420);
-const all = ['memory-graph', 'runner-turn', 'mac-apps', 'connectors', 'sharing', 'local'];
+const all = ['memory-graph', 'memory-bench', 'runner-qol', 'mac-desktop', 'connectors', 'sharing', 'local'];
 const which = args.widgets ? String(args.widgets).split(',') : all;
 mkdirSync(out, { recursive: true });
 
