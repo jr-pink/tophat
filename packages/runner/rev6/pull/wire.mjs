@@ -6,6 +6,7 @@ import { redactSecrets } from '../tools/runner/redact.mjs';
 import { cut, toWireJSON } from '../base/text.mjs';
 import { anthropicHeaders, openaiAuthMode, openaiHeaders, openaiRequestUrl } from './credentials.mjs';
 import { hydrateImageBlocks, imageBytesIn } from './context.mjs';
+import { routeFor, routeUrl } from './routes.mjs';
 
 export const MODELS = JSON.parse(readFileSync(new URL('./models.json', import.meta.url), 'utf8'));
 const OPENAI_WIRE = new RegExp(MODELS.openaiWire, 'i');
@@ -320,6 +321,92 @@ export function createEventMapper() {
   };
 }
 
+// ---- OpenAI-compatible Chat Completions mapping (a model route with wire "chat-completions", routes.mjs).
+/** Anthropic-shaped messages and system as Chat Completions messages. */
+export function toChatMessages(system, messages = []) {
+  const out = system ? [{ role: 'system', content: asText(system) }] : [];
+  for (const message of messages) {
+    const blocks = typeof message.content === 'string' ? [{ type: 'text', text: message.content }] : message.content || [];
+    if (message.role === 'user') {
+      let parts = [];
+      const flush = () => { if (parts.length) out.push({ role: 'user', content: parts.every((p) => p.type === 'text') ? parts.map((p) => p.text).join('\n') : parts }); parts = []; };
+      for (const b of blocks) {
+        if (b.type === 'tool_result') { flush(); out.push({ role: 'tool', tool_call_id: b.tool_use_id, content: asText(b.content) + (b.is_error ? '\n[this tool call failed]' : '') }); }
+        else if (b.type === 'text') parts.push({ type: 'text', text: b.text });
+        else if (b.type === 'image' && b.source?.type === 'base64' && b.source.data) parts.push({ type: 'image_url', image_url: { url: dataUrl(b.source) } });
+      }
+      flush();
+    } else {
+      const text = blocks.filter((b) => b.type === 'text' && b.text).map((b) => b.text).join('');
+      const calls = blocks.filter((b) => b.type === 'tool_use').map((b) => ({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }));
+      if (text || calls.length) out.push({ role: 'assistant', content: text || null, ...(calls.length ? { tool_calls: calls } : {}) });
+    }
+  }
+  return out;
+}
+
+const CHAT_EFFORT = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh' };
+export function toChatRequest(request, { maxTokensField = 'max_tokens' } = {}) {
+  const effort = request.reasoning_effort;
+  if (effort && !CHAT_EFFORT[effort]) throw new ModelError('invalid', `reasoning effort "${effort}" is not offered by ${request.model}; use one of ${Object.keys(CHAT_EFFORT).join(', ')}`);
+  const body = { model: request.model, messages: toChatMessages(request.system, request.messages || []), stream: true, stream_options: { include_usage: true },
+    [maxTokensField]: Math.min(request.max_tokens || 16_000, MODELS.limits.openaiMaxOutput) };
+  if (request.tools?.length) body.tools = request.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
+  if (request.tool_choice?.type === 'tool') body.tool_choice = { type: 'function', function: { name: request.tool_choice.name } };
+  if (effort) body.reasoning_effort = CHAT_EFFORT[effort];
+  return body;
+}
+
+/** Chat Completions usage in the shape usageFrom gives the Responses API: input_tokens includes the cached part. A
+ *  provider-reported cost (OpenRouter's usage.cost) is kept as provider_cost_usd beside the priced one. */
+export const chatUsage = (u = {}) => ({ input_tokens: u.prompt_tokens ?? 0, output_tokens: u.completion_tokens ?? 0, cache_read_input_tokens: u.prompt_tokens_details?.cached_tokens ?? 0,
+  cache_creation_input_tokens: 0, reasoning_output_tokens: u.completion_tokens_details?.reasoning_tokens ?? 0, ...(typeof u.cost === 'number' ? { provider_cost_usd: u.cost } : {}) });
+
+/** Chat Completions stream chunks -> Anthropic stream events. `finish()` closes a stream that ended on [DONE] without a usage chunk. */
+export function createChatMapper() {
+  let started = false, textIndex = null, next = 0, stop = null, usage = null, done = false;
+  const tools = new Map();
+  const open = [];
+  const closeAll = () => { const ev = open.splice(0).map((index) => ({ type: 'content_block_stop', index, content_block: {} })); textIndex = null; return ev; };
+  const end = () => { if (done) return []; done = true; return [...closeAll(), { type: 'message_delta', delta: { stop_reason: stop || 'end_turn', stop_sequence: null }, usage: chatUsage(usage || {}) }, { type: 'message_stop' }]; };
+  const map = function map(chunk) {
+    if (done) return [];
+    if (chunk?.error) {
+      const e = chunk.error, code = String(e.code ?? ''), msg = String(e.message ?? '');
+      throw new ModelError(/rate/i.test(`${code} ${msg}`) || code === '429' ? 'rate_limited' : /^5\d\d$/.test(code) ? 'overloaded' : 'failed', sanitize(`${code} ${msg}`), { retryable: /^5\d\d$/.test(code) });
+    }
+    const events = [];
+    if (!started) { started = true; events.push({ type: 'message_start', message: { id: chunk?.id ?? null, type: 'message', role: 'assistant', model: chunk?.model ?? null, content: [], stop_reason: null, usage: {} } }); }
+    for (const choice of chunk?.choices || []) {
+      const d = choice.delta || {};
+      if (typeof d.content === 'string' && d.content) {
+        if (textIndex === null) { textIndex = next++; open.push(textIndex); events.push({ type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } }); }
+        events.push({ type: 'content_block_delta', index: textIndex, delta: { type: 'text_delta', text: d.content } });
+      }
+      for (const tc of d.tool_calls || []) {
+        const key = tc.index ?? 0;
+        if (!tools.has(key)) {
+          const index = next++; tools.set(key, index); open.push(index); textIndex = null;
+          events.push({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: tc.id || `call_${index}`, name: tc.function?.name || '', input: {} } });
+        }
+        if (tc.function?.arguments) events.push({ type: 'content_block_delta', index: tools.get(key), delta: { type: 'input_json_delta', partial_json: tc.function.arguments } });
+      }
+      if (choice.finish_reason) stop = choice.finish_reason === 'length' ? 'max_tokens' : choice.finish_reason === 'tool_calls' ? 'tool_use' : choice.finish_reason === 'content_filter' ? 'refusal' : 'end_turn';
+    }
+    if (chunk?.usage) { usage = chunk.usage; if (stop) events.push(...end()); }
+    return events;
+  };
+  map.finish = () => (started && stop ? end() : []);
+  return map;
+}
+
+function routeHeaders(route) {
+  let key = '';
+  try { key = readFileSync(route.keyFile, 'utf8').trim(); } catch (error) { throw new ModelError('auth', `key file for model route ${route.name} unreadable (${error.code || 'error'})`); }
+  if (!key) throw new ModelError('auth', `key file for model route ${route.name} is empty`);
+  return { authorization: `Bearer ${key}` };
+}
+
 const saidRepairs = new Set();
 /** What goes on the wire for this request: url, header thunk, body bytes, status classifier and event mapper. */
 export function planFor(fullRequest, env = process.env, lim = limits(env)) {
@@ -327,6 +414,16 @@ export function planFor(fullRequest, env = process.env, lim = limits(env)) {
   const model = modelFor(request.model, env);
   const hydrated = { ...request, messages: hydrateImageBlocks(request.messages, { env }) };
   const imageBytes = imageBytesIn(hydrated.messages);
+  const route = routeFor(model, env);
+  if (route) {
+    const { messages } = repairMessages(hydrated.messages);
+    const mended = { ...hydrated, model: route.model, messages, ...(systemTail ? { system: [hydrated.system, systemTail].filter(Boolean).join('\n') } : {}) };
+    const chat = route.wire === 'chat-completions';
+    const body = chat ? toChatRequest(mended, { maxTokensField: route.maxTokensField }) : toResponsesRequest(mended);
+    const mapper = chat ? createChatMapper() : createEventMapper();
+    return { url: routeUrl(route), headers: () => routeHeaders(route), imageBytes, classify: classifyOpenAIStatus, mapper, finish: mapper.finish,
+      body: toWireJSON({ ...body, ...route.body }) };
+  }
   if (isOpenAIModel(model)) {
     const { messages } = repairMessages(hydrated.messages);
     const mended = { ...hydrated, model, messages, ...(systemTail ? { system: [hydrated.system, systemTail].filter(Boolean).join('\n') } : {}) };
@@ -376,9 +473,27 @@ async function attemptOnce({ plan, headers, controller, onEvent, fetchImpl }) {
       for (const event of plan.mapper(raw)) { assembler.take(event); onEvent(event); if (event.type === 'message_stop') stopped = true; }
     }
   }
+  // A wire whose end marker is not a JSON frame (Chat Completions' `data: [DONE]`) closes the message here.
+  if (!stopped && plan.finish) for (const event of plan.finish()) { assembler.take(event); onEvent(event); if (event.type === 'message_stop') stopped = true; }
   if (!stopped) throw new ModelError('failed', 'the stream ended before message_stop', { retryable: true });
   return assembler.message;
 }
+
+/** Waits that an abort ends. Both resolve (never reject) on abort; the caller reads the signal to tell which. */
+export function raceAbort(promise, signal) {
+  if (!signal) return Promise.resolve(promise);
+  if (signal.aborted) { Promise.resolve(promise).catch(() => {}); return Promise.resolve(undefined); }
+  return new Promise((resolve, reject) => {
+    const off = () => signal.removeEventListener('abort', onAbort);
+    const onAbort = () => { off(); resolve(undefined); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then((v) => { off(); resolve(v); }, (e) => { off(); reject(e); });
+  });
+}
+export const abortableSleep = (ms, signal) => {
+  let timer;
+  return raceAbort(new Promise((r) => { timer = setTimeout(r, ms); }), signal).finally(() => clearTimeout(timer));
+};
 
 /** One request, streamed. Transport failures retry `retries` times; an abort from `signal` is ModelError('aborted'). */
 export async function streamMessage(request, { signal, onEvent = () => {}, env = process.env, fetchImpl = fetch } = {}) {
@@ -395,7 +510,11 @@ export async function streamMessage(request, { signal, onEvent = () => {}, env =
     try { return await attemptOnce({ plan, headers, controller, onEvent, fetchImpl }); } catch (error) {
       const failure = error instanceof ModelError ? error : controller.signal.aborted && controller.signal.reason instanceof ModelError ? controller.signal.reason
         : new ModelError('failed', sanitize(error?.code || error?.name || error?.message || 'request failed'), { retryable: true });
-      if (failure.retryable && attempt < lim.retries && !signal?.aborted) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+      if (failure.retryable && attempt < lim.retries && !signal?.aborted) {
+        await abortableSleep(1500 * (attempt + 1), signal);
+        if (signal?.aborted) throw new ModelError('aborted', 'interrupted');
+        continue;
+      }
       throw failure;
     } finally { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
   }
@@ -411,5 +530,6 @@ export function writeSplit(u = {}) {
 export function usageOf(message) {
   const u = message?.usage || {};
   return { input_tokens: u.input_tokens ?? null, output_tokens: u.output_tokens ?? null, cache_read_input_tokens: u.cache_read_input_tokens ?? null,
-    cache_creation_input_tokens: u.cache_creation_input_tokens ?? null, ...(u.reasoning_output_tokens !== undefined ? { reasoning_output_tokens: u.reasoning_output_tokens } : {}), ...writeSplit(u) };
+    cache_creation_input_tokens: u.cache_creation_input_tokens ?? null, ...(u.reasoning_output_tokens !== undefined ? { reasoning_output_tokens: u.reasoning_output_tokens } : {}),
+    ...(typeof u.provider_cost_usd === 'number' ? { provider_cost_usd: Math.round(u.provider_cost_usd * 1e9) / 1e9 } : {}), ...writeSplit(u) };
 }

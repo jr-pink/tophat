@@ -6,6 +6,7 @@ import { app, DEFAULT_CWD } from '$lib/server/app.js';
 import { requireChat, scopeContext } from '$lib/server/scope-guard.js';
 import { isText, listDirectory, mimeFor, readForPreview } from '$lib/server/files.js';
 import { playable } from '$lib/server/video.js';
+import { fileVersion } from '$lib/core/file-version.js';
 
 export async function GET(event) {
   const { url, request } = event;
@@ -34,6 +35,12 @@ export async function GET(event) {
     );
   }
 
+  // The file's version, `<mtime ms>-<size>`: what a reply asks for when it draws a local image, so the
+  // image URL it then uses (`&v=`) changes whenever the file does.
+  if (url.searchParams.get('version')) {
+    return json({ path: found.path, v: fileVersion(found) }, { headers: { 'cache-control': 'no-store' } });
+  }
+
   // Inline video player: `videometa` answers source resolution/fps/duration and whether the
   // browser-playable form is ready (starting a transcode if not); `video` serves that form with Range.
   if (url.searchParams.get('videometa') || url.searchParams.get('video')) {
@@ -55,7 +62,19 @@ export async function GET(event) {
     return new Response(streamed.body, { status: streamed.status, headers });
   }
   if (url.searchParams.get('raw')) {
-    return rawFileResponse(found, mimeFor(found.path), request.headers.get('range'));
+    const mime = mimeFor(found.path);
+    // A URL that names the bytes (`v` equal to the file's current version) never changes meaning, so it
+    // is kept for good. Anything else is revalidated each time (an image), so a rewritten file is never
+    // shown from a copy kept under the same URL; the etag makes that a 304 while the file is unchanged.
+    const version = fileVersion(found);
+    const pinned = Boolean(version) && url.searchParams.get('v') === version;
+    const headers = version ? { etag: `"${version}"` } : {};
+    if (pinned) headers['cache-control'] = 'private, max-age=31536000, immutable';
+    else if (mime.startsWith('image/')) headers['cache-control'] = 'private, no-cache';
+    if (version && !request.headers.get('range') && request.headers.get('if-none-match') === headers.etag) {
+      return new Response(null, { status: 304, headers: { ...headers, 'cache-control': headers['cache-control'] || 'private, max-age=5' } });
+    }
+    return rawFileResponse(found, mime, request.headers.get('range'), { extraHeaders: headers });
   }
   const preview = await readForPreview(found);
   return json({ path: found.path, name: basename(found.path), size: found.size, mtime: found.mtime, mime: mimeFor(found.path), ...preview },

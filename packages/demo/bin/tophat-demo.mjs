@@ -10,7 +10,7 @@
 //   tophat-demo update --config demo.json [--root DIR]                          (demo user) install the published release into the root, restart the demo
 //   tophat-demo check [--repo DIR] [--port 4472]              exit 1 when the live demo is not on the repository's main
 //   tophat-demo serve --config demo.json                          the public surface: shell, cached chats, the graph (GET only)
-import { existsSync, readFileSync, symlinkSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -86,9 +86,19 @@ if (cmd === 'export') {
     const link = path.join(staging, 'node_modules');
     const hasRoot = existsSync(path.join(root, 'node_modules'));
     if (hasRoot && !existsSync(link)) symlinkSync(path.join(root, 'node_modules'), link);
-    try { execFileSync(node, ['--input-type=module', '-e', `await import(${JSON.stringify(path.join(staging, 'packages/demo/src/serve.mjs'))})`], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 60_000 }); }
+    // The webchat's built server is checked by resolving every package its entry files import (importing it would boot the app): on
+    // 2026-11-10 an install in the root pruned @sveltejs/kit, this check only covered serve.mjs, and the webchat 502'd every returning guest.
+    const probe = path.join(staging, 'packages/webchat/build/__preflight.mjs');
+    const webchatCheck = `const fs = await import('node:fs'); const dir = new URL('.', import.meta.url); const missing = [];
+      for (const f of ['index.js', 'handler.js', 'shims.js', 'env.js']) { let src; try { src = fs.readFileSync(new URL(f, dir), 'utf8'); } catch { continue; }
+        for (const m of src.matchAll(/(?:^|\\n)\\s*import\\s+(?:[^'"]*?from\\s+)?['"]([^'"./][^'"]*)['"]/g)) { if (m[1].startsWith('node:')) continue; try { import.meta.resolve(m[1]); } catch { missing.push(m[1]); } } }
+      if (missing.length) { console.error("Error [ERR_MODULE_NOT_FOUND]: webchat build cannot resolve " + [...new Set(missing)].join(', ')); process.exit(1); }`;
+    try {
+      execFileSync(node, ['--input-type=module', '-e', `await import(${JSON.stringify(path.join(staging, 'packages/demo/src/serve.mjs'))})`], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 60_000 });
+      if (existsSync(path.dirname(probe))) { writeFileSync(probe, webchatCheck); execFileSync(node, [probe], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 60_000 }); }
+    }
     catch (e) { throw new Error(String(e.stderr || e.message)); }
-    finally { if (hasRoot) { try { unlinkSync(link); } catch { /* gone */ } } }
+    finally { try { unlinkSync(probe); } catch { /* none */ } if (hasRoot) { try { unlinkSync(link); } catch { /* gone */ } } }
   };
   const r = update({ root, out: flags.out ? expand(flags.out) : undefined, preflight, derive: () => { run(['instance']); run(['widgets']); run(['instructions']); }, restart: () => {
     // our own processes only; launchd starts them again from the new root

@@ -39,14 +39,24 @@ export function hiddenTransientRow(conversation, { provisional = false } = {}) {
   return true;
 }
 
-// The conversations the sidebar lists, which is every chat except an untouched transient one.
+// A host page may keep a kind of chat out of the sidebar's lists and counts: `window.__tophatUnlisted = { idPrefix, maxTurns }` hides a chat whose
+// id starts with idPrefix and that has had at most maxTurns turns (the demo's opening conversation: it is the one open on screen, not an inbox
+// item; once the visitor has carried on in it, it is theirs and is listed). No rule means nothing is hidden.
+export function unlistedByHost(conversation, rule) {
+  if (!rule || typeof rule.idPrefix !== 'string' || !rule.idPrefix || !conversation) return false;
+  if (!String(conversation.id ?? '').startsWith(rule.idPrefix)) return false;
+  return Number(conversation.turns ?? 0) <= Number(rule.maxTurns ?? 0);
+}
+
+// The conversations the sidebar lists, which is every chat except an untouched transient one and what the host keeps unlisted.
 // Returns the same object when nothing is hidden, so the common case costs no re-render.
-export function listedConversations(conversations = {}, isProvisional = null) {
-  if (typeof isProvisional !== 'function') return conversations;
+export function listedConversations(conversations = {}, isProvisional = null, unlisted = null) {
+  if (typeof isProvisional !== 'function' && !unlisted) return conversations;
   const kept = {};
   let hid = false;
   for (const [id, conversation] of Object.entries(conversations ?? {})) {
-    if (hiddenTransientRow(conversation, { provisional: Boolean(isProvisional(id)) })) { hid = true; continue; }
+    if (typeof isProvisional === 'function' && hiddenTransientRow(conversation, { provisional: Boolean(isProvisional(id)) })) { hid = true; continue; }
+    if (unlistedByHost(conversation, unlisted)) { hid = true; continue; }
     kept[id] = conversation;
   }
   return hid ? kept : conversations;

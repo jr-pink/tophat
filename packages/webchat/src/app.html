@@ -189,7 +189,14 @@
 
           var message = document.createElement('p');
           message.style.cssText = 'margin:0;max-width:30em';
-          message.textContent = 'This tab is running an older version of the app and could not start. Reload to pick up the current one.';
+          // Say what failed. This used to blame "an older version" for every cause, including a timeout and a
+          // server build whose page named files it did not have, where no reload or cache clear could help.
+          message.textContent = /nothing rendered/.test(detail)
+            ? 'The app did not finish starting (slow connection, or the server is busy or erroring). Reload to try again.'
+            : 'The app could not load some of its files. Reload to try again; if this keeps coming back, the server\'s current build is at fault, not this browser.';
+          var why = document.createElement('p');
+          why.style.cssText = 'margin:0;max-width:30em;font-size:12px;opacity:.6;word-break:break-word';
+          why.textContent = String(detail || '');
 
           var button = document.createElement('button');
           button.type = 'button';
@@ -207,6 +214,7 @@
           });
 
           panel.appendChild(message);
+          panel.appendChild(why);
           panel.appendChild(button);
           (document.body || document.documentElement).appendChild(panel);
           console.warn('[shell] did not boot (' + detail + '); showing the reload prompt');

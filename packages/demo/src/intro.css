@@ -29,7 +29,7 @@ html.demo-intro-out .app { transition: transform var(--di-ms) var(--di-ease) var
 html.demo-intro .app::after, html.demo-intro-out .app::after { content: ""; position: absolute; inset: 0; z-index: 1000; background: #000; pointer-events: none; }
 html.demo-intro-in .app::after { opacity: 0; transition: opacity var(--di-in) ease-out; }
 html.demo-intro-out .app::before {
-  content: ""; position: absolute; inset: 0; z-index: 1001; pointer-events: none; opacity: 0;
+  content: ""; position: absolute; left: 0; right: 0; top: -420px; bottom: 0; z-index: 1001; pointer-events: none; opacity: 0; will-change: transform, opacity; /* taller than the screen and moved by transform only: the compositor slides it, nothing repaints per frame */
   background-repeat: repeat; background-color: transparent;
   background-image:
     radial-gradient(1px 1px at 37px 61px, rgba(255,255,255,.7), transparent), radial-gradient(1px 1px at 151px 17px, rgba(255,255,255,.6), transparent),
@@ -42,9 +42,9 @@ html.demo-intro-out .app::before {
   animation: demo-stars var(--di-flight, 1000ms) cubic-bezier(.45,.05,.55,.95) both;
 }
 @keyframes demo-stars {
-  0% { opacity: 0; background-position-y: 0, 0, 0, 0, 0, 0, 0, 0, 0, 0; }
+  0% { opacity: 0; transform: translate3d(0, 0, 0); }
   18% { opacity: 1; }
-  100% { opacity: 1; background-position-y: 150px, 150px, 150px, 150px, 340px, 340px, 340px, 900px, 900px, 900px; }
+  100% { opacity: 1; transform: translate3d(0, 400px, 0); }
 }
 html.demo-intro-in .app::before { opacity: 0; transition: opacity var(--di-in) ease-out; animation: none; }
 
@@ -78,6 +78,24 @@ html.demo-opener [data-testid="queued"] { display: none; }
 
 /* the typing caret: fixed at the middle of the screen, steady while typing, blinking after */
 #demo-caret { position: fixed; z-index: 2147482000; pointer-events: none; transform: translate(-50%, -50%); opacity: 1; transition: opacity 120ms linear; }
-#demo-caret.idle { animation: demo-caret-blink 1060ms steps(1, end) infinite; }
+#demo-caret.idle { animation: demo-caret-blink 700ms steps(1, end) infinite; }
 #demo-caret.gone { opacity: 0; animation: none; }
 @keyframes demo-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+/* bare typing: before the bar comes in, only the typed text and the caret are on the black (shim.js adds demo-bare at the start of typing and drops it once the line is typed) */
+html.demo-intro .app .composer *, html.demo-intro #demo-caret { transition: background-color 360ms ease, border-color 360ms ease, box-shadow 360ms ease, color 360ms ease, opacity 360ms ease; }
+html.demo-bare .app .composer *:not([data-testid="send"]) { background-color: transparent !important; border-color: transparent !important; box-shadow: none !important; }
+html.demo-bare .app [data-testid="composer"] { color: #f2f2f2 !important; }
+html.demo-bare .app [data-testid="send"] { opacity: 0 !important; }
+html.demo-bare #demo-caret { background: #f2f2f2 !important; }
+
+/* the bare opening has no box at all; only the send button fades in over the last word (demo-send), and on the send it falls and fades with the field */
+html.demo-bare.demo-send .app [data-testid="send"] { opacity: 1 !important; transition: opacity 320ms ease-out; }
+html.demo-bare .app textarea::placeholder { color: transparent !important; } /* no "Message..." beside the blinking caret */
+html.demo-bare .app .composer .attach { opacity: 0 !important; } /* no paperclip on the way down either */
+html.demo-intro-out .app { will-change: transform; } /* the fall and the zoom-back run on the compositor */
+
+/* the opener never shows the connection coming up (a stream that opens a second late, or drops for a moment): no "reconnecting" or "offline" line and no dot; a backstop,
+   the opener's answer does not depend on the stream (the server holds it and the page's own sync fetches it) */
+html.demo-intro [data-testid="conn"], html.demo-intro-out [data-testid="conn"], html.demo-opener [data-testid="conn"], html.demo-opener [data-testid="offline-note"],
+html.demo-intro [data-testid="activity"][data-phase="reconnecting"], html.demo-intro [data-testid="activity"][data-phase="offline"],
+html.demo-opener [data-testid="activity"][data-phase="reconnecting"], html.demo-opener [data-testid="activity"][data-phase="offline"] { visibility: hidden; }

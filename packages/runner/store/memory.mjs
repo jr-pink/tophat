@@ -11,9 +11,18 @@
 // explicit groups goes to that scope. TOPHAT_SCOPE_GROUPS (comma separated) names further groups the instance may
 // share into: each is created on first open when this replica has never seen it (its creator is its admin); a group
 // that exists without this user as a member is left alone (it is someone else's, joined through the hub). So a group
-// runner (an instance whose scope is the group) writes into the group's scope by default. TOPHAT_SCOPE_USER, when set,
+// runner (an instance whose scope is the group) writes into the group's scope by default. TOPHAT_SCOPE_JOIN (comma
+// separated) names groups someone else owns that the instance joins and never creates: openStore leaves them alone, the
+// group key reaches this replica only after a hub round once the group's admin has added this user (until then a write
+// into the group is refused, a note in the instance's own scope is unaffected), and every explicit write into a joined
+// group passes the content screens below. TOPHAT_SCOPE_USER, when set,
 // names the replica's user apart from its write scope: a person whose replica already holds groups (user `sam` writing
 // into `sam-private`) opens it as that user, and no group is created for the user name.
+//
+// Screens. A row an instance asks into a joined or created group is refused when its text matches a screen: the built-in
+// secrets and personal-path screens (joined groups), TOPHAT_SCOPE_SCREENS (a JSON list of { groups?, pattern, flags?, label? };
+// groups default to every joined and created group) and the private-people roster TOPHAT_PRIVATE_PEOPLE_FILE (a person's
+// strict names never go into a group). A screened write is a refusal; the row stays out of the group, nothing is written.
 //
 // Hub. TOPHAT_HUB_URL and TOPHAT_HUB_TOKEN_FILE (from the instance file's `hub` block) let sync() push and pull the
 // replica through a ciphertext-only hub; TOPHAT_DEVICE and TOPHAT_DEVICE_KEY_FILE name the device and its key file
@@ -33,13 +42,60 @@ export const DEFAULT_SCOPE = 'local';
 export const COMMANDS = ['tasks', 'ingest', 'search', 'read', 'apply', 'status', 'push', 'sync', 'usage'];
 const WRITES = new Set(['ingest', 'apply', 'push', 'usage']);
 
-/** The scope and groups an environment names; an invalid name is an error, never silently replaced. */
+/** The scope, created groups and joined groups an environment names; an invalid name is an error, never silently replaced. */
 export function scopeOf(env = process.env) {
   const scope = String(env.TOPHAT_SCOPE || DEFAULT_SCOPE).trim();
   const user = String(env.TOPHAT_SCOPE_USER || scope).trim();
-  const groups = String(env.TOPHAT_SCOPE_GROUPS || '').split(',').map((s) => s.trim()).filter(Boolean);
-  for (const g of [scope, user, ...groups]) if (!SCOPE_RE.test(g)) throw new Error(`scope name ${JSON.stringify(g)} must match ${SCOPE_RE} (TOPHAT_SCOPE / TOPHAT_SCOPE_USER / TOPHAT_SCOPE_GROUPS)`);
-  return { scope, user, groups: [...new Set(groups.filter((g) => g !== scope))] };
+  const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const groups = list(env.TOPHAT_SCOPE_GROUPS), join = list(env.TOPHAT_SCOPE_JOIN);
+  for (const g of [scope, user, ...groups, ...join]) if (!SCOPE_RE.test(g)) throw new Error(`scope name ${JSON.stringify(g)} must match ${SCOPE_RE} (TOPHAT_SCOPE / TOPHAT_SCOPE_USER / TOPHAT_SCOPE_GROUPS / TOPHAT_SCOPE_JOIN)`);
+  const joined = [...new Set(join.filter((g) => g !== scope))];
+  return { scope, user, groups: [...new Set(groups.filter((g) => g !== scope && !joined.includes(g)))], join: joined };
+}
+
+// What no joined group should ever receive, whatever the instance configured: credentials and the owner's home path.
+export const JOIN_SCREENS = Object.freeze([
+  { label: 'secret screen', pattern: String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{20,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}|\b(?:api[_-]?key|secret|token|passw(?:or)?d)\s*[:=]\s*\S{8,}|\bBearer\s+[A-Za-z0-9._~+/=-]{20,}` },
+  { label: 'personal path screen', pattern: String.raw`/(?:Users|home)/[^/\s]+/` },
+]);
+
+const reEsc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+
+/** The content screens of an environment: the built-ins on joined groups, TOPHAT_SCOPE_SCREENS, and one screen from the
+ * private-people roster (every strict name of every listed person) on every group the instance shares into. */
+export function screensOf(env = process.env) {
+  const { groups, join } = scopeOf(env);
+  const shared = [...groups, ...join];
+  const out = join.length ? JOIN_SCREENS.map((s) => ({ ...s, groups: join })) : [];
+  if (env.TOPHAT_SCOPE_SCREENS) {
+    let extra;
+    try { extra = JSON.parse(env.TOPHAT_SCOPE_SCREENS); } catch (e) { throw new Error(`TOPHAT_SCOPE_SCREENS is not JSON: ${e.message}`); }
+    if (!Array.isArray(extra)) throw new Error('TOPHAT_SCOPE_SCREENS is a JSON list of { groups?, pattern, flags?, label? }');
+    for (const x of extra) {
+      if (!x || typeof x.pattern !== 'string') throw new Error('TOPHAT_SCOPE_SCREENS: every screen needs a pattern');
+      new RegExp(x.pattern, x.flags ?? 'i');
+      out.push({ ...x, groups: x.groups ?? shared });
+    }
+  }
+  return out;
+}
+
+/** The private-people roster the environment names (TOPHAT_PRIVATE_PEOPLE_FILE: { people: [{ id, strict, exactLabels? }] } or the list
+ * itself); none when unset. A named file that is unreadable is an error: a roster that silently reads as empty shares what it should keep. */
+export function rosterOf(env = process.env) {
+  const file = env.TOPHAT_PRIVATE_PEOPLE_FILE;
+  if (!file) return [];
+  let raw;
+  try { raw = JSON.parse(readFileSync(file, 'utf8')); } catch (e) { throw new Error(`TOPHAT_PRIVATE_PEOPLE_FILE ${file} is unreadable: ${e.code || 'not JSON'}`); }
+  const list = Array.isArray(raw) ? raw : raw?.people;
+  if (!Array.isArray(list)) throw new Error(`TOPHAT_PRIVATE_PEOPLE_FILE ${file}: expected a list of people or { people: [...] }`);
+  return list.map((p) => ({ id: String(p.id), strict: (p.strict || []).filter((t) => String(t).trim().length >= 3), exactLabels: p.exactLabels || [] }));
+}
+
+/** The private-people screen: a person's strict names, whole words, refused on every group the instance shares into. */
+function peopleScreen(list, shared) {
+  const tokens = list.flatMap((p) => p.strict || []).map((t) => String(t).trim().split(/[^\p{L}\p{N}_]+/u).filter(Boolean).map(reEsc).join('[^\\p{L}\\p{N}_]+')).filter(Boolean);
+  return tokens.length && shared.length ? [{ label: 'private-people screen', groups: shared, flags: 'iu', pattern: `(?:^|[^\\p{L}\\p{N}_])(?:${tokens.join('|')})(?:[^\\p{L}\\p{N}_]|$)` }] : [];
 }
 
 /** The hub block an environment names, or null: { url, tokenFile, timeoutMs }. */
@@ -54,16 +110,23 @@ const opened = new Map(); // db path + scope -> backend
 /** The replica at `db`, opened as the environment's scope; cached per process. */
 export function openStore(db, env = process.env) {
   if (!db) throw new Error('memory store: no database path');
-  const { scope, user, groups } = scopeOf(env);
+  const { scope, user, groups, join } = scopeOf(env);
   const hub = hubOf(env);
-  const key = `${db}\0${user}\0${scope}\0${groups.join(',')}\0${hub?.url ?? ''}`;
+  const people = rosterOf(env);
+  const key = `${db}\0${user}\0${scope}\0${groups.join(',')}\0${join.join(',')}\0${hub?.url ?? ''}\0${people.map((p) => p.id).join(',')}\0${env.TOPHAT_SCOPE_SCREENS ?? ''}`;
   let b = opened.get(key);
   if (b) return b;
   const device = env.TOPHAT_DEVICE || `${user}-${createHash('sha256').update(`${hostname()}\0${db}`).digest('hex').slice(0, 10)}`;
-  b = new SqliteBackend({ file: db, keyFile: env.TOPHAT_DEVICE_KEY_FILE || `${db}.device-key.json`, user, device, writeScopes: [scope], ...(hub ? { hub } : {}) });
+  const config = { file: db, keyFile: env.TOPHAT_DEVICE_KEY_FILE || `${db}.device-key.json`, user, device, writeScopes: [scope], ...(hub ? { hub } : {}), ...(people.length ? { people } : {}) };
+  // Screens go in before the first write: the built-ins and the instance's own on the joined and created groups, and the
+  // private-people roster's names (a person on the blocklist is never written into a group).
+  config.screens = [...screensOf(env), ...peopleScreen(people, [...groups, ...join])];
+  b = new SqliteBackend(config);
   const s = b.store;
+  // A group this instance creates is made on first open. A joined group is someone else's: never created here, its key
+  // arrives through the hub once its admin has added this user, so opening before then is fine.
   for (const g of [scope, ...groups]) {
-    if (s.one('SELECT 1 AS ok FROM mc_groups WHERE grp=?', [g])) continue;
+    if (join.includes(g) || s.one('SELECT 1 AS ok FROM mc_groups WHERE grp=?', [g])) continue;
     try { s.createGroup(g); } catch (e) { if (!s.one('SELECT 1 AS ok FROM mc_groups WHERE grp=?', [g])) throw e; } // another process made it first
   }
   opened.set(key, b);
@@ -183,7 +246,12 @@ function dispatch(s, command, req, readOnly, env) {
   // Note usage (linknotes usage.mjs): shown / opened / cited events from the runner transcripts beside the store, appended
   // by code. Idempotent; run it from one job (on an instance, the push heartbeat's fast lane is that writer).
   if (command === 'usage') return syncUsage(s, req.runner_db || runnerDbFor(s.path), { maxRows: req.max_rows ?? 5000, ...(req.since ? { sinceIso: req.since } : {}) });
-  if (command === 'status') { const { scope, groups } = scopeOf(env); const hub = hubOf(env); return { ok: true, ...s.status(), hub: hub ? { url: hub.url } : null, scope: { user: s.user, write: s.writeGroups, groups, readable: s.viewer?.groups ?? [] }, default_scope: scope }; }
+  if (command === 'status') {
+    const { scope, groups, join } = scopeOf(env); const hub = hubOf(env); const readable = s.viewer?.groups ?? [];
+    // A joined group is pending until the admin's key wrap has arrived by sync: member of it, and holding its key.
+    const pending = join.filter((g) => !readable.includes(g) || !s.keyFor(g, s.currentEpoch(g)));
+    return { ok: true, ...s.status(), hub: hub ? { url: hub.url } : null, scope: { user: s.user, write: s.writeGroups, groups, join, pending, readable }, default_scope: scope };
+  }
   throw new StoreErrorLike(`command must be one of ${COMMANDS.join(', ')}`);
 }
 

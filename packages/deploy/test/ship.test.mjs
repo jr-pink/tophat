@@ -4,7 +4,7 @@ import test from 'node:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { flipPointer, pruneBuilds, shipWebchat } from '../src/ship.mjs';
+import { flipPointer, missingClientFiles, pruneBuilds, shipLock, shipWebchat } from '../src/ship.mjs';
 import { pointedBuild } from '../src/start.mjs';
 
 const dirs = [];
@@ -77,4 +77,43 @@ test('prune keeps the newest N and every protected build, never `build`', () => 
   assert.deepEqual(removed.sort(), ['build.20261102-0000', 'build.20261103-0000']);
   assert.ok(existsSync(path.join(webchat, 'build')));
   assert.ok(existsSync(path.join(webchat, 'build.20261101-0000')));
+});
+
+// A build whose server half came from another build (two ships sharing one .svelte-kit, 2026-11-10): the page named a
+// bundle the client dir did not have, and every tab showed the reload prompt.
+function halfBuild(out, named, present) {
+  fakeBuild(out);
+  mkdirSync(path.join(out, 'server', 'chunks'), { recursive: true });
+  mkdirSync(path.join(out, 'client', '_app', 'immutable'), { recursive: true });
+  writeFileSync(path.join(out, 'server', 'chunks', 'manifest.js-X.js'), `const m = { client: { start: "_app/immutable/${named}" } };\n`);
+  writeFileSync(path.join(out, 'client', '_app', 'immutable', present), '');
+}
+
+test('missingClientFiles names what the server manifest wants and the client lacks', () => {
+  const d = tmp();
+  halfBuild(path.join(d, 'whole'), 'bundle.A.js', 'bundle.A.js');
+  halfBuild(path.join(d, 'mixed'), 'bundle.A.js', 'bundle.B.js');
+  assert.deepEqual(missingClientFiles(path.join(d, 'whole')), []);
+  assert.deepEqual(missingClientFiles(path.join(d, 'mixed')), ['_app/immutable/bundle.A.js']);
+});
+
+test('a mixed build is never pointed at', async () => {
+  const { r, webchat, file } = root();
+  const res = await shipWebchat({ configFile: file, root: r, fetchImpl: async () => { throw new Error('down'); },
+    build: ({ out }) => { halfBuild(out, 'bundle.A.js', 'bundle.B.js'); return { ok: true }; } });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'build_incomplete');
+  assert.equal(existsSync(path.join(webchat, 'build-current')), false);
+});
+
+test('ships run one at a time; a dead holder\'s lock is taken over', async () => {
+  const { webchat } = root();
+  const first = await shipLock(webchat);
+  assert.equal(await shipLock(webchat, { waitMs: 50, pollMs: 10 }), null, 'a live holder makes the second wait, then give up');
+  first();
+  const again = await shipLock(webchat, { waitMs: 50, pollMs: 10 });
+  assert.ok(again); again();
+  writeFileSync(path.join(webchat, 'build.ship.lock'), '999999\n');
+  const stale = await shipLock(webchat, { waitMs: 50, pollMs: 10 });
+  assert.ok(stale, 'a lock whose pid is gone does not block'); stale();
 });

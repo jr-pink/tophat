@@ -143,6 +143,30 @@ describe('the first minute, against a scratch demo', { skip }, () => {
     });
   }
 
+  test('the sent opener is answered from its own chat row after about two seconds, then streamed', { timeout: 90_000 }, async () => {
+    const v = await visitor({ fake: 'pass' });
+    try {
+      assert.equal(await settled(v), 'first answer');
+      const { DatabaseSync } = await import('node:sqlite');
+      const db = new DatabaseSync(path.join(dir, 'state/webchat/events.sqlite'), { readOnly: true });
+      const id = (await v.state()).opener;
+      // without a row for the chat, the app's sync and live feed never carry the answer and the page shows "working" for ever
+      assert.ok(db.prepare('SELECT 1 FROM conversations WHERE id=?').get(id), 'the intro chat has a row');
+      const at = (kind) => Date.parse(db.prepare('SELECT at FROM events WHERE conversation_id=? AND kind=? ORDER BY cursor LIMIT 1').get(id, kind).at);
+      const wait = at('assistant.delta') - at('message.user');
+      assert.ok(wait >= 1900 && wait < 2600, `the first words come about 2 s after the send (${wait} ms)`);
+      assert.ok(db.prepare("SELECT COUNT(*) n FROM events WHERE conversation_id=? AND kind='assistant.delta'").get(id).n > 100, 'streamed in many chunks');
+      await until(() => db.prepare("SELECT 1 FROM events WHERE conversation_id=? AND kind='assistant.message'").get(id), 30_000, 'the answer to complete');
+      // the page's engine re-posts an action whose answer it never heard (a dropped connection): the same answer again, and no chat turn
+      const itemId = db.prepare("SELECT content FROM events WHERE conversation_id=? AND kind='message.user'").get(id).content;
+      const again = await v.ev(`fetch('/api/actions',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({id:'dup',action_id:${JSON.stringify(JSON.parse(itemId).itemId)},op:'message.send',conversation_id:${JSON.stringify(id)},payload:{text:'so, whats ur deal ?',uploads:[]}})}).then(async r=>({status:r.status,body:await r.json()}))`);
+      assert.equal(again.status, 200);
+      assert.ok(again.body.events.some((e) => e.kind === 'message.user'), 'the redelivery is answered with the stored events');
+      assert.equal((await v.state()).turns, 0, 'and no turn is counted');
+      db.close();
+    } finally { await v.close(); }
+  });
+
   test('the app resets the composer under the typing: the intro is typed again and sent', { timeout: 90_000 }, async () => {
     const v = await visitor({ fake: 'pass', scripts: [WIPE] });
     try { assert.equal(await settled(v), 'first answer'); } finally { await v.close(); }
@@ -169,9 +193,13 @@ describe('the first minute, against a scratch demo', { skip }, () => {
   test('the opening motion: only the bar on black, then the normal app, and the cleanup leaves no trace', { timeout: 90_000 }, async () => {
     const v = await visitor({ fake: 'pass' });
     try {
-      const seen = await until(async () => v.ev("(()=>{const r=document.documentElement;const f=document.querySelector('[data-testid=composer]');return r.classList.contains('demo-ready')&&f&&f.value.length>=3?{cls:r.className,bg:getComputedStyle(document.body).backgroundColor,vw:innerWidth,caret:(()=>{const c=document.getElementById('demo-caret').getBoundingClientRect();return Math.round(c.left+c.width/2)})(),value:f.value}:null})()"), 20_000, 'the opening, mid typing');
+      // the typed line is centred on the screen and grows outward from the middle: the caret rides its end, so it sits half the typed line's
+      // (scaled) width right of the centre. One evaluation reads the caret, the scale and the mirror's width of what is typed, so the typing cannot move between them.
+      const seen = await until(async () => v.ev("(()=>{const r=document.documentElement;const f=document.querySelector('[data-testid=composer]');const m=[...document.body.children].find((e)=>e.tagName==='SPAN'&&e.style.position==='fixed');if(!(r.classList.contains('demo-ready')&&f&&f.value.length>=3&&m&&m.textContent===f.value))return null;const S=parseFloat(r.style.getPropertyValue('--di-s'));const c=document.getElementById('demo-caret').getBoundingClientRect();return{cls:r.className,bg:getComputedStyle(document.body).backgroundColor,vw:innerWidth,caret:c.left+c.width/2,want:innerWidth/2+S*m.getBoundingClientRect().width/2,value:f.value}})()"), 20_000, 'the opening, mid typing');
       assert.match(seen.cls, /demo-intro/); assert.equal(seen.bg, 'rgb(0, 0, 0)');
-      assert.equal(seen.caret, Math.round(seen.vw / 2), 'the caret holds at the middle of the screen');
+      // the connection coming up is never shown during the opening, whatever the stream is doing
+      assert.equal(await v.ev("getComputedStyle(document.querySelector('[data-testid=conn]')).visibility"), 'hidden', 'no connection dot in the opening');
+      assert.ok(Math.abs(seen.caret - seen.want) <= 2, `the caret rides the end of the centred line (${seen.caret} vs ${seen.want})`);
       assert.equal(await settled(v), 'first answer');
       // (the page's own poll, every 2.5 s, ends the opener's pending-state rules once the activity line has left queued/starting)
       await until(async () => v.ev("!/demo-/.test(document.documentElement.className)"), 9000, 'the opening cleaned up');

@@ -84,13 +84,13 @@
   const cleanupVisual = () => {
     const v = visual; if (!v) return; visual = null;
     clearTimeout(v.timer); clearTimeout(v.idle);
-    root.classList.remove('demo-intro', 'demo-ready', 'demo-intro-out', 'demo-intro-in', 'demo-measure');
+    root.classList.remove('demo-intro', 'demo-ready', 'demo-intro-out', 'demo-intro-in', 'demo-measure', 'demo-bare', 'demo-send');
     for (const k of ['ox', 'oy', 'dx', 'dy', 's', 'pl', 'ms', 'ease', 'delay', 'flight', 'in']) root.style.removeProperty('--di-' + k);
     v.caret.remove(); v.mirror.remove(); if (v.clone) v.clone.remove();
     if (v.bubble) v.bubble.style.visibility = '';
     window.removeEventListener('resize', v.onResize);
   };
-  const dropIntro = () => { if (visual) cleanupVisual(); else root.classList.remove('demo-intro'); };
+  const dropIntro = () => { if (visual) cleanupVisual(); else { root.classList.remove('demo-intro', 'demo-bare', 'demo-send'); const c = document.getElementById('demo-caret'); if (c) c.remove(); } };
   /** Measures the real layout (the app untransformed) and sets the scale, the origin and the narrow bar. Idempotent: a resize measures again. */
   function layoutVisual(v) {
     const { field, bar, send, app, text } = v, cs = getComputedStyle(field);
@@ -101,17 +101,17 @@
     const real = field.getBoundingClientRect(), barRect = bar.getBoundingClientRect();
     v.mirror.style.cssText = `position:fixed;left:-9999px;top:0;visibility:hidden;white-space:pre;font-family:${cs.fontFamily};font-size:${cs.fontSize};font-weight:${cs.fontWeight};font-style:${cs.fontStyle};letter-spacing:${cs.letterSpacing}`;
     v.textW = v.width(text);
-    // half the real bar, but never narrower than the text plus its padding and a little room (a phone's bar is already narrow)
-    const wantW = Math.max(real.width / 2, v.textW + 2 * fieldPad + 24);
+    // the field is just the text plus its padding, so the send button sits right after the end of the full line (the bar itself is invisible)
+    const gap = send.getBoundingClientRect().left - real.right; // from the field's right edge to the send button
+    const wantW = 1.6 * v.textW + fieldPad - gap; // the send button starts 1.6x the line's length from the line's left edge
     const extras = barRect.width - 2 * pad(bar, 'Left') - real.width; // attach button, send button and gaps
     root.style.setProperty('--di-pl', (barRect.width - (wantW + extras)) / 2 + 'px');
     const t = field.getBoundingClientRect(), sd = send.getBoundingClientRect(), ar = app.getBoundingClientRect();
     const vw = root.clientWidth, vh = window.innerHeight;
-    v.cx = vw / 2; v.cy = vh / 2;
+    v.cx = vw / 2; v.cy = vh / 2; // the typed line is centred on the screen and grows outward from the middle
     v.p0x = t.left + fieldPad; v.p0y = t.top + t.height / 2;
-    // the zoom: when the whole text is typed, the send button (its right edge) sits 6% of the width in from the screen's edge
-    const span = sd.right - v.p0x - v.textW;
-    v.S = Math.min(3.6, Math.max(1.2, span > 0 ? (vw / 2 - vw * 0.06) / span : 2));
+    // the zoom: the whole typed line spans about a third of the screen's width
+    v.S = Math.min(3.6, Math.max(1.2, (vw * 0.3) / Math.max(1, v.textW)));
     v.lineH = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.4;
     v.color = cs.color;
     root.style.setProperty('--di-s', String(v.S));
@@ -121,10 +121,12 @@
     Object.assign(v.caret.style, { left: v.cx + 'px', top: v.cy + 'px', width: Math.max(2, v.S) + 'px', height: v.lineH * v.S * 0.85 + 'px', background: v.color });
     slideVisual(v, field.value);
   }
-  /** The bar slides left by the width of what is typed, so the end of the text (the caret) stays at the middle of the screen. */
+  /** The bar slides left by half the width of what is typed, so the typed line stays centred; the caret rides its end. */
   function slideVisual(v, typed) {
-    v.dx = v.cx - v.p0x - v.S * v.width(typed);
+    const w = v.S * v.width(typed);
+    v.dx = v.cx - v.p0x - w / 2;
     root.style.setProperty('--di-dx', v.dx + 'px');
+    v.caret.style.left = v.cx + w / 2 + 'px';
   }
   function startVisual(text) {
     if (visual) return visual;
@@ -132,9 +134,9 @@
     try {
       const field = composer(), bar = field && field.closest('.composer'), send = document.querySelector('[data-testid="send"]'), app = field && field.closest('.app');
       if (!field || !bar || !send || !app) return null;
-      const mirror = document.createElement('span'), caret = document.createElement('div');
-      caret.id = 'demo-caret'; caret.className = 'idle';
-      document.body.append(mirror, caret);
+      const mirror = document.createElement('span'), early = document.getElementById('demo-caret'), caret = early || document.createElement('div'); // the early script drew the caret at the first paint: keep it (moving it would restart its blink)
+      caret.id = 'demo-caret'; if (!early) caret.className = 'idle'; root.classList.add('demo-bare'); // bare text on black from the first paint (the early script set it); only the send button comes in once typed
+      document.body.append(mirror); if (!early) document.body.append(caret);
       const v = { field, bar, send, app, text, mirror, caret, width: (s) => { mirror.textContent = s; return mirror.getBoundingClientRect().width; }, timer: 0, idle: 0, clone: null, bubble: null };
       let rt = 0; v.onResize = () => { clearTimeout(rt); rt = setTimeout(() => { if (visual === v && !root.classList.contains('demo-intro-out')) layoutVisual(v); }, 120); };
       window.addEventListener('resize', v.onResize);
@@ -143,7 +145,7 @@
       layoutVisual(v);
       root.classList.add('demo-ready');
       return v;
-    } catch (e) { cleanupVisual(); root.classList.remove('demo-intro'); return null; }
+    } catch (e) { cleanupVisual(); root.classList.remove('demo-intro', 'demo-bare', 'demo-send'); return null; }
   }
   /** One typed character: the text, then the bar's slide, in the same task (one paint). */
   const typedVisual = (typed) => {
@@ -151,7 +153,7 @@
     // the app rebuilds its composer when the chat finishes loading: measure the new one
     const f = composer();
     if (f && f !== v.field) { v.field = f; v.bar = f.closest('.composer') || v.bar; v.send = document.querySelector('[data-testid="send"]') || v.send; v.app = f.closest('.app') || v.app; layoutVisual(v); }
-    slideVisual(v, typed);
+    slideVisual(v, typed); if (typed.length >= v.text.length - 7) root.classList.add('demo-send'); // the send button fades in over the last word, in the corner of the eye, riding the bar as the line slides
     v.caret.classList.remove('idle'); clearTimeout(v.idle); v.idle = setTimeout(() => v.caret.classList.add('idle'), 450);
   };
   /** The send button pressed in, visibly, a moment before the real click. */
@@ -242,11 +244,11 @@
     clearTimeout(v.timer);
     if (v.bubble) v.bubble.style.visibility = '';
     // the flying copy stays on top, whole, until the black has gone (cleanupVisual removes it): the real bubble comes up under it as the interface fades in
-    root.classList.add('demo-intro-in');
+    root.classList.add('demo-intro-in'); root.classList.remove('demo-bare', 'demo-send');
     v.timer = setTimeout(cleanupVisual, IN_MS + 120);
   }
   async function introFlow() {
-    const t0 = Date.now(), text = st.openerText;
+    const t0 = Date.now(), text = st.openerText + ' '; // typed with a trailing space, as he types; the server trims it
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
     const put = (f, v) => { setter.call(f, v); f.dispatchEvent(new Event('input', { bubbles: true })); };
     let sends = 0;
@@ -259,19 +261,21 @@
       st = cur;
       if (!st.intro) return dropIntro();
       if (new URLSearchParams(location.search).get('chat') !== st.opener) return location.replace('/?chat=' + encodeURIComponent(st.opener));
+      // our message is already in the chat (a slow or reconnecting connection is still delivering it): wait for the server, never type and send it again
+      if (sends > 0 && [...document.querySelectorAll('[data-testid="user-text"]')].some((e) => e.textContent.trim() === text.trim())) { await pause(500); continue; }
       let field = composer();
       if (!field) { await pause(100); continue; }
       if (field.value && field.value !== text && !text.startsWith(field.value)) return; // a draft that is not ours: leave it to the visitor
       if (field.value !== text) {
         const v = startVisual(text);
         // the opening: the bar alone on black for a beat, then the typing, replaying the recorded gaps (no randomness) against one clock so they do not drift
-        await pause(v ? 500 : 250);
+        await pause(v ? Math.max(0, 700 - (performance.now() - (window.__demoCaretAt || performance.now()))) : 250); // one 700 ms blink from the first paint before the first key (it overlaps the app's boot)
         let typed = field.value;
-        const gaps = Array.isArray(st.openerGaps) && st.openerGaps.length === text.length ? st.openerGaps : Array.from(text, () => 60);
+        const gaps = Array.isArray(st.openerGaps) && st.openerGaps.length === text.length - 1 ? st.openerGaps.concat(150) : Array.from(text, () => 60);
         let due = performance.now();
         for (const ch of text.slice(typed.length)) {
           field = composer();
-          due += gaps[typed.length];
+          due += gaps[typed.length] * 0.6; // his recorded cadence, at 0.6x: the whole intro stays under 3 s
           const wait = due - performance.now(); if (wait > 0) await pause(wait);
           if (!field || visitorActed || failed || field.value !== typed) break;
           typed += ch; put(field, typed); typedVisual(typed);
@@ -280,7 +284,8 @@
         if (visitorActed || failed) return;
         if (!field || field.value !== text) { await pause(400); continue; } // the app reset the composer under the typing: type again
       }
-      await pause(visual ? 520 : 450); // a beat before the click
+      root.classList.add('demo-send');
+      await pause(visual ? 420 : 300); // a beat before the click; the caret goes off as the button is pressed
       const send = document.querySelector('[data-testid="send"]');
       if (!send || send.disabled) { await pause(500); continue; }
       if (sends >= 3) return fail('intro-unsent');
@@ -307,19 +312,9 @@
     const card = document.createElement('div');
     card.style.cssText = 'max-width:min(560px,100%);max-height:92%;overflow:auto;background:var(--bg-raised,#fff);color:var(--ink,#111);border:1px solid var(--line,#ccc);border-radius:12px;padding:16px 18px;box-shadow:0 6px 30px #0003';
     const head = document.createElement('div');
-    head.style.cssText = 'font:600 17px/1.4 var(--sans,system-ui);margin-bottom:12px';
+    head.style.cssText = 'font:600 17px/1.4 var(--sans,system-ui)';
     head.textContent = st.resting && st.turns < st.cap ? 'the demo is resting for today; you can still run it yourself' : "ok, that's the demo. try downloading it";
-    const box = document.createElement('div');
-    box.style.cssText = 'position:relative;background:var(--bg-sunken,#f3f3f3);border:1px solid var(--line,#ccc);border-radius:8px';
-    const pre = document.createElement('pre');
-    pre.style.cssText = 'margin:0;padding:10px 12px;padding-right:64px;font:12.5px/1.5 var(--mono,ui-monospace,monospace);white-space:pre-wrap;overflow-wrap:anywhere';
-    const link = document.createElement('a'); link.href = st.repo; link.target = '_blank'; link.rel = 'noopener'; link.textContent = st.repo; link.style.color = 'inherit';
-    pre.append(link, '\n' + st.onboard.slice(st.repo.length + 1));
-    const copy = document.createElement('button');
-    copy.type = 'button'; copy.textContent = 'Copy';
-    copy.style.cssText = 'position:absolute;top:6px;right:6px;font:600 12px var(--sans,system-ui);border:1px solid var(--line,#ccc);border-radius:6px;padding:3px 8px;background:var(--bg-raised,#fff);color:inherit;cursor:pointer';
-    copy.onclick = async () => { try { await navigator.clipboard.writeText(st.onboard); copy.textContent = 'Copied'; } catch { const r = document.createRange(); r.selectNodeContents(pre); getSelection().removeAllRanges(); getSelection().addRange(r); } };
-    box.append(pre, copy); card.append(head, box); o.append(card); document.body.append(o);
+    card.append(head); o.append(card); document.body.append(o);
   }
 
   // ---- state: after every turn and on a slow poll ----
@@ -343,6 +338,21 @@
 
   // The human check is not on the way to the first sight of the app: it starts once the composer is up (the page's script and the app's boot are
   // not competing with Cloudflare's), or after 4 s whatever happens.
+  // A message to a starter chat continues in the visitor's own fork of it (serve.mjs rewrites the send); the page follows it there: on a send in a
+  // starter chat, open the fork's row once the sidebar has it (st.forks names it ahead of time), the way a click on that row would.
+  function followForks() {
+    let want = null;
+    const here = () => new URLSearchParams(location.search).get('chat');
+    const arm = () => { const f = st && st.forks && st.forks[here()]; if (f) want = { id: f, until: Date.now() + 20_000 }; };
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target && e.target.closest && e.target.closest('[data-testid="composer"]') && String(e.target.value || '').trim()) arm(); }, true);
+    document.addEventListener('click', (e) => { if (e.target && e.target.closest && e.target.closest('[data-testid="send"]')) arm(); }, true);
+    setInterval(() => {
+      if (!want) return;
+      if (Date.now() > want.until || here() === want.id) { want = null; return; }
+      const row = document.querySelector(`[data-testid="chat-row"][data-chat="${CSS.escape(want.id)}"]`);
+      if (row) { want = null; setTimeout(() => row.click(), 150); }
+    }, 200);
+  }
   const whenBooted = (fn) => { let n = 0; const t = setInterval(() => { if (document.querySelector('[data-testid="composer"]') || ++n > 80) { clearInterval(t); setTimeout(fn, 300); } }, 50); };
   const newSession = async (fresh) => {
     const r = await fetch('/_demo/session' + (fresh ? '?fresh=1' : ''), { method: 'POST', credentials: 'same-origin' }).catch(() => null);
@@ -360,8 +370,9 @@
     if (!st.intro) dropIntro(); else root.classList.add('demo-opener'); // the opener never shows a pending label, motion or not
     // a page of the app's own cache can name an intro chat that has since been played and replaced, or none at all: go to the live one
     const here = new URLSearchParams(location.search).get('chat');
-    if (st.turns === 0 && wantsIntro() && here !== st.opener) return location.replace('/?chat=' + encodeURIComponent(st.opener));
+    if (st.intro && wantsIntro() && here !== st.opener) return location.replace('/?chat=' + encodeURIComponent(st.opener));
     whenBooted(humanCheck);
+    followForks();
     introFlow();
     update();
     setInterval(refresh, 2500);

@@ -12,7 +12,7 @@ Here's what's in the box:
 
 <!-- feature:01 -->
 
-**1. A self-hosted agent memory, structured-database-based for high recall.**
+**1. Self-hosted agent memory, structured-database-based for high recall.**
 
 It's a graph-based memory system where information comes in piecemeal and disconnected, and understanding is continuously updated from the available facts and emerges over time. This allows me to ingest any document or stream, while staying grounded in the bigger picture.
 
@@ -22,7 +22,7 @@ This system is state of the art against both research memory systems and product
 
 <!-- feature:02 -->
 
-**2. A polished agent runner and chat interface.**
+**2. Polished agent runner and chat interface, with a million little QoL features.**
 
 You're using it right now. It's a good chat interface base, but you can customize me however you want by just asking. (Tophat is open source and was developed with dogfooding and self-modification).
 
@@ -38,7 +38,7 @@ Tophat is not your assistant living on a linux box in the cloud, it is *your exo
 
 <!-- feature:04 -->
 
-**4. Connectors enough to capture full context.**
+**4. Connectors enough to capture full context, including location, screen recording, and all-day audio.**
 
 Tophat works by having all the context that you have. Included connectors cover email (Gmail, and any IMAP mailbox including Microsoft 365), instant messaging platforms via Beeper, iMessage, Apple Contacts, Calendar, Notes and Photos, and REST APIs for Mercury bank transactions, Oura, Toggl and Hevy, plus a webhook and a JSONL file drop for anything else.
 
@@ -48,7 +48,7 @@ Of course, you can build your own connectors with just a few prompts (if you do,
 
 <!-- feature:05 -->
 
-**5. Per-memory e2ee p2p sharing.**
+**5. Per-memory e2ee p2p sharing for collaborative projects.**
 
 Tophat's memory system enables granular per-fact permissions so that you and your peers can collaborate on some things while keeping secrets and planning surprises on the side. ([See the technical post](https://github.com/tophat-md/tophat/blob/main/README.md#sharing-devices-and-cross-scope-pages).)
 

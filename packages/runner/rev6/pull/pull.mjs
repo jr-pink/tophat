@@ -20,6 +20,7 @@ import { agentEnv, createTools, memoryCli, memoryStore, receiptComplete, rootAge
 import { createAgents } from './agents.mjs';
 import { BACKGROUND_CALL_NOTE, BACKGROUND_CANCEL_MARK, BACKGROUND_FORK_NOTE, BACKGROUND_MARK, BACKGROUND_NOTE, BACKGROUND_TURN_PREFIX, backgroundGist, backgroundMinGeneratingMs, backgroundReportText,
   backgroundResult, createLiveView, isBackgroundTurn } from './background.mjs';
+import { diffSince, snapshotCalls } from './background-diff.mjs';
 import { checkInText } from './progress.mjs';
 import { createChatTools } from './chat.mjs';
 import { INBOX_RULE, endsWithInboxRule } from '../base/inbox-rule.mjs';
@@ -27,7 +28,7 @@ import { prefetchPasses, warmSearch } from './prefetch.mjs';
 import { drainPushes, reconcilePending, transcriptRecords } from './pushq.mjs';
 import { runnerChatVerdict } from './chat-scope.mjs';
 import { emptyUsage, runAgent, textOf } from './loop.mjs';
-import { streamMessage } from './wire.mjs';
+import { abortableSleep, raceAbort, streamMessage } from './wire.mjs';
 import { INCOGNITO_NOTE, incognitoEnv, isIncognito, removeIncognitoScratch } from './incognito.mjs';
 import { installProcessGuards } from './process-guard.mjs';
 import { harnessFeatures, memoryStatusLine, prefetchWaitMs, settleWithin } from './harness-v2.mjs';
@@ -44,6 +45,13 @@ export const interruptCause = ({ restarting = false } = {}) => (restarting ? TER
 export const isAutomatedEvent = (text) => endsWithInboxRule(text);
 const BUDGET = () => ({ compactTokens: Number(process.env.TOPHAT_RUNNER_COMPACT_TOKENS) || 300_000, compactHardTokens: Number(process.env.TOPHAT_RUNNER_COMPACT_HARD_TOKENS) || 800_000,
   summaryTokens: Number(process.env.TOPHAT_RUNNER_COMPACT_SUMMARY_TOKENS) || 16_000, keepRecent: 6 });
+
+/** The owner-message watchdog. An owner message that no request has carried within this many ms is logged and the step
+ * restarted (its abort). Running subagents are left alone. TOPHAT_RUNNER_OWNER_WATCHDOG_MS, 0 turns it off.
+ */
+export const ownerWatchdogMs = (env = process.env) => { const v = Number(env.TOPHAT_RUNNER_OWNER_WATCHDOG_MS); return env.TOPHAT_RUNNER_OWNER_WATCHDOG_MS !== undefined && env.TOPHAT_RUNNER_OWNER_WATCHDOG_MS !== '' && Number.isFinite(v) && v >= 0 ? v : 20_000; };
+/** The compaction summary request's own ceiling: it carries no turn's abort, so it needs one (models.json timeoutMs is 0). */
+const compactTimeoutMs = (env = process.env) => { const v = Number(env.TOPHAT_RUNNER_COMPACT_TIMEOUT_MS); return Number.isFinite(v) && v > 0 ? v : 10 * 60_000; };
 
 export function parseArgs(argv) {
   const out = { addDirs: [] }, takes = { '--session-id': 'sessionId', '--resume': 'resume', '--model': 'model', '--permission-mode': 'permissionMode', '--cwd': 'cwd', '--reasoning-effort': 'reasoningEffort' };
@@ -88,7 +96,9 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   let seq = 0;
   const emit = (payload) => write(JSON.stringify({ ...payload, session_id: sessionId, uuid: `${sessionId}-${++seq}` }));
   const state = { pendingImages: [], turn: null, queue: [], running: null, pushing: null, lastInputTokens: 0, compactRequested: false, compacting: null, compactGeneration: 0, ownerWaiters: new Set(), paceWaiters: new Set(), stopIds: new Set(),
-    chatWork: null, checkInTimer: null, settleTimer: null, started: false, stopped: false, restarting: false };
+    chatWork: null, checkInTimer: null, settleTimer: null, started: false, stopped: false, restarting: false,
+    // the watchdog's view: when the oldest owner message no request has carried yet arrived, and when a request last left
+    ownerPendingSince: null, lastRequestAt: 0, watchdogTimer: null, compactAbort: null };
   const agents = env.TOPHAT_RUNNER_AGENTS === '0' ? null : (factories.agents || createAgents)({ ledger, parentSessionId: sessionId, cwd, roots: args.addDirs, env, permissionMode, model, now,
     emit: (p) => emit(p), onOwnerWord: (cb) => { state.ownerWaiters.add(cb); return () => state.ownerWaiters.delete(cb); },
     onSettled: (id) => { if (state.stopIds.delete(id)) return settledByStop(id); announceBackground(id); return scheduleAgentWake(); }, systemContext: () => (publicPrompt(env) ? `Your tools: ${tools.specs.map((t) => t.name).join(', ')}.${incognito ? ` ${INCOGNITO_NOTE}` : ''}` : `Workspace: ${cwd}. Allowed file roots: ${tools.roots.join(', ')}. ${DATES_RULE}${incognito ? ` ${INCOGNITO_NOTE}` : ''}`), toolFactories: factories.childTools || {}, stream: factories.streamMessage || null });
@@ -246,9 +256,9 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       automated: isAutomatedEvent(first), ownerJoined: false, archiveCall: null,
       // Background-turn state (backgroundTurn()): `sid` is the session this turn writes to, the main one until it is
       // moved; `bg` is set when it is; `opts` is the runAgent options object, whose sessionId is retargeted then.
-      sid: sessionId, bg: null, opts: null, first, fromSeq, streaming: false, streamText: '', live: createLiveView(), gen: { since: null, last: null, ms: 0 }, calls: null, wakes: new Set(), log: [] };
+      sid: sessionId, bg: null, opts: null, first, fromSeq, streaming: false, streamText: '', live: createLiveView(), gen: { since: null, last: null, ms: 0 }, calls: null, wakes: new Set(), log: [], snap: null, diffs: [] };
     if (holder) holder.turn = thisTurn;
-    const out = (p) => { if (!thisTurn.bg) emit(p); };
+    const out = (p) => { if (!thisTurn.bg && !thisTurn.abandoned) emit(p); };
     const lastOwnerSeq = ledger.lastOwnerSeq(sessionId);
     let ownerCursor = Math.min(fromSeq, lastOwnerSeq ? lastOwnerSeq - 1 : fromSeq), prefetchStarted = false, measuredGeneration = 0, requestStart = 0, said = false, cacheRead = 0, cacheWrite = 0;
     let firstStep = true, continuations = 0, sinceProgress = 0, closedSeen = goals ? goals.read().items.filter((i) => i.status !== 'todo').length : 0, goalStop = null, callsThisTurn = 0, looseEndsChecked = false;
@@ -264,10 +274,19 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     else if (hf.has('early') && wantPrefetch) { prefetchStarted = true; prefetchPending = prefetch(thisTurn, first, now()); }
     await tools.ready();
     const opts = thisTurn.opts = { role: 'root', ledger, sessionId, env, now, emit: out, parent: null, tools, usage,
-      getModel: () => model, setModel: (m) => { model = m; }, canCompact: true, compact: (t) => (thisTurn.bg ? Promise.resolve('nothing') : startCompact(t)),
+      getModel: () => model, setModel: (m) => { model = m; }, canCompact: true, compact: (t) => (thisTurn.bg ? Promise.resolve('nothing') : raceAbort(startCompact(t), thisTurn.requestStop?.signal)),
       request: (m) => ({ model: m, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}), system: systemPrompt(), cache_tail_skip: 1, tools: tools.specs, max_tokens: 16_000 }),
       async beforeStep() {
         if (thisTurn.interrupted) return 'stop';
+        // The first round of calls has completed (onStep): no further request is made.
+        if (thisTurn.bg?.stopAfterCall) return 'stop';
+        if (thisTurn.abandoned) return 'stop';
+        // The preparation has its own abort, which his message and the stop fire like a request's: every wait below races it.
+        if (!thisTurn.bg) thisTurn.requestStop = new AbortController();
+        const prep = thisTurn.requestStop?.signal;
+        const bounded = (p) => raceAbort(p, prep);
+        if (!thisTurn.bg && env.TOPHAT_RUNNER_TEST_STALL_STEP_MS && state.queue.some((q) => !q.pace)) await new Promise((r) => setTimeout(r, Number(env.TOPHAT_RUNNER_TEST_STALL_STEP_MS)));
+        if (thisTurn.abandoned) return 'stop';
         // A new request is a new generation segment.
         thisTurn.gen = { since: null, last: null, ms: 0 }; thisTurn.live.reset();
         if (thisTurn.bg) {
@@ -292,7 +311,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         }
         if (scopeHold) thisTurn.sourceContext = 'The scope of this chat is not one this instance stores memory for (or could not be confirmed), so its words were not stored as raw memory rows. Do not invent source_refs.';
         else if (ownerRecords.length && store.installed && !keepsNoTranscript) {
-          const receipt = await cli('ingest', { records: ownerRecords }, { env, timeoutMs: 2000 });
+          const receipt = await bounded(cli('ingest', { records: ownerRecords }, { env, timeoutMs: 2000 }));
           if (receiptComplete(ownerRecords, receipt).complete) {
             sourceIds.push(...ownerRecords.map((rec) => rec.id));
             thisTurn.sourceContext = `Stored owner-message source_refs for this turn: ${sourceIds.join(', ')}. These identify the owner's actual words, not proof that any requested action was performed. Use memory_read kind=raw to inspect before citing.`;
@@ -300,14 +319,14 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         }
         if (thisTurn.interrupted) return 'stop';
         if (wantPrefetch && !prefetchStarted) { prefetchStarted = true; prefetch(thisTurn, first, now()); }
-        if (prefetchPending.length) { const waiting = prefetchPending; prefetchPending = []; await settleWithin(waiting, prefetchWaitMs(env) - (Date.now() - turnStart)); }
+        if (prefetchPending.length) { const waiting = prefetchPending; prefetchPending = []; await bounded(settleWithin(waiting, prefetchWaitMs(env) - (Date.now() - turnStart))); }
         // Owner messages that joined this run (and a queued one this turn opened with): the request that first carries
         // them waits for their fast legs, but only inside the hold window counted from when each arrived; a message
         // that has waited longer than that gets what is ready and no extra hold.
         const joinedNow = [...(joined ? [joined] : []), ...state.queue.filter((q) => q.home).map((q) => q.home)].filter((h) => !h.held);
         for (const h of joinedNow) { h.held = true; adopt(h, thisTurn); }
         if (joinedNow.length && !thisTurn.interrupted) {
-          await Promise.all(joinedNow.map((h) => settleWithin(h.ready || [], prefetchWaitMs(env) - (Date.now() - h.arrivedMs))));
+          await bounded(Promise.all(joinedNow.map((h) => settleWithin(h.ready || [], prefetchWaitMs(env) - (Date.now() - h.arrivedMs)))));
         }
         for (const s of thisTurn.staged) {
           const block = thisTurn.interrupted ? null : s.take();
@@ -317,17 +336,20 @@ export function createRunner({ args, env = process.env, write = (line) => proces
           thisTurn.arrivals.push(block);
           process.stderr.write(`[rev6 prefetch] ${new Date().toISOString()} session ${sessionId} ${s.key.startsWith('joined_') ? 'joined-message ' : ''}${s.partial() ? 'partial' : 'whole'} search block taken ${ms}ms after the prefetch began, ${Date.now() - turnStart}ms into the turn${s.summary?.() ? ` (${s.summary()})` : ''}\n`);
         }
-        await landImages({ holdMs: firstStep ? uploadHoldMs(env) : 0, stop: () => thisTurn.interrupted });
+        await landImages({ holdMs: firstStep ? uploadHoldMs(env) : 0, stop: () => thisTurn.interrupted || Boolean(prep?.aborted) });
         firstStep = false;
         const pending = [...thisTurn.arrivals.splice(0), ...jobBlocks(), ...state.queue.splice(0).filter((q) => !q.seq).flatMap((q) => q.blocks)];
         if (pending.length) inject(pending);
-        if (state.compactRequested) { state.compactRequested = false; await startCompact('manual'); }
-        else if (state.lastInputTokens > budget.compactHardTokens) await startCompact('auto-blocking');
+        const ownerWaiting = ownerRecords.length > 0 || state.queue.some((q) => !q.pace);
+        if (state.compactRequested) { state.compactRequested = false; if (ownerWaiting) startCompact('manual'); else await bounded(startCompact('manual')); }
+        else if (state.lastInputTokens > budget.compactHardTokens) { if (ownerWaiting) startCompact('auto-blocking'); else await bounded(startCompact('auto-blocking')); }
         else if (state.lastInputTokens > budget.compactTokens) startCompact('auto');
         thisTurn.requestStop = new AbortController();
         thisTurn.paceCut = false; thisTurn.ownerCut = false;
-        if (thisTurn.interrupted) return 'stop';
+        if (thisTurn.interrupted || thisTurn.abandoned) return 'stop';
         requestStart = Date.now(); said = false; cacheRead = 0; cacheWrite = 0;
+        // This request carries every owner message in the ledger: none is waiting on a request any more.
+        state.lastRequestAt = requestStart; state.ownerPendingSince = null;
         thisTurn.streaming = true; thisTurn.streamText = '';
         return undefined;
       },
@@ -348,10 +370,11 @@ export function createRunner({ args, env = process.env, write = (line) => proces
           said = true;
           process.stderr.write(`[rev6 timing] ${new Date().toISOString()} session ${sessionId} first token ${Date.now() - requestStart}ms after the request, ${Date.now() - turnStart}ms after the turn began (the request left ${requestStart - turnStart}ms into the turn); cache read ${cacheRead}, written ${cacheWrite}${cacheWrite > cacheRead ? ' (COLD: the context was processed again)' : ''}\n`);
         }
-        if (event.type !== 'ping') emit({ type: 'stream_event', event, parent_tool_use_id: null });
+        if (event.type !== 'ping') out({ type: 'stream_event', event, parent_tool_use_id: null });
       },
       onAborted(partial, res) {
         thisTurn.streaming = false; closeGeneration(thisTurn);
+        if (thisTurn.abandoned) return 'stop';
         const text = partial.message.content.filter((p) => p?.type === 'text' && p.text);
         if (partial.message.id) { usage.requests += 1; for (const k of Object.keys(usage)) if (k !== 'requests') usage[k] += partial.message.usage?.[k] || 0; }
         if ((thisTurn.paceCut || thisTurn.ownerCut) && !thisTurn.interrupted) {
@@ -377,7 +400,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         if (thisTurn.bg) return;
         const stale = measuredGeneration !== state.compactGeneration;
         if (!stale) state.lastInputTokens = (message.usage?.input_tokens || 0) + (message.usage?.cache_read_input_tokens || 0) + (message.usage?.cache_creation_input_tokens || 0);
-        emit({ type: 'assistant', message: { id: message.id, role: 'assistant', model: message.model || model, content: message.content, stop_reason: message.stop_reason, usage: message.usage }, ...(stale ? { context_stale: true } : {}), parent_tool_use_id: null });
+        out({ type: 'assistant', message: { id: message.id, role: 'assistant', model: message.model || model, content: message.content, stop_reason: message.stop_reason, usage: message.usage }, ...(stale ? { context_stale: true } : {}), parent_tool_use_id: null });
       },
       nudge: (text) => thisTurn.arrivals.push(contextBlock('Recovery', text)),
       cancelled: () => (thisTurn.interrupted ? 'interrupted by the owner before this ran' : null),
@@ -385,10 +408,19 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         state.ownerWaiters.add(wake); state.paceWaiters.add(wake); thisTurn.wakes.add(wake);
         return () => { state.ownerWaiters.delete(wake); state.paceWaiters.delete(wake); thisTurn.wakes.delete(wake); };
       } }),
+      // The disk as it stands just before a round of calls (every turn: a turn is moved to the background while its call
+      // runs, so the snapshot cannot wait for the move); read back in onStep once the turn is a background one.
+      beforeCalls(calls) {
+        try { thisTurn.snap = snapshotCalls(calls, { cwd, env }); } catch (error) { thisTurn.snap = null; process.stderr.write(`[rev6 pull] pre-call snapshot failed: ${error.message}\n`); }
+      },
       onStep() {
-        const calls = thisTurn.calls;
-        thisTurn.calls = null;
+        const calls = thisTurn.calls, snap = thisTurn.snap;
+        thisTurn.calls = null; thisTurn.snap = null;
         if (!thisTurn.bg || !calls) return;
+        // The turn ends here: its report (with the diff of what this round changed) is delivered by backgroundResult.
+        thisTurn.bg.stopAfterCall = true;
+        try { const d = diffSince(snap); if (d.text || d.note) thisTurn.diffs.push(d); }
+        catch (error) { thisTurn.diffs.push({ text: '', note: `the diff of its edits could not be read (${error.message})` }); }
         // What the background turn did after the interrupt, read back from the results row it just wrote.
         const last = ledger.lastRow(thisTurn.sid);
         const byId = new Map((last?.content || []).filter((b) => b.type === 'tool_result').map((b) => [b.tool_use_id, b]));
@@ -410,7 +442,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
           goalStop = decision.reason;
           if (decision.continue) {
             if (decision.loose) looseEndsChecked = true; else { continuations += 1; sinceProgress += 1; }
-            emit({ type: 'system', subtype: 'status', status: 'continuing', reason: decision.reason, goal_items: decision.items.map((i) => `${i.id}: ${i.text}`), continuation: continuations });
+            out({ type: 'system', subtype: 'status', status: 'continuing', reason: decision.reason, goal_items: decision.items.map((i) => `${i.id}: ${i.text}`), continuation: continuations });
             thisTurn.arrivals.push(contextBlock('Continuation', decision.message));
             return { continue: true };
           }
@@ -419,9 +451,11 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         return { continue: false };
       } , stream };
     const r = await runAgent(opts);
+    // A turn the watchdog abandoned says nothing more: a fresh turn owns the chat now (ownerWatchdog()).
+    if (thisTurn.abandoned) return undefined;
     if (thisTurn.bg) {
       return thisTurn.bg.finish({ status: r.failure ? 'failed' : thisTurn.interrupted ? 'cancelled' : 'done', finalText: r.finalText, failure: r.failure,
-        usage, cost: costOf(model, usage, env), calls: r.calls, log: thisTurn.log });
+        usage, cost: costOf(model, usage, env), calls: r.calls, log: thisTurn.log, diffs: thisTurn.diffs, stopped: Boolean(thisTurn.bg.stopAfterCall) && !r.failure && !thisTurn.interrupted });
     }
     const durationMs = Date.now() - turnStart, cost = costOf(model, usage, env);
     const base = { duration_ms: durationMs, num_turns: r.numTurns, usage, total_cost_usd: cost, recoveries: r.recoveries, truncations: r.truncations, model,
@@ -452,7 +486,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
 
   const pushFromSeq = () => Math.max(ledger.lastPushedSeq(sessionId), startupSeq);
   function startCompact(trigger) {
-    if (!state.compacting) state.compacting = compact(trigger).finally(() => { state.compacting = null; });
+    if (!state.compacting) state.compacting = compact(trigger).finally(() => { state.compacting = null; state.compactAbort = null; });
     return state.compacting;
   }
   async function compact(trigger) {
@@ -464,8 +498,11 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     const instruction = 'Write a compact summary of the conversation above for your own later use. Keep verbatim, in this order: every instruction, preference and correction the owner gave; open work and what is awaited; decisions taken; file paths, ids and numbers you may need. Mark anything uncertain as uncertain. Do not invent completions.';
     let summary;
     try {
+      // The summary request ends on the stop control (abortTurn) and on its own ceiling; it used to carry neither.
+      const stopper = state.compactAbort = new AbortController();
+      const signal = AbortSignal.any([stopper.signal, AbortSignal.timeout(compactTimeoutMs(env))]);
       const message = await stream({ model, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}), system: 'You are summarising your own conversation context. Output only the summary.',
-        messages: [...messages, { role: 'user', content: [{ type: 'text', text: instruction }] }], max_tokens: budget.summaryTokens }, { env });
+        messages: [...messages, { role: 'user', content: [{ type: 'text', text: instruction }] }], max_tokens: budget.summaryTokens }, { env, signal });
       summary = textOf(message.content);
     } catch (error) {
       process.stderr.write(`[rev6 pull] compaction failed: ${error.message}\n`);
@@ -486,7 +523,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       .then(() => drainPushes({ ledger, sessionId, env, now, cli })).catch((error) => process.stderr.write(`[rev6 pull] push drain failed: ${error.message}\n`));
   }
 
-  const abortTurn = () => { if (state.turn) { state.turn.interrupted = true; state.turn.controller.abort(); state.turn.requestStop?.abort(); tools.abortForeground(); } };
+  const abortTurn = () => { if (state.turn) { state.turn.interrupted = true; state.turn.controller.abort(); state.turn.requestStop?.abort(); tools.abortForeground(); } state.compactAbort?.abort(); };
   function control(message) {
     const request = message.request || {};
     const ok = (extra = {}) => emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, ...extra } });
@@ -520,9 +557,9 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       ledger.append(sessionId, 'user', 'command', [{ type: 'text', text: COMPACT_COMMAND }], now());
       if (state.turn) { state.compactRequested = true; return undefined; }
       const started = Date.now();
-      state.running = startCompact('manual').then((outcome) => emit({ type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed',
+      const compacted = state.running = startCompact('manual').then((outcome) => emit({ type: 'result', subtype: 'success', is_error: false, terminal_reason: 'completed',
         result: outcome === 'compacted' ? '' : outcome === 'failed' ? 'the compaction failed; the context is unchanged' : 'nothing to compact yet', duration_ms: Date.now() - started, num_turns: 0, total_cost_usd: 0 }))
-        .finally(() => { state.running = null; startQueuedTurn(); });
+        .finally(() => { if (state.running === compacted) state.running = null; startQueuedTurn(); });
       return undefined;
     }
     const pace = primary.startsWith('<runtime-clock>');
@@ -538,7 +575,8 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     if (redactions.length) process.stderr.write(`[rev6 pull] redacted ${redactions.join(', ')} from an owner message before it reached the model\n`);
     if (state.turn || state.running) {
       if (!pace && state.turn && !isAutomatedEvent(blocks[0].text)) state.turn.ownerJoined = true;
-      if (!pace || state.turn) state.queue.push({ blocks, seq: at, pace, home: pace ? null : joinPrefetch(blocks[0].text) });
+      if (!pace || state.turn) state.queue.push({ blocks, seq: at, pace, arrivedMs: Date.now(), home: pace ? null : joinPrefetch(blocks[0].text) });
+      if (!pace) armOwnerWatchdog();
       if (!pace) {
         for (const cb of [...state.ownerWaiters]) { state.ownerWaiters.delete(cb); try { cb(); } catch { /* waiter gone */ } }
         if (state.turn && !state.turn.interrupted) { state.turn.ownerCut = true; state.turn.requestStop?.abort(); }
@@ -550,6 +588,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       return undefined;
     }
     if (pace) return undefined;
+    armOwnerWatchdog();
     return runTurn(blocks[0].text);
   }
   function runTurn(first, options) {
@@ -558,13 +597,14 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     const holder = {};
     const run = turn(first, { ...options, holder }).catch((error) => {
       if (holder.turn?.bg) { holder.turn.bg.fail(error); return; }
+      if (holder.turn?.abandoned) return;
       process.stderr.write(`[rev6 pull] turn failed: ${error.message}\n`);
       emit({ type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'error', result: `The runner failed (${error.message}).`, duration_ms: 0, num_turns: 0, total_cost_usd: 0 });
       if (!state.turn || state.turn === holder.turn) state.turn = null;
       ledger.queuePush(sessionId, pushFromSeq(), ledger.lastSeq(sessionId), now());
       pushLater();
     }).finally(() => {
-      if (holder.turn?.bg) return;
+      if (holder.turn?.bg || holder.turn?.abandoned) return;
       if (state.running === run) state.running = null;
       startQueuedTurn(); armCheckIn(); scheduleAgentWake();
     });
@@ -665,6 +705,48 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         result: row.result || '', calls: row.calls, cost_usd: row.cost_usd, started_at: row.created_at, ended_at: row.ended_at });
     } catch (error) { process.stderr.write(`[rev6 pull] background turn announce failed: ${error.message}\n`); }
   }
+  /** Starts the watchdog clock for an owner message that has just arrived (the oldest one still waiting keeps its time). */
+  function armOwnerWatchdog() {
+    const limit = ownerWatchdogMs(env);
+    if (!(limit > 0) || state.stopped) return;
+    state.ownerPendingSince ??= Date.now();
+    if (state.watchdogTimer) return;
+    state.watchdogTimer = setInterval(ownerWatchdog, Math.max(250, Math.min(5000, Math.round(limit / 4))));
+    state.watchdogTimer.unref?.();
+  }
+  /** An owner message no request has carried within the limit. First the step is restarted (its abort, which every wait in
+   * the root loop races). Loud on stderr either way: this firing means some wait in the loop is not bounded, and that is
+   * a bug to fix.
+   */
+  function ownerWatchdog() {
+    const since = state.ownerPendingSince, limit = ownerWatchdogMs(env);
+    if (since === null || state.stopped) { clearInterval(state.watchdogTimer); state.watchdogTimer = null; return; }
+    const waited = Date.now() - since, t = state.turn;
+    if (waited < limit) return;
+    if (t && !t.abandoned && waited < limit * 1.5) {
+      if (t.watchdogKicked) return;
+      t.watchdogKicked = true;
+      process.stderr.write(`[rev6 pull] WATCHDOG ${new Date().toISOString()} session ${sessionId}: an owner message has waited ${waited} ms with no model request carrying it (last request ${state.lastRequestAt ? `${Date.now() - state.lastRequestAt} ms ago` : 'never'}); restarting the step\n`);
+      t.ownerCut = true; t.requestStop?.abort();
+      return;
+    }
+    process.stderr.write(`[rev6 pull] WATCHDOG ${new Date().toISOString()} session ${sessionId}: an owner message has waited ${waited} ms and the step restart did not free it; ${t ? 'abandoning the stuck turn and starting a fresh one' : 'starting its turn'} (subagents are left running)\n`);
+    emit({ type: 'system', subtype: 'status', status: 'recovering', action: 'watchdog', reason: 'owner message waited', detail: `no model request carried it for ${waited} ms`, model, recoveries: 0 });
+    state.ownerPendingSince = Date.now();
+    if (t) abandonTurn(t);
+    else if (state.running && !state.compacting) return; // a turn being set up (tools.ready): the next tick sees it
+    state.running = null;
+    if (state.queue.some((q) => !q.pace)) startQueuedTurn();
+    else if (t) runTurn(t.first, { prefetch: false });
+  }
+  /** The watchdog's last resort: the turn keeps whatever wait holds it but can no longer write, emit or end the run. */
+  function abandonTurn(t) {
+    t.abandoned = true; t.interrupted = true;
+    try { t.requestStop?.abort(); t.controller.abort(); } catch { /* aborted */ }
+    for (const w of t.wakes) { state.ownerWaiters.delete(w); state.paceWaiters.delete(w); }
+    t.wakes.clear();
+    if (state.turn === t) state.turn = null;
+  }
   function startQueuedTurn() {
     if (state.turn || state.running) return;
     const at = state.queue.findIndex((q) => !q.pace);
@@ -691,7 +773,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     stop() { this.stopKeepLedger(); ledger.close(); },
     stopKeepLedger() {
       state.stopped = true;
-      clearTimeout(state.checkInTimer); clearTimeout(state.settleTimer); state.checkInTimer = null; state.settleTimer = null;
+      clearTimeout(state.checkInTimer); clearTimeout(state.settleTimer); clearInterval(state.watchdogTimer); state.checkInTimer = null; state.settleTimer = null; state.watchdogTimer = null;
       tools.jobs.stopAll(); tools.abortForeground(); agents?.cancelAll(); tools.closeBrowser?.().catch(() => {});
       try { ledger.claim(sessionId, null); } catch { /* ledger closed */ }
     },

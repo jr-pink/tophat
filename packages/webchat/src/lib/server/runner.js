@@ -12,6 +12,7 @@ import { SIGNALS } from './translate.js';
 import { adapterFor, availableProviders, orphanMarkers } from './providers/contract.js';
 import { UPLOAD_ROOT } from './uploads.js';
 import { carriedTranscript } from './handoff.js';
+import { takeEcho } from './echo-match.js';
 import { effectiveFastMode, newId } from '../core/contract.js';
 import {
   DEADLINES, DEFAULT_TIMING, EFFECTS, PHASES, initialState, step as machineStep,
@@ -581,7 +582,7 @@ export function createRunner({
             
             
             
-            session.awaitingHandoff.push({ at: Date.now(), injected: e.type === EFFECTS.INJECT });
+            session.awaitingHandoff.push({ at: Date.now(), injected: e.type === EFFECTS.INJECT, text: e.text });
             
             
             
@@ -1128,7 +1129,7 @@ export function createRunner({
       session.provider.ingest(session.link, session.ctx, message);
     session.ctx = ctx;
     if (signal === SIGNALS.UNKNOWN) reportUnknownShape(session, shape);
-    if (signal === SIGNALS.USER_REPLAY) reportHandoff(session);
+    if (signal === SIGNALS.USER_REPLAY) reportHandoff(session, message);
     for (const event of transcript) {
       let content = event.content;
       // The id in an init event is the live child's, so the provider that owns it is this
@@ -1159,6 +1160,8 @@ export function createRunner({
       }
       if (PRODUCED.has(event.kind)) session.produced = true;
       emit(session.conversationId, session.runId, event.kind, content);
+      // The main lane said something to him (a subagent's report is not an answer).
+      if (event.kind === 'assistant.message' && !content?.agentId && String(content?.text || '').trim()) dispatch(session.conversationId, { type: 'child_answered' });
     }
     for (const input of inputs) dispatch(session.conversationId, input);
     if (signal === SIGNALS.TURN_ENDED) {
@@ -1203,8 +1206,8 @@ export function createRunner({
     stop(conversationId, { forget: true });
   }
 
-  function reportHandoff(session) {
-    const pending = session.awaitingHandoff.shift();
+  function reportHandoff(session, message) {
+    const pending = takeEcho(session.awaitingHandoff, message);
     if (!pending || !pending.injected) return;
     const waited = Date.now() - pending.at;
     emit(session.conversationId, session.runId, 'run.status', {
@@ -1692,7 +1695,8 @@ export function createRunner({
         link: null,
         ctx: adapter.emptyContext(),
         runId: entry.runId || newId(),
-        machine: entry.machine,
+        // Fields added since the record's server (code-shape.js ADDITIVE_MACHINE_FIELDS) take their initial values.
+        machine: { ...initialState(), ...entry.machine },
         inbox: [],
         draining: false,
         timers: new Map(),

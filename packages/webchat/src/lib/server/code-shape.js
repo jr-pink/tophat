@@ -104,13 +104,24 @@ const CANNED_TRANSCRIPT = Object.freeze([
   { type: 'stream_event', parent_tool_use_id: 't1', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } },
 ]);
 
+/** Machine fields added after a handover structure was in use, each with a default a record written before it can
+ * take: a record that lacks the field is adopted with initialState()'s value for it (runner adoption merges the
+ * record's machine over initialState()). Adding a field is the commonest structure change and moves no meaning, so
+ * it must not end every live child the way a changed field does. Append, never remove: each entry keeps the shapes
+ * from before it adoptable. A field whose absence would be read wrongly does not go here; bump HANDOVER_SCHEMA
+ * instead.
+ */
+export const ADDITIVE_MACHINE_FIELDS = Object.freeze(['answered']);
+
 /** The structure a handover record is written in, as a sorted list of lines (the thing the shape hashes). */
-export function handoverStructure() {
+export function handoverStructure({ without = [] } = {}) {
   const lines = new Set([`schema:${HANDOVER_SCHEMA}`]);
   for (const [group, names] of [['phase', PHASES], ['deadline', DEADLINES], ['signal', SIGNALS]]) {
     for (const value of Object.values(names)) lines.add(`${group}=${value}`);
   }
-  shapePaths(initialState(), 'machine', lines);
+  const machine = { ...initialState() };
+  for (const field of without) delete machine[field];
+  shapePaths(machine, 'machine', lines);
   shapePaths(emptyContext(), 'ctx', lines);
   let ctx = emptyContext();
   try { for (const message of CANNED_TRANSCRIPT) ctx = translate(ctx, message).ctx; } catch (error) { lines.add(`canned-transcript-threw:${error?.message}`); }
@@ -119,8 +130,8 @@ export function handoverStructure() {
 }
 
 /** The shape this process writes into a handover record and checks a record against. */
-export function handoverShape() {
-  return createHash('sha256').update(handoverStructure().join('\n')).digest('hex').slice(0, 12);
+export function handoverShape({ without = [] } = {}) {
+  return createHash('sha256').update(handoverStructure({ without }).join('\n')).digest('hex').slice(0, 12);
 }
 
 export function legacyHandoverShape() {
@@ -134,5 +145,8 @@ export function legacyHandoverShape() {
  * when those files did not change in between. Nothing writes a legacy shape any more.
  */
 export function acceptedHandoverShapes() {
-  return [handoverShape(), legacyHandoverShape()];
+  const shapes = [handoverShape(), legacyHandoverShape()];
+  // The structure as it stood before each additive field (newest first), so a record from any of those servers adopts.
+  for (let i = ADDITIVE_MACHINE_FIELDS.length - 1; i >= 0; i--) shapes.push(handoverShape({ without: ADDITIVE_MACHINE_FIELDS.slice(i) }));
+  return [...new Set(shapes)];
 }

@@ -1,7 +1,7 @@
 // The agent loop, one copy for the root turn and for subagents: request, stream, record, recover,
 // run tools, repeat until the model stops and the role's end hook agrees. Role differences (the root's
 // prefetch, owner cut, compaction and goal hook; a child's cancel and failure rules) come in as hooks.
-import { ModelError, createAssembler, streamMessage, usageOf } from './wire.mjs';
+import { ModelError, abortableSleep, createAssembler, streamMessage, usageOf } from './wire.mjs';
 import { applyStep, fallbackChain, recoveryStep, TRUNCATION_CAP, truncatedCallResult, truncationNudge } from './call.mjs';
 import { PARALLEL, PARALLEL_EXTRA } from './tools.mjs';
 
@@ -57,7 +57,7 @@ export async function runCalls(calls, { tools, cancelled = () => null, preempt =
  * o: { role: 'root'|'child', ledger, sessionId, env, emit, parent, tools, getModel(), setModel(m), request(model),
  *      messages(), signal(), beforeStep() -> 'stop'|void, onAborted(partial) -> 'continue'|'stop', nudge(block-text),
  *      compact(trigger), canCompact, cancelled(), preempt, onEvent(event), onFinal({message, calls, text}) -> {continue}|{stop, status, note},
- *      onStep(), usage, calls }
+ *      beforeCalls(calls), onStep(), usage, calls }
  */
 export async function runAgent(o) {
   const root = o.role === 'root', env = o.env, now = o.now;
@@ -94,7 +94,8 @@ export async function runAgent(o) {
       if (root) o.emit({ type: 'system', subtype: 'status', status: 'recovering', action: step.action, reason: step.reason, detail: step.detail, model: next, attempt: attempts, recoveries: r.recoveries, cycles, wait_ms: step.waitMs || 0 });
       else { o.nudge(step.nudge); o.emit({ type: 'system', subtype: 'status', status: 'recovering', action: step.action, reason: step.reason, detail: step.detail, model: next, attempt: attempts, recoveries: r.recoveries, parent_tool_use_id: o.parent }); }
       if (root) o.nudge(step.nudge);
-      if (step.waitMs) await new Promise((res) => setTimeout(res, step.waitMs));
+      // The wait ends early on the step's abort (his message, the stop, a cancel): beforeStep then reads why.
+      if (step.waitMs) await abortableSleep(step.waitMs, o.signal?.());
       continue;
     }
     r.numTurns += 1;
@@ -146,6 +147,7 @@ export async function runAgent(o) {
       if (end.status) { r.status = end.status; r.note = end.note || ''; r.pendingNames = end.pendingNames || r.pendingNames; }
       break;
     }
+    o.beforeCalls?.(calls);
     const { results, ran } = await runCalls(calls, { tools: o.tools, cancelled: o.cancelled, preempt: o.preempt?.() });
     r.calls += ran;
     for (const b of results) o.emit({ type: 'user', message: { role: 'user', content: [b] }, tool_use_result: resultText(b.content), parent_tool_use_id: root ? null : o.parent });

@@ -26,7 +26,9 @@ An instance is one running tophat: the packages, plus one file, `tophat.instance
 | `name` | instance id: lower case letters, digits, dashes; names its state directory and service label | required |
 | `owner.label` | how the app names the person (or group) it serves | `the owner` |
 | `owner.addresses` | mail addresses that count as the owner's own (sent-mail direction) | `[]` |
-| `scope.default`, `scope.groups` | the memory scope the instance writes as, and the groups it may share into | the instance name, `[]` |
+| `scope.default`, `scope.groups` | the memory scope the instance writes as, and the groups it creates and may share into (made on first open; this replica's user is their admin) | the instance name, `[]` |
+| `scope.join` | groups someone else made that the instance joins and never creates; the group key arrives by hub sync once the group's admin has added the user (`tophat instance join`, below) | `[]` |
+| `scope.screens`, `scope.peopleFile` | content screens (`[{ pattern, flags?, label?, groups? }]`, default groups: every created and joined group) and a private-people roster file: a row asked into a group is refused when its text matches a screen or names a rostered person. Joined groups also get built-in screens for credentials and home-directory paths | none |
 | `components` | enabled component ids (see below) | required |
 | `hosts.public` | public host name, when the instance is reachable from outside (share links, passkey origin) | none: `http://localhost:<port>` |
 | `hosts.bind` | listen address | `127.0.0.1` |
@@ -41,7 +43,7 @@ An instance is one running tophat: the packages, plus one file, `tophat.instance
 | `scope.user` | the replica's user, when it differs from the write scope (a person writing into one of their groups) | `scope.default` |
 | `models.chat.workspace` | workspace id file for a key scoped to an organisation: `{ file }` or `{ keyring }` | none |
 | `sources` | source adapters `[{ id, family, account?, config }]`; secret-shaped config keys are credential references; the first `imessage` (`config.database`) and `beeper` (`config.index`) source name the stores the runner's message tools read | `[]` |
-| `hub` | hub sync of the runner's replica: `{ url, token, device?, deviceKey? }`, token and device key as `{ file }` or `{ keyring }`; `tophat instance sync --config FILE` runs one round | none |
+| `hub` | hub sync of the runner's replica: `{ url, token?, device?, deviceKey? }`, token and device key as `{ file }` or `{ keyring }`; the token is issued by the hub's operator and may not exist yet: without `token` it is the keyring entry `hub-token`, and a sync before the file exists is refused by name. `tophat instance sync --config FILE` runs one round (`--forever [--every S]` keeps doing it) | none |
 | `runner.env` | extra environment for the runner and webchat children, `{ NAME: value }`: feature switches and the places tools and stores live (`TOPHAT_RUNNER_MAIL_ACCOUNTS`, `TOPHAT_RUNNER_WEB_CDP_BIN`, `TOPHAT_REV6_HARNESS`, `TOPHAT_RETRIEVAL_CONFIG`, `TOPHAT_CONTEXT_CLI`, `PATH` ...). A value is a string, number, boolean or an object (written as JSON). A name that reads as a secret (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`) is refused unless it ends in `_FILE`, `_DIR` or `_PATH`; a name the instance file already sets (`runner.env.TOPHAT_RUNNER_MODEL` beside `models.chat.model`) is refused. `TOPHAT_CONTEXT_CLI` names the instance's own retrieval command (`node CLI context --query TEXT`, its stdout is put in front of each turn by the claude hooks and the codex provider); without it a turn carries no retrieved context. Which tools a runner offers follows this environment: a mail, message, search or browser tool exists only when its place is named here or by `sources`; `tophat instance env --config FILE` prints the result | `{}` |
 | `intake` | the intake into the runner's replica: `{ everySeconds, model, maxSteps?, batch?, budget? }`; `model` names a `models` entry (`chat` is read as Messages API, any other as OpenAI-compatible, unless the entry has `provider`) or is `{ provider, model?, baseUrl?, credential?, command? }` (providers of `@tophat-md/push`: `anthropic`, `openai`, `command`, `stub`). Every `everySeconds` the upkeep job `intake` polls the enabled `sources`, ingests into the instance's write scope and derives entities and notes with that model, then syncs through `hub` when there is one. `tophat instance intake --config FILE` runs it when due (`--force` now, `--forever [--tick S]` keeps checking); state under `<paths.state>/intake` and `<paths.state>/upkeep`. The pass also claims the chat transcripts the runner ingested (`webchat` records) for its derive: with `scopes.enabled` in the config file only chats that are unscoped, `legacy`, in the instance's write scope or in a registry group with `everyone: true` are claimed (`deploy/src/transcripts.mjs`). `intake.model.workspace` (`{ file }` or `{ keyring }`) adds the `anthropic-workspace-id` header an organisation-scoped Anthropic key needs. `intake.wake` (`true` or `{ maxAgeHours?, batch? }`): after each pass, arrivals from the sources (not chats) that the intake model judges to need someone are posted into the owning chat (or a new one) through the webchat's loopback `/api/inbound` as an automated event; one decision per record, kept in `<paths.state>/intake/wakes.jsonl` (`deploy/src/wake.mjs`) | none |
 
@@ -78,7 +80,7 @@ Each conversation runs one runner child (`@tophat-md/runner`) that speaks stream
 
 ## Jobs an instance needs
 
-`tophat instance jobs --config FILE [--write DIR]` lists the background jobs the enabled components imply and, with `--write`, writes their launchd units as `DIR/<label>.plist` (never loaded): `webchat` when `webchat` is a component; `intake` (the push plane, `instance intake --forever`) when `push` and `upkeep` are components and the file has an `intake` block; `fast-proxy` when `models.fast.workspace` is set. `tophat instance unit --job NAME` prints one. `models.fast` for a workspace-scoped key: `{ baseUrl, model, credential, workspace }` plus `ports.fastProxy`; the webchat's title and folder calls go to `http://127.0.0.1:<fastProxy>/chat/completions`, which adds the workspace header (`tophat instance fast-proxy`).
+`tophat instance jobs --config FILE [--write DIR]` lists the background jobs the enabled components imply and, with `--write`, writes their launchd units as `DIR/<label>.plist` (never loaded): `webchat` when `webchat` is a component; `intake` (the push plane, `instance intake --forever`) when `push` and `upkeep` are components and the file has an `intake` block; `sync` (`instance sync --forever`, one hub round a minute) when the file has a `hub` block and no `intake` job, because the intake already syncs after each pass and a second process syncing the same replica reseals actions the hub then refuses; `fast-proxy` when `models.fast.workspace` is set. `tophat instance unit --job NAME` prints one. `models.fast` for a workspace-scoped key: `{ baseUrl, model, credential, workspace }` plus `ports.fastProxy`; the webchat's title and folder calls go to `http://127.0.0.1:<fastProxy>/chat/completions`, which adds the workspace header (`tophat instance fast-proxy`).
 
 ## A group runner is an instance whose scope is the group
 
@@ -96,10 +98,26 @@ Nothing distinguishes a personal assistant from one that serves a group except i
 }
 ```
 
-- **Scope.** `scope.default` is the group, so what the instance writes is meant to land in the group's scope and the memory it reads to be what the group can read: a linknotes replica whose user is the group, kept in step with the members' replicas through the ciphertext-only hub (the runner does not read the scope yet; see the limits below). A member's private notes are never in the group replica unless that member shared them into the group.
+- **Scope.** `scope.default` is the group, so what the instance writes is meant to land in the group's scope and the memory it reads to be what the group can read: a linknotes replica whose user is the group, kept in step with the members' replicas through the ciphertext-only hub (the runner reads the scope from `TOPHAT_SCOPE`, `TOPHAT_SCOPE_GROUPS` and `TOPHAT_SCOPE_JOIN`, which the instance file sets). A member's private notes are never in the group replica unless that member shared them into the group.
 - **Owner.** `owner.label` names the group where a personal instance names the person (see the limits below for where it is not substituted yet).
 - **Separation.** Its state, secrets, port and service label are its own, so it runs beside personal instances on the same machine, or alone on a server, without sharing a store.
 - **Instructions.** The group's rules are its instructions file; the product ships no rules of its own.
+
+## Groups: create, join, add
+
+A group is a memory scope shared through a hub. Three explicit commands, all on the instance file, none run by `tophat setup`:
+
+```
+tophat instance group create NAME --config FILE       make a group this instance administers, then one hub round
+tophat instance group add NAME USER [--role read|write|admin] --config FILE   admin: add a member, wrap the group key to their devices
+tophat instance join [NAME] --config FILE [--hub URL] [--user NAME]          opt in to a group someone else made
+```
+
+`group create` adds NAME to `scope.groups`; opening the replica creates the group (this replica's user is its admin) and the sync tells the hub. `group add` syncs first (a member's device reaches the hub when they first sync), adds the member and syncs again; the key is wrapped to the member's devices, and any later admin sync wraps it to devices that appear afterwards.
+
+`join` is opt-in and never automatic. NAME defaults to `tophat-users`, the shared group of tophat users on `https://hub.tophat.md`, which holds ciphertext only. It writes into the instance file `scope.join` (the group is never created by the joiner), a `hub` block with that URL when the file has none, and a unique replica user `scope.user` of the form `th-<8 hex>` (a replica that already exists keeps its user, because its private scope belongs to that user; the command says so), then prints the user, the device and the device public key, and where the hub token goes (`<paths.secrets>/hub-token`). The one manual step is to send those to the group's admin: they issue the hub token and run `group add`. After the token is saved and the instance restarted, `tophat instance sync` brings the group key in. Until then a write into the group is refused with that reason and the instance's own scope is unaffected; `tophat instance env` shows `TOPHAT_SCOPE_JOIN`, and the memory `status` lists the groups still pending. No command mints a hub token or creates `tophat-users`.
+
+**What is shared is judgment, in the prompt, and only notes replicate.** `join` also writes a guidance block into the instance's instructions file (`paths.instructions`, created beside the instance file when the instance names none; the block is between two `tophat:sharing` markers, so you can read, edit or delete it). It tells the model: bugfixes always, as a note (symptom and error text, cause, fix, where it applies); customizations that seem good, relevant and wanted by most users, as a note (what it is, why, how to apply it); things built on tophat that are worth showing, as a note; share with `memory_apply` and `groups: ["tophat-users"]` on the note, never anything about a person, credentials or home paths; one line to the owner saying what was shared. Configuration, instructions, skills and code are not synced; a customization travels as a note that describes it. The mechanism behind the judgment is the content screens: a write into a joined or created group is refused when its text matches a built-in screen (credentials, home-directory paths), `scope.screens`, or a name in the roster `scope.peopleFile` (`TOPHAT_PRIVATE_PEOPLE_FILE`), and the refusal writes nothing.
 
 ## Running it in the background
 
@@ -140,7 +158,7 @@ Instances on one hub are peers and a chat can live on any of them: see [peer-cha
 The runner's memory and task tools are `@tophat-md/linknotes`. `packages/runner/store/memory.mjs` answers every store
 request in process and `packages/runner/store/cli.mjs` is the same thing as a child process, so the webchat and the
 runner reach one replica at `<paths.state>/runner/memory.sqlite`. `scope.default` is the user that replica writes as
-and `scope.groups` are the groups it may share into, both created on first open: a group runner (an instance whose
+and `scope.groups` are the groups it may share into, both created on first open (`scope.join` groups are never created here: see "Groups: create, join, add"): a group runner (an instance whose
 scope is the group) writes into the group. Derived pages are built by linknotes on read; there is no model-driven
 consolidation step in the product, so `push` answers `not_supported`.
 

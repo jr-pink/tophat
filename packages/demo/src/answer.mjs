@@ -4,12 +4,12 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-export const OPENER_TEXT = 'so whats ur deal ?';
+export const OPENER_TEXT = 'so, whats ur deal ?';
 /**
  * The visitor-side typing of the opener: the gap in ms before each character of OPENER_TEXT (the first is 0), replayed exactly.
  * Recorded from the owner's own keystrokes for this phrase (webchat typing telemetry, 2026-11-10 19:42:14.829Z).
  */
-export const OPENER_GAPS_MS = [0, 68, 76, 348, 91, 16, 92, 56, 15, 62, 91, 55, 122, 59, 31, 59, 60, 136];
+export const OPENER_GAPS_MS = [0, 68, 95, 380, 140, 91, 16, 92, 56, 15, 62, 91, 55, 122, 59, 31, 59, 60, 136]; // the comma, then a beat before 'whats'
 
 /** { lead, intro, features: [{ n, body }], install } from description.md. */
 export function sections(file) {
@@ -30,7 +30,7 @@ export function sections(file) {
 export const WIDGETS = {
   // the title is the label the chat shows above the figure; each widget carries its own figure caption underneath (widgets/*.html)
   '01': ['memory-graph.html', 'Memory graph'],
-  '01b': ['memory-bench.html', 'Memory benchmarks'],
+  '01b': ['memory-bench.html', 'Memory benchmarks'], // a 300 dpi matplotlib plot inside the shared caption frame: widgets/memory-bench-plot.py
   '02': ['runner-qol.html', 'The chat interface, in detail'],
   '03': ['mac-desktop.html', 'A Mac, driven'],
   '03b': ['pushover.jpg', 'A notification'],

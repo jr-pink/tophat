@@ -196,6 +196,8 @@ export function initialState() {
     
     
     inTurn: 0,
+    // Whether the main lane answered since his latest message was handed over (child_answered); a stop before that says so.
+    answered: false,
     
     
     
@@ -332,6 +334,7 @@ const clone = (s) => ({
   escalations: Number.isInteger(s.escalations) ? s.escalations : 0,
   spawnFailures: Number.isInteger(s.spawnFailures) ? s.spawnFailures : 0,
   warming: Boolean(s.warming),
+  answered: Boolean(s.answered),
 });
 
 function withDeadlines(next, effects, event) {
@@ -675,6 +678,7 @@ function startTurn(next, timing) {
   next.terminating = false;
   next.compacting = false;
   next.revivals += 1;
+  next.answered = false;
   
   next.spawnFailures = 0;
   next.escalations = 0;
@@ -841,6 +845,7 @@ function decide(state, event, { timing = DEFAULT_TIMING } = {}) {
         
         
         next.inTurn += 1;
+        next.answered = false;
         const effects = [
           effect(EFFECTS.INJECT, { text }),
           effect(EFFECTS.EMIT, {
@@ -1191,7 +1196,8 @@ function decide(state, event, { timing = DEFAULT_TIMING } = {}) {
         effect(EFFECTS.SIGNAL, { signal: 'interrupt' }),
         
         
-        effect(EFFECTS.EMIT, { kind: 'run.cancelled', content: { abandoned } }),
+        // unanswered: the model never answered it.
+        effect(EFFECTS.EMIT, { kind: 'run.cancelled', content: { abandoned, ...(abandoned && abandoned !== COMPACT_COMMAND && !next.answered ? { unanswered: true } : {}) } }),
         effect(EFFECTS.SET_DEADLINE, { name: DEADLINES.INTERRUPT_GRACE, ms: timing[DEADLINES.INTERRUPT_GRACE] }),
       ]];
     }
@@ -1342,6 +1348,10 @@ function decide(state, event, { timing = DEFAULT_TIMING } = {}) {
     
     
     
+    case 'child_answered': {
+      if (next.phase === PHASES.RUNNING) next.answered = true;
+      return [next, []];
+    }
     case 'context_observed': {
       if (Number.isFinite(event.window) && event.window > 0) next.contextWindow = event.window;
       if (Number.isFinite(event.tokens) && event.tokens > 0) {

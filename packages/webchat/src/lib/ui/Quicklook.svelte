@@ -5,6 +5,7 @@
   import Markdown from './Markdown.svelte';
   import Code from './Code.svelte';
   import { languageOf } from '$lib/core/highlight.js';
+  import { fileVersion, withFileVersion } from '$lib/core/file-version.js';
 
   let {
     file = null,
@@ -22,7 +23,8 @@
   // The image and the PDF are second requests for a file the preview already resolved, and /api/file
   // resolves against the conversation's working directory, so they have to say which conversation
   // they belong to or a file outside the openable roots comes back 404 the second time.
-  const rawUrl = (path) => `/api/file?path=${encodeURIComponent(path)}&raw=1${conversationId ? `&conversation=${encodeURIComponent(conversationId)}` : ''}`;
+  // `v` names the bytes this preview just described (mtime and size), so a file rewritten since it was last opened is a new URL, never the picture the browser kept.
+  const rawUrl = (path) => withFileVersion(`/api/file?path=${encodeURIComponent(path)}&raw=1${conversationId ? `&conversation=${encodeURIComponent(conversationId)}` : ''}`, fileVersion(file));
 
 
   function keydown(event) {

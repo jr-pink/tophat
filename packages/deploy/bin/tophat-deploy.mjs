@@ -15,7 +15,13 @@
 //   tophat instance jobs --config FILE [--write DIR]  every job the enabled components imply (webchat, intake, fast-proxy): listed, or with
 //                                                    --write their launchd units written as DIR/<label>.plist (never loaded)
 //   tophat instance fast-proxy --config FILE          the loopback header proxy for a fast model behind a workspace-scoped key (foreground)
-//   tophat instance sync --config FILE                one hub round for the runner's replica (the instance file's hub block)
+//   tophat instance sync --config FILE [--forever [--every S]]   one hub round for the runner's replica (the instance file's hub
+//                                                    block); --forever keeps one round every S seconds (default 60)
+//   tophat instance join [NAME] --config FILE [--hub URL] [--user NAME]   opt in to a group someone else made (default tophat-users,
+//                                                    on https://hub.tophat.md): writes scope.join, the hub block and a unique replica
+//                                                    user into the instance file; prints the device public key for the group's admin
+//   tophat instance group create NAME --config FILE   make a group this instance administers (scope.groups), then sync
+//   tophat instance group add NAME USER [--role read|write|admin] --config FILE   admin: add a member, wrap the key to their devices
 //   tophat instance intake --config FILE [--force] [--forever [--tick S]]   the intake (sources -> replica -> derive) when
 //                                                    due on the instance file's intake.everySeconds; --force runs it now
 import path from 'node:path';
@@ -76,9 +82,28 @@ try {
     const runner = componentDir('runner') || die('instance sync: the runner package is not installed');
     const { syncStore } = await import(path.join(runner, 'store/memory.mjs'));
     const env = instanceEnv(c);
-    const r = await syncStore(env.TOPHAT_RUNNER_DB, env);
-    out(r.result);
-    process.exit(r.code);
+    const forever = has('--forever'), every = Number(flag('--every') || 60) * 1000;
+    if (!forever) { const r = await syncStore(env.TOPHAT_RUNNER_DB, env); out(r.result); process.exit(r.code); }
+    // A refused round (no token yet, hub down) is retried: the token arrives later, and a pending group key arrives with a sync.
+    for (let last = ''; ;) {
+      try { const r = await syncStore(env.TOPHAT_RUNNER_DB, env); const line = JSON.stringify(r.result); if (line !== last && (!r.result.ok || r.result.pushed || r.result.pulled || r.result.keys_wrapped)) out(r.result); last = r.result.ok ? '' : line; } catch (e) { console.error(`tophat: sync: ${e.message}`); }
+      await new Promise((r) => setTimeout(r, every));
+    }
+  } else if (cmd === 'instance' && sub === 'join') {
+    args.shift();
+    const file = path.resolve(flag('--config') || die('instance join: --config FILE is required'));
+    const hubUrl = flag('--hub'), userName = flag('--user');
+    const { COMMUNITY_GROUP, joinGroup } = await import('../src/join.mjs');
+    out(await joinGroup({ configFile: file, group: args.shift() || COMMUNITY_GROUP, hubUrl, userName }));
+  } else if (cmd === 'instance' && sub === 'group') {
+    args.shift();
+    const op = args.shift();
+    const file = path.resolve(flag('--config') || die(`instance group ${op ?? ''}: --config FILE is required`));
+    const role = flag('--role') || 'write';
+    const { addMember, createGroup } = await import('../src/join.mjs');
+    if (op === 'create') { const r = await createGroup({ configFile: file, group: args.shift() || die('instance group create: NAME is required') }); out(r); process.exit(r.ok ? 0 : 1); }
+    else if (op === 'add') { const group = args.shift(), user = args.shift(); if (!group || !user) die('instance group add: NAME and USER are required'); const r = await addMember({ configFile: file, group, user, role }); out(r); process.exit(r.ok ? 0 : 1); }
+    else die('usage: tophat instance group create NAME | add NAME USER [--role read|write|admin] --config FILE');
   } else if (cmd === 'instance' && sub === 'intake') {
     args.shift();
     const c = loadInstance(path.resolve(flag('--config') || die('instance intake: --config FILE is required')));
@@ -110,5 +135,5 @@ try {
     if (!file) die('start: --config FILE is required');
     const { start } = await import('../src/start.mjs');
     await start({ configFile: path.resolve(file), buildDir: flag('--build') });
-  } else die('usage: tophat components list|tree|check, tophat start --config FILE, tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|intake --config FILE');
+  } else die('usage: tophat components list|tree|check, tophat start --config FILE, tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|join|group|intake --config FILE');
 } catch (e) { die(e.message, 1); }

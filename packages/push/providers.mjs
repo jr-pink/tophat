@@ -4,12 +4,18 @@
 // 'command' (a local program: the request JSON on stdin, the reply text on stdout), 'stub' (deterministic, no model:
 // tests and dry runs). Keys come from the environment variable the config names (apiKeyEnv), never from code or argv.
 // Register another: registerProvider('name', (cfg, deps) => ({ complete })).
+// A model entry may name a preset (presets.mjs: a benchmarked endpoint, routing and prices); it is expanded here.
+// 'openai' options beyond baseUrl and model: body (fields merged into every request, e.g. OpenRouter's provider routing
+// { data_collection: 'deny', zdr: true }), maxTokensField (max_tokens, or max_completion_tokens for OpenAI's reasoning
+// models). Its usage carries cached_input_tokens and, when the endpoint reports what it billed, provider_cost_usd.
 import { spawn } from 'node:child_process';
+import { resolveModel } from './presets.mjs';
 
 const REGISTRY = new Map();
 export function registerProvider(name, factory) { REGISTRY.set(name, factory); }
 export function providerNames() { return [...REGISTRY.keys()]; }
-export function makeProvider(cfg = {}, deps = {}) {
+export function makeProvider(entry = {}, deps = {}) {
+  const cfg = resolveModel(entry);
   const f = REGISTRY.get(cfg.provider);
   if (!f) throw new Error(`model.provider must be one of ${providerNames().join(', ')}`);
   return f(cfg, deps);
@@ -21,10 +27,16 @@ registerProvider('openai', (cfg, { fetch: f = fetch, env = process.env } = {}) =
     if (!cfg.model) throw new Error('model.model is required');
     const r = await f(`${(cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')}/chat/completions`, { method: 'POST', signal: AbortSignal.timeout(cfg.timeoutMs ?? 120000),
       headers: { authorization: `Bearer ${keyOf(cfg, env)}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }) });
+      body: JSON.stringify({ model: cfg.model, [cfg.maxTokensField || 'max_tokens']: maxTokens, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }], ...(cfg.body || {}) }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(`provider http ${r.status}`), { code: `provider-http-${r.status}` });
-    return { text: j.choices?.[0]?.message?.content ?? '', usage: { input_tokens: j.usage?.prompt_tokens ?? 0, output_tokens: j.usage?.completion_tokens ?? 0 }, model: j.model || cfg.model };
+    // An OpenAI-compatible endpoint can answer 200 with an error body (OpenRouter, when no allowed endpoint serves the model).
+    if (j.error && !j.choices) throw Object.assign(new Error(`provider error ${String(j.error.code ?? '')} ${String(j.error.message ?? '').slice(0, 160)}`), { code: 'provider-error' });
+    const u = j.usage || {};
+    return { text: j.choices?.[0]?.message?.content ?? '', model: j.model || cfg.model,
+      usage: { input_tokens: u.prompt_tokens ?? 0, output_tokens: u.completion_tokens ?? 0, cached_input_tokens: u.prompt_tokens_details?.cached_tokens ?? 0,
+        ...(typeof u.cost === 'number' ? { provider_cost_usd: u.cost } : {}) } };
   },
 }));
 registerProvider('anthropic', (cfg, { fetch: f = fetch, env = process.env } = {}) => ({

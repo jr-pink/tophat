@@ -3,7 +3,7 @@
 // and the app's own scoping keeps every visitor to their own chats. It also:
 //   - gives each new visitor their own copy of the starting chats (seed-chats.mjs) and opens the app on an empty one;
 //   - checks the visitor is a person (Turnstile) in the background and lets a real turn start only after that;
-//   - plays the scripted first exchange: the visitor's "so whats ur deal ?" is answered from the cached description, stored as
+//   - plays the scripted first exchange: the visitor's "so, whats ur deal ?" is answered from the cached description, stored as
 //     an ordinary assistant turn in the real chat, streamed through the real event feed (no model call);
 //   - counts real turns across all of a visitor's chats (demo.json visitors.turnsPerSession) and refuses past the cap;
 //   - forces the cheap model on every chat action, passes only the API paths the app needs, and never exposes any file but widgets;
@@ -21,14 +21,16 @@ import { createFeed, pieceDelayMs, tokenPieces } from './stream.mjs';
 import { COOKIE_NAME, Guests, emailOf, scopeOf, scopeSettings, verifyTurnstile } from './guests.mjs';
 import { renderFallback } from '../fallback/render.mjs';
 import { pinAction } from './pin.mjs';
-import { OPENER_GEN_ID, OPENER_ID, loadTemplates, openStore, openerGenOf, seedGuest, seedOpener } from './seed-chats.mjs';
+import { OPENER_GEN_ID, OPENER_ID, SEED_RETIRED_SCOPE, forkIdOf, forkSeedChat, isSeedId, loadTemplates, openStore, openerGenOf, seedGuest, seedOpener, seedRowsOf } from './seed-chats.mjs';
 
+/** How long after the opener is sent the answer begins to stream. */
+const OPENER_ANSWER_DELAY_MS = 2000;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEMO = path.resolve(HERE, '..');
 const { compileMarkdown } = await import(path.join(DEMO, '../webchat/src/lib/core/markdown.js'));
 
 export const COOKIE = COOKIE_NAME;
-export const ONBOARD = (repo) => `${repo}\nThis repo is a fully local agent memory system and runner (except model providers). Scan the repo for privacy, security, and malintent, then help me install it and fully set it up.`;
+const OPENER_MODEL = 'claude-sonnet-5-5';
 const expand = (p) => (p && p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 const readJson = (f) => JSON.parse(readFileSync(f, 'utf8'));
 const cookieOf = (req, name) => { for (const p of String(req.headers.cookie || '').split(/;\s*/)) { const i = p.indexOf('='); if (i > 0 && p.slice(0, i) === name) return p.slice(i + 1); } return null; };
@@ -43,6 +45,8 @@ const API_ALLOW = [
 const SURFACES = ['chats', 'chatlist', 'search'];
 // An action that starts a model turn. A fork or create carrying text is one too; `run.interrupt`, renames, folders and the rest are not.
 const startsTurn = (a) => a?.op === 'message.send' || ((a?.op === 'conversation.create' || a?.op === 'conversation.fork') && String(a.payload?.text || '').trim() !== '');
+// what a visitor's page may still send to a starter chat: view state only (opened, read); a message forks, everything else is refused
+const SEED_VIEW_OPS = new Set(['conversation.touch', 'conversation.set_read', 'conversation.fork']);
 
 export async function serve(c) {
   const { inst, registryFile, orgDomain } = scopeSettings(c);
@@ -74,10 +78,24 @@ export async function serve(c) {
   const md = (t) => compileMarkdown(String(t || '')).map((b) => ({ html: b.html }));
   const opener = { text: OPENER_TEXT, answer: () => openerAnswer(description, widgetsDir) };
 
+  // A guest's starter chats: written when the guest is made (seed-chats.mjs: stable ids per definition, so seeding again writes nothing).
   const fresh = (guest) => {
     const templates = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots });
     seedGuest(store, { guest, scope: scopeOf(guest), templates, model, cwd: workspace });
   };
+  // Starter rows nobody can see any more: retired versions, and the whole seed of a guest whose session has expired (their own chats stay).
+  const sweepSeeds = () => {
+    try {
+      const cutoff = new Date(Date.now() - (guests.sessionHours + 2) * 3600_000).toISOString();
+      const drop = new Set(store.db.prepare('SELECT id FROM conversations WHERE scope = ? AND updated_at < ?').all(SEED_RETIRED_SCOPE, cutoff).map((r) => r.id));
+      for (const { id: guest } of guests.db.prepare('SELECT id FROM sessions WHERE created_at < ?').all(cutoff)) for (const id of seedRowsOf(store, { scope: scopeOf(guest), guest })) drop.add(id);
+      let n = 0;
+      for (const id of drop) { try { store.deleteConversation(id); n++; } catch { /* busy: the next sweep */ } }
+      if (n) console.log(`[seed] swept ${n} starter chats of expired guests and retired versions`);
+    } catch (e) { console.error('[seed] sweep failed', e.message); }
+  };
+  setTimeout(sweepSeeds, 30_000).unref();
+  setInterval(sweepSeeds, 3600_000).unref();
 
   const headers = (type, extra = {}) => ({ 'content-type': type, 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin', ...extra });
   const json = (res, status, obj, extra = {}) => { res.writeHead(status, headers('application/json', { 'cache-control': 'no-store', ...extra })); res.end(JSON.stringify(obj)); };
@@ -88,12 +106,24 @@ export async function serve(c) {
     req.on('end', () => resolve(Buffer.concat(parts)));
     req.on('error', reject);
   });
+  // The demo's own scripts and styles are fetched whole on every load: Cloudflare's browser-cache TTL rewrites `no-cache` to `max-age=14400`,
+  // so a revalidated asset sat in browsers for four hours (a reload ran the old shim and caret); only `no-store` passes through unchanged.
+  const NO_STORE_ASSET = 'no-store';
+  const assetVersion = (body) => createHash('sha256').update(body).digest('hex').slice(0, 10);
   const shimJs = () => readFileSync(path.join(HERE, 'shim.js'), 'utf8');
-  const guestReset = () => readFileSync(path.join(HERE, 'guest-reset.js'), 'utf8');
+  const guestReset = () => { const src = readFileSync(path.join(HERE, 'guest-reset.js'), 'utf8'); const v = createHash('sha256').update(src).update(readFileSync(path.join(DEMO, 'seed/chats.json'))).digest('hex').slice(0, 10); return src.replace('__SEED_V__', v); }; // the client resets its sidebar whenever the seed or this layout changes
+  const prefetchJs = () => readFileSync(path.join(HERE, 'prefetch.js'), 'utf8'); // warms the opener answer's figures during the intro
   const introCss = () => readFileSync(path.join(HERE, 'intro.css'), 'utf8');
+  // the theme trial and the desktop frame of very large screens, served after intro.css as /_demo/page.css
+  const THEME_CSS = "/* trial: the warm pastel rose as the chat accent, in place of the orange */html:root{--accent:#e6a0a6;--accent-soft:#e6a0a622}@media (prefers-color-scheme:light){html:root{--accent:#b45c6e;--accent-soft:#b45c6e1a}}";
+  const BIGSCREEN_CSS = "@media (min-width:1900px) and (min-height:950px){:root{--th-ww:min(108rem,calc(100vw - 160px));--th-wh:min(calc(var(--th-ww) * 0.62),calc(100vh - 140px));--th-tb:30px;--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}@media (prefers-color-scheme:dark){:root{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}}:root[data-theme=light]{--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}:root[data-theme=dark]{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}html,body{height:100%;background:var(--th-desk)!important}body{margin:0;display:grid;place-items:center;overflow:hidden}body>div[style*=\"contents\"]{display:block!important;width:var(--th-ww);height:calc(var(--th-wh) - var(--th-tb));margin-top:var(--th-tb);position:relative;overflow:hidden;transform:translateZ(0);border-radius:0 0 10px 10px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 30px 90px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.12);background:var(--bg,#fff)}body>div[style*=\"contents\"] .app{height:100%!important}body::before,body::after{position:fixed;left:calc(50vw - var(--th-ww) / 2);top:calc(50vh - var(--th-wh) / 2);width:var(--th-ww);height:var(--th-tb);z-index:1;pointer-events:none}body::before{content:\"\";border-radius:10px 10px 0 0;box-shadow:0 0 0 1px rgba(0,0,0,.14);background:radial-gradient(circle at 18px 50%,#ff5f57 5.5px,transparent 6px),radial-gradient(circle at 38px 50%,#febc2e 5.5px,transparent 6px),radial-gradient(circle at 58px 50%,#28c840 5.5px,transparent 6px),var(--th-chrome)}body::after{content:\"tophat\";text-align:center;line-height:var(--th-tb);font:12px/30px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink)}}";
+  const pageCss = () => introCss() + '\n' + THEME_CSS + '\n' + BIGSCREEN_CSS;
+  // the head's first script: the guest's local reset, the caret drawn at the first paint and the intro state request, then the figure prefetch
+  const CARET_JS = "(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&q.get('fresh')==='1')document.documentElement.classList.add('demo-intro','demo-bare');if(i&&q.get('fresh')!=='1'){var h=document.documentElement;h.classList.add('demo-intro','demo-bare');var k=document.createElement('div');k.id='demo-caret';k.className='idle';k.style.cssText='left:50%;top:50%;width:3px;height:56px;background:#f2f2f2';h.appendChild(k);window.__demoCaretAt=performance.now();setTimeout(function(){if(!window.__demoIntroOwned){h.classList.remove('demo-intro','demo-bare');k.remove()}},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();";
+  const earlyJs = () => `(function(){${guestReset()}})();\n${CARET_JS}\n${prefetchJs()}`;
 
   // ---- the intro chat ----
-  // A guest's intro chat is the empty chat the scripted exchange plays in. Until the visitor has sent a real message, every page load
+  // A guest's intro chat is the empty chat the scripted exchange plays in. Every plain page load
   // plays it again from empty: a played one is archived and a fresh one (`<id>-<n>`) takes its place. The chat lists are the record.
   const hasUserMessage = (id) => Boolean(ro.prepare("SELECT 1 FROM events WHERE conversation_id=? AND kind='message.user' LIMIT 1").get(id));
   const openerOf = (session) => {
@@ -101,30 +131,51 @@ export async function serve(c) {
       .map((r) => ({ id: r.id, n: openerGenOf(session.id, r.id) })).filter((r) => r.n !== null).sort((a, b) => b.n - a.n);
     return live[0]?.id || OPENER_ID(session.id);
   };
+  /**
+   * The intro chat's row, in the guest's scope and the opener's folder. The seed no longer writes the first one, and events appended to a chat
+   * that has no row are invisible to the app's sync and live feed (they are scoped through the row): the page would hold its own message and
+   * "working" for ever. Idempotent.
+   */
+  const ensureOpener = (session, id) => {
+    if (ro.prepare('SELECT 1 FROM conversations WHERE id=?').get(id)) return;
+    const template = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots }).find((t) => t.opener);
+    seedOpener(store, { id, template, scope: scopeOf(session.id), model: OPENER_MODEL, autoModel: true, cwd: expand(inst.paths.workspace || path.join(stateDir, 'workspace')) });
+  };
   /** Idempotent and uncounted: with zero visitor turns and a played intro, archive it and open a new empty one. Returns the live intro chat's id. */
   const replayIntro = (session) => {
+    try { fresh(session.id); } catch (e) { console.error('[seed] reseed failed', e.message); } // a returning guest gets the current seed too: missing chats written, old versions retired
     const cur = openerOf(session);
-    if (guests.turnsOf(session.id) !== 0 || !hasUserMessage(cur)) return cur;
+    if (!hasUserMessage(cur)) { ensureOpener(session, cur); return cur; }
     const next = OPENER_GEN_ID(session.id, (openerGenOf(session.id, cur) || 0) + 1);
-    if (!ro.prepare('SELECT 1 FROM conversations WHERE id=?').get(next)) {
-      const template = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots }).find((t) => t.opener);
-      seedOpener(store, { id: next, template, scope: scopeOf(session.id), model, cwd: expand(inst.paths.workspace || path.join(stateDir, 'workspace')) });
-    }
-    store.append(cur, 'conversation.archived', { archived: true }, { at: new Date().toISOString() });
+    ensureOpener(session, next);
+    // a played intro the visitor kept talking in stays in the list; an untouched one is archived
+    const userMsgs = ro.prepare("SELECT COUNT(*) n FROM events WHERE conversation_id=? AND kind='message.user'").get(cur).n;
+    if (userMsgs <= 1) store.append(cur, 'conversation.archived', { archived: true }, { at: new Date().toISOString() });
     return next;
   };
+
+  // The files the opener answer shows, as the app asks for them (RichContent: /api/file?path=<path>&raw=1&conversation=<chat>), in answer order.
+  // prefetch.js warms these during the intro; the answer is read from the same description it streams, so the two cannot drift.
+  const answerFiles = () => [...opener.answer().matchAll(/^!\[[^\]]*\]\(([^)\n]+)\)$/gm)].map((m) => m[1]);
+  const warmUrls = (chat) => answerFiles().map((f) => `/api/file?path=${encodeURIComponent(f)}&raw=1&conversation=${encodeURIComponent(chat)}`);
+  // A figure is the same bytes for every guest, so the browser may keep it (the webchat sends no-store): this is what lets the intro's prefetch be used.
+  const widgetCacheable = (url) => { try { const f = path.resolve(expand(url.searchParams.get('path') || '')); return f.startsWith(widgetsDir + path.sep) && /\.(html|jpe?g|png)$/.test(f); } catch { return false; } };
 
   /** Everything a visitor's page needs to know that the app does not: how many turns, whether the check passed, whether a run is in progress. */
   const stateOf = (session) => {
     const running = ro.prepare("SELECT 1 FROM conversations WHERE scope=? AND run_state != 'idle' LIMIT 1").get(scopeOf(session.id));
     const opener = openerOf(session);
-    return { turns: session.turns, cap: guests.cap, verified: Boolean(session.verified), resting: guests.resting(), running: Boolean(running), opener, intro: session.turns === 0 && !hasUserMessage(opener), openerText: OPENER_TEXT, openerGaps: OPENER_GAPS_MS, siteKey, repo, onboard: ONBOARD(repo) };
+    const intro = !hasUserMessage(opener);
+    // forks: the chat a message to each starter chat continues in (forkIdOf), so the page can follow the visitor there after the send
+    const forks = Object.fromEntries(seedRowsOf(store, { scope: scopeOf(session.id), guest: session.id }).map((id) => [id, forkIdOf(id, session.id)]));
+    return { turns: session.turns, cap: guests.cap, verified: Boolean(session.verified), resting: guests.resting(), running: Boolean(running), opener, intro, warm: intro ? warmUrls(opener) : [], openerText: OPENER_TEXT, openerGaps: OPENER_GAPS_MS, siteKey, repo, forks };
   };
   const openerDone = new Set(); // intro chats whose scripted exchange has played (the stored events are the record; this stops a double play)
 
   /** The scripted exchange: the user's message and the cached answer, written into the real chat and streamed through the real feed. */
   async function playOpener(session, action) {
     const id = action.conversation_id;
+    ensureOpener(session, id);
     const before = store.cursor();
     const at = () => new Date().toISOString();
     store.append(id, 'message.user', { itemId: action.action_id, text: OPENER_TEXT, writtenBy: 'script' }, { at: at() });
@@ -134,9 +185,9 @@ export async function serve(c) {
     store.markApplied({ actionId: action.action_id, conversationId: id, op: action.op, cursorBefore: before, cursorAfter: store.cursor() });
     const events = store.since(before);
     (async () => {
-      // like a model's stream: the first token comes as the interface does (the send-off motion lands about a second after the click: shim.js
-      // FLIGHT_MS), then token-sized deltas at about 80 a second
-      await new Promise((r) => setTimeout(r, 1150));
+      // a beat of "working" (the send-off motion lands about a second after the click: shim.js FLIGHT_MS), then like a model's stream:
+      // token-sized deltas at about 80 a second
+      await new Promise((r) => setTimeout(r, OPENER_ANSWER_DELAY_MS));
       for (const piece of tokenPieces(answer)) {
         store.append(id, 'assistant.delta', { itemId, text: piece }, { at: at() });
         await new Promise((r) => setTimeout(r, pieceDelayMs(piece)));
@@ -168,15 +219,18 @@ export async function serve(c) {
     const up = http.request(webchat + url.pathname + url.search, { method: req.method, headers: h }, (r) => {
       const out = { ...r.headers };
       delete out['content-security-policy'];
+      if (r.statusCode === 200 && req.method === 'GET' && url.pathname === '/api/file' && widgetCacheable(url)) { out['cache-control'] = 'private, max-age=600'; delete out.vary; }
       if (inject && /text\/html/.test(String(r.headers['content-type'] || ''))) {
         const chunks = [];
         r.on('data', (d) => chunks.push(d));
         r.on('end', () => {
           let html = Buffer.concat(chunks).toString('utf8');
-          const tag = `<script>window.__tophatSurfaces=${JSON.stringify(SURFACES)};</script>${metaTags(description)}<style id="demo-intro-css">${introCss()}</style><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><style id="demo-bigscreen">@media (min-width:1900px) and (min-height:950px){:root{--th-ww:min(108rem,calc(100vw - 160px));--th-wh:min(calc(var(--th-ww) * 0.62),calc(100vh - 140px));--th-tb:30px;--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}@media (prefers-color-scheme:dark){:root{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}}:root[data-theme=light]{--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}:root[data-theme=dark]{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}html,body{height:100%;background:var(--th-desk)!important}body{margin:0;display:grid;place-items:center;overflow:hidden}body>div[style*="contents"]{display:block!important;width:var(--th-ww);height:calc(var(--th-wh) - var(--th-tb));margin-top:var(--th-tb);position:relative;overflow:hidden;transform:translateZ(0);border-radius:0 0 10px 10px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 30px 90px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.12);background:var(--bg,#fff)}body::before,body::after{position:fixed;left:calc(50vw - var(--th-ww) / 2);top:calc(50vh - var(--th-wh) / 2);width:var(--th-ww);height:var(--th-tb);z-index:1;pointer-events:none}body::before{content:"";border-radius:10px 10px 0 0;box-shadow:0 0 0 1px rgba(0,0,0,.14);background:radial-gradient(circle at 18px 50%,#ff5f57 5.5px,transparent 6px),radial-gradient(circle at 38px 50%,#febc2e 5.5px,transparent 6px),radial-gradient(circle at 58px 50%,#28c840 5.5px,transparent 6px),var(--th-chrome)}body::after{content:"tophat";text-align:center;line-height:var(--th-tb);font:12px/30px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink)}}</style><noscript><meta http-equiv="refresh" content="0;url=/_demo/text?why=nojs"></noscript><script src="/_demo/shim.js?v=${shimVersion()}" defer></script>`;
-          // First thing in the head, before any stylesheet (an inline script waits for those): the visitor's state request starts while the page parses,
-          // not after the shim has loaded. The shim reads `window.__demoBoot` (same rule as its own `bootState`).
-          const early = `<script>(function(){${guestReset()}})();</script><script>(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&!(window.matchMedia&&matchMedia('(prefers-reduced-motion:reduce)').matches)){var h=document.documentElement;h.classList.add('demo-intro');setTimeout(function(){if(!window.__demoIntroOwned)h.classList.remove('demo-intro')},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();</script>`;
+          const tag = `<script>window.__tophatSurfaces=${JSON.stringify(SURFACES)};</script>${metaTags(description)}<link rel="stylesheet" id="demo-css" href="/_demo/page.css?v=${assetVersion(pageCss())}"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><noscript><meta http-equiv="refresh" content="0;url=/_demo/text?why=nojs"></noscript><script src="/_demo/shim.js?v=${shimVersion()}" defer></script>`;
+          // First thing in the head, before any stylesheet: the visitor's state request starts while the page parses, not after the shim has loaded.
+          // The shim reads `window.__demoBoot` (same rule as its own `bootState`). Everything the demo adds that changes between releases (early.js,
+          // page.css, shim.js) is a revalidated URL, never inline: the app's service worker answers a returning visitor's navigation from the page it
+          // stored on the last visit (a previous release), and inline demo code in it would run stale beside the current shim.
+          const early = `<script src="/_demo/early.js?v=${assetVersion(earlyJs())}"></script>`; // the version only names the bytes (a copy a browser kept from before no-store is never reused); the route ignores it
           html = html.replace(/<link[^>]*rel="(?:icon|apple-touch-icon|shortcut icon)"[^>]*>/g, '').replace(/<head[^>]*>/, (m) => m + early).replace('</head>', `${tag}</head>`);
           const buf = Buffer.from(html);
           delete out['content-length']; delete out['content-encoding']; delete out.etag;
@@ -218,11 +272,17 @@ export async function serve(c) {
       if (p === '/_demo/shim.js') {
         // revalidated every load: the app's service worker keeps old pages (and their script tags) for returning visitors, and they must still get this script
         const etag = `"${shimVersion()}"`;
-        if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': 'no-cache' }); return res.end(); }
-        res.writeHead(200, headers('text/javascript; charset=utf-8', { 'cache-control': 'no-cache', etag })); return res.end(shimJs());
+        if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': NO_STORE_ASSET }); return res.end(); }
+        res.writeHead(200, headers('text/javascript; charset=utf-8', { 'cache-control': NO_STORE_ASSET, etag })); return res.end(shimJs());
       }
       if (p === '/_demo/text') { res.writeHead(200, headers('text/html; charset=utf-8', { 'cache-control': 'no-store' })); return res.end(textPage({ file: description, contextFile, repo, markdown: md, why: u.searchParams.get('why') === 'nojs' ? 'nojs' : 'check', siteKey, canVerify: true })); }
-      if (p === '/_demo/intro.css') { res.writeHead(200, headers('text/css; charset=utf-8', { 'cache-control': 'no-cache' })); return res.end(introCss()); }
+      // early.js and page.css: revalidated on every load like shim.js (see the page injection above)
+      if (p === '/_demo/early.js' || p === '/_demo/page.css') {
+        const js = p.endsWith('.js'), body = js ? earlyJs() : pageCss(), etag = `"${createHash('sha256').update(body).digest('hex').slice(0, 16)}"`;
+        if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': NO_STORE_ASSET }); return res.end(); }
+        res.writeHead(200, headers(js ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8', { 'cache-control': NO_STORE_ASSET, etag })); return res.end(body);
+      }
+      if (p === '/_demo/intro.css') { res.writeHead(200, headers('text/css; charset=utf-8', { 'cache-control': NO_STORE_ASSET })); return res.end(introCss()); }
       if (/^\/(favicon\.svg|favicon\.ico|favicon-(16|32|192|512)\.png|apple-touch-icon\.png|og\.png)$/.test(p)) {
         const f = path.join(DEMO, 'public', p.slice(1));
         if (existsSync(f)) { res.writeHead(200, headers(p.endsWith('.svg') ? 'image/svg+xml' : p.endsWith('.ico') ? 'image/x-icon' : 'image/png', { 'cache-control': 'public, max-age=86400' })); return res.end(readFileSync(f)); }
@@ -264,7 +324,7 @@ export async function serve(c) {
 
       if (p === '/_fallback') { res.writeHead(200, headers('text/html; charset=utf-8', { 'cache-control': 'no-store' })); return res.end(renderFallback()); }
       // A visitor who has sent nothing opens on a fresh intro: a bare address, or a link to one of their own (played) intro chats, goes to the live one.
-      if (p === '/' && isPage && session && session.turns === 0) {
+      if (p === '/' && isPage && session) {
         const chat = u.searchParams.get('chat');
         if (!chat || openerGenOf(session.id, chat) !== null) {
           const live = replayIntro(session);
@@ -303,8 +363,29 @@ export async function serve(c) {
         if (p === '/api/actions' && req.method === 'POST') {
           let action; try { action = JSON.parse(body.toString('utf8')); } catch { return json(res, 400, { error: 'bad body' }); }
           action = pinModel(action);
+          // the intro chat runs as auto with Sonnet 5.5; the seeded chats keep the visitor model
+          if (action.payload?.settings && openerGenOf(session.id, String(action.conversation_id || '')) !== null) action.payload.settings = { ...action.payload.settings, model: OPENER_MODEL, autoModel: true };
+          // the intro chat is created by the page with no folder: file it in the folder seed/chats.json gives the opener (personal assistant project), not the Inbox
+          if (action.op === 'conversation.create' && openerGenOf(session.id, String(action.conversation_id || '')) !== null && !action.payload?.workspace) {
+            const workspace = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots }).find((t) => t.opener)?.workspace;
+            if (workspace) action = { ...action, payload: { ...action.payload, workspace } };
+          }
           const own = action.conversation_id ? ro.prepare('SELECT scope FROM conversations WHERE id=?').get(action.conversation_id) : null;
           if (own && own.scope !== scopeOf(session.id)) return json(res, 404, { error: 'Unknown conversation' });
+          // A starter chat is the same for every visitor and is never written to: a message to one continues in a fork of it that the visitor owns;
+          // view state (opened, read) passes; anything else that would change the row is refused.
+          const seedTarget = String(action.conversation_id || '');
+          if (seedTarget && isSeedId(seedTarget, session.id)) {
+            if (action.op === 'message.send') {
+              const forkId = forkIdOf(seedTarget, session.id);
+              forkSeedChat(store, { sourceId: seedTarget, forkId, scope: scopeOf(session.id) });
+              action = { ...action, conversation_id: forkId };
+            } else if (!SEED_VIEW_OPS.has(action.op)) return json(res, 403, { error: 'This starter chat is read-only: send a message to carry on in your own copy.' });
+          }
+          // a redelivery of the played opener (the page's engine re-posts an action whose answer it never heard, as on a slow or dropped connection) gets the same answer
+          // again: never a second chat turn, never a second play
+          const played = action.op === 'message.send' && openerGenOf(session.id, String(action.conversation_id || '')) !== null ? store.appliedAction(action.action_id) : null;
+          if (played) return json(res, 200, { events: store.since(played.cursor_before).filter((e) => e.cursor <= played.cursor_after), cursor: store.cursor() }, { 'x-demo-turns': String(session.turns) });
           if (action.op === 'message.send' && openerGenOf(session.id, String(action.conversation_id || '')) !== null && String(action.payload?.text || '').trim().toLowerCase() === OPENER_TEXT && !openerDone.has(action.conversation_id)
               && !hasUserMessage(action.conversation_id)) {
             openerDone.add(action.conversation_id);

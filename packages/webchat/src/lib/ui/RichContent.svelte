@@ -1,6 +1,7 @@
 <script>
   import { widgetDocument } from '$lib/core/rich-content.js';
   import VideoPlayer from './VideoPlayer.svelte';
+  import { fetchFileVersion, withFileVersion } from '$lib/core/file-version.js';
 
   const MAX_WIDGET_CHARS = 16_000_000;
 
@@ -12,7 +13,22 @@
   const kind = $derived(content.kind);
   const contentUrl = $derived(content.url);
   const withConversation = (u) => u?.startsWith('/api/file?') && conversationId ? u + '&conversation=' + encodeURIComponent(conversationId) : u;
-  const url = $derived(withConversation(contentUrl));
+  // A local image's URL carries the file's version (`&v=<mtime>-<size>`) so a rewritten file is a new
+  // URL: the same path embedded again later would otherwise show the picture the browser kept for the
+  // old bytes. The version is asked of the server when the image is drawn; until it answers the img
+  // has no src, and a failed lookup ('') falls back to the plain URL.
+  const versioned = $derived(kind === 'image' && !content.remote && contentUrl?.startsWith('/api/file?'));
+  let version = $state(null);
+  $effect(() => {
+    if (!versioned) return;
+    const raw = new URL(contentUrl, 'http://x').searchParams.get('path');
+    let live = true;
+    version = null;
+    fetchFileVersion(raw, conversationId).then((v) => { if (live) version = v; });
+    return () => { live = false; };
+  });
+  const url = $derived(withFileVersion(withConversation(contentUrl), versioned ? version : null));
+  const ready = $derived(!versioned || version !== null);
   let state = $state({ status: 'ready', source: '', error: '' });
   let expanded = $state(false);
   // An image that will not load (host gone, refused address, signed out, offline with nothing cached)
@@ -71,7 +87,7 @@
     </div>
   </figcaption>
   {#if kind === 'image'}
-    <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={content.title} data-zoomable loading="lazy" onerror={() => broken = true} /></a>
+    <a href={ready ? url : undefined} target="_blank" rel="noreferrer"><img src={ready ? url : undefined} alt={content.title} data-zoomable loading="lazy" onerror={() => broken = true} /></a>
   {:else if kind === 'video'}
     <video src={url} controls playsinline preload="metadata" aria-label={content.title}><track kind="captions" /></video>
   {:else if kind === 'audio'}

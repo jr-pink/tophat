@@ -154,3 +154,34 @@ test('the intake pusher id reaches the runner env, and a workspace-scoped fast m
   assert.equal(plain.TOPHAT_FAST_MODEL_ENDPOINT, 'https://fast.example/v1/chat/completions');
   assert.equal(plain.TOPHAT_PUSHER_ID, undefined);
 });
+
+test('scope.join, screens and the roster reach the env; join and groups never overlap; setup-shaped files carry none of it', () => {
+  const base = { name: 'demo', components: [] };
+  const c = resolveInstance({ ...base, scope: { user: 'th-ab12cd34', join: ['tophat-users'], screens: [{ pattern: 'acme' }], peopleFile: './people.json' } }, { home, dir: '/etc/demo' });
+  const env = instanceEnv(c);
+  assert.equal(env.TOPHAT_SCOPE_JOIN, 'tophat-users');
+  assert.equal(env.TOPHAT_SCOPE_GROUPS, '');
+  assert.equal(env.TOPHAT_SCOPE_USER, 'th-ab12cd34');
+  assert.deepEqual(JSON.parse(env.TOPHAT_SCOPE_SCREENS), [{ pattern: 'acme' }]);
+  assert.equal(env.TOPHAT_PRIVATE_PEOPLE_FILE, '/etc/demo/people.json');
+  const plain = instanceEnv(resolveInstance(base, { home }));
+  for (const k of ['TOPHAT_SCOPE_JOIN', 'TOPHAT_SCOPE_SCREENS', 'TOPHAT_PRIVATE_PEOPLE_FILE']) assert.ok(!(k in plain), `${k} is off by default`);
+  assert.throws(() => resolveInstance({ ...base, scope: { groups: ['tophat-users'], join: ['tophat-users'] } }), /creates a group and scope.join joins/);
+  assert.throws(() => resolveInstance({ ...base, scope: { join: ['Bad Name'] } }), /scope.join is a list of group names/);
+  assert.throws(() => resolveInstance({ ...base, scope: { screens: [{ pattern: '(' }] } }), /scope.screens\[0\].pattern/);
+  assert.throws(() => resolveInstance({ ...base, scope: { screens: [{}] } }), /needs a pattern/);
+});
+
+test('hub: the token may be pending (defaults to the keyring entry hub-token), and a hub block adds a sync job unless the intake syncs', () => {
+  const base = { name: 'demo', deploy: { labelPrefix: 'org.example' }, components: ['linknotes', 'sources', 'push', 'upkeep', 'runner', 'webchat'], hub: { url: 'https://hub.example.org' } };
+  const c = resolveInstance(base, { home, dir: '/etc/demo' });
+  assert.deepEqual(c.hub.token, { keyring: 'hub-token' });
+  assert.equal(instanceEnv(c).TOPHAT_HUB_TOKEN_FILE, '/home/someone/.config/tophat/demo/secrets/hub-token');
+  const jobs = (x) => instanceJobs(resolveInstance({ ...base, ...x }, { home }), { configFile: '/etc/demo.json' });
+  assert.deepEqual(jobs({}).map((j) => j.job), ['webchat', 'sync'], 'no intake block: the sync job is the syncer');
+  assert.deepEqual(jobs({ intake: { everySeconds: 60, model: { provider: 'stub' } } }).map((j) => j.job), ['webchat', 'intake'], 'the intake syncs after each pass; a second syncer would reseal actions');
+  assert.deepEqual(jobs({ hub: null }).map((j) => j.job), ['webchat']);
+  const unit = serviceUnit(resolveInstance(base, { home }), { configFile: '/etc/demo.json', bin: '/opt/d.mjs', node: '/usr/bin/node', job: 'sync' });
+  for (const a of ['instance', 'sync', '--config', '/etc/demo.json', '--forever', '--every', '60']) assert.ok(unit.includes(`<string>${a}</string>`), a);
+  assert.match(unit, /org\.example\.demo\.sync/);
+});

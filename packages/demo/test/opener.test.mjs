@@ -9,7 +9,7 @@ const DEMO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const description = path.join(DEMO, 'content/description.md');
 
 test('the opener is the owner\'s own phrase and has one recorded gap per character', () => {
-  assert.equal(OPENER_TEXT, 'so whats ur deal ?');
+  assert.equal(OPENER_TEXT, 'so, whats ur deal ?');
   assert.equal(OPENER_GAPS_MS.length, OPENER_TEXT.length);
   assert.equal(OPENER_GAPS_MS[0], 0);
   assert.ok(OPENER_GAPS_MS.every((n) => Number.isInteger(n) && n >= 0 && n < 1000));

@@ -16,9 +16,9 @@ export const PARTIAL_INPUT_CAP = 8000, CALL_INPUT_CAP = 3000;
 export const BACKGROUND_NOTE = (id, view = null) => {
   const seen = view ? backgroundProgressText(view) : '';
   return `The owner wrote while the turn above was still running. It was not cancelled: it is a background turn, ${id}, STILL RUNNING on a copy of this context,`
-    + ' with its model request and tool calls going on; its result reaches you as a "Background turn report" (an automated event, not his words) when it finishes.'
+    + ' with its model request and tool calls going on; it stops after its first tool call completes, and its result reaches you as a "Background turn report" (an automated event, not his words) when it does.'
     + `${seen ? `\nWhat ${id} has produced so far and is still doing:\n${seen}` : ''}`
-    + `\nDo not duplicate it: whatever ${id} is writing or calling above, it will finish by itself, so do not write that text again or make that call (launch that subagent, run that command) yourself.`
+    + `\nDo not duplicate it: whatever ${id} is writing or calling above, it will finish by itself (but only that one call: nothing it would have done after it), so do not write that text again or make that call (launch that subagent, run that command) yourself.`
     + ` You decide, from what you can see above: (a) skip that step and carry on with his message, or just wait: end your turn and its report arrives on its own; (b) if what ${id} is doing is no longer what he wants, cancel it now with agent_cancel agent_id=${id}, and only then do the work yourself.`
     + ' His message follows: answer it now.';
 };
@@ -69,8 +69,12 @@ export function backgroundMinGeneratingMs({ env = process.env, config } = {}) {
   return ms;
 }
 
+// The runner ends the turn once its first round of tool calls has completed (pull.mjs onStep), so this note is read
+// only by a turn that makes no call; the report is built by backgroundResult, edits and all.
 export const BACKGROUND_FORK_NOTE = 'The owner wrote a new message while this turn was running, so it moved to the background and the main conversation carries on without waiting for it.'
-  + ' Finish the work it was doing, as you would have. Your final message is not shown to him directly: it is delivered to the main conversation as a report, so make it a complete account of what you found and did.';
+  + ' Finish the step you are on: the runner ends this turn as soon as its first tool call has completed, so plan nothing beyond it. Your final message is not shown to him directly: it is delivered to the main conversation as a report.'
+  + ' If you edit any file, the runner appends the exact diff to that report; do not paraphrase it.';
+export const BACKGROUND_STOPPED_NOTE = '[stopped by the runner after its first tool call; anything it meant to do after that was not done]';
 export const BACKGROUND_CANCEL_MARK = '[the background turn was cancelled here]';
 
 /** One line naming a background turn: what the turn was answering, cut short. */
@@ -79,11 +83,19 @@ export function backgroundGist(text) {
   return flat.length > 80 ? `${cut(flat, 79)}…` : (flat || 'the earlier turn');
 }
 
-/** The report: the tool calls run after the interrupt (start of each result), then the final text, which keeps most of the room. */
-export function backgroundResult({ status = 'done', finalText = '', failure = null, log = [] } = {}, cap = 12_000) {
-  const head = status === 'failed' ? `[failed: ${failure || 'unknown'}]\n` : status === 'cancelled' ? '[cancelled before finishing]\n' : '';
-  const said = finalText ? `Final text:\n${cut(finalText, Math.floor(cap * 0.7))}` : 'It wrote no final text.';
-  let room = cap - head.length - said.length - 64;
+/** The report: the tool calls run after the interrupt (start of each result), the diff of any files they changed, then the final
+ * text. `diffs` is [{ text, note }] from background-diff.mjs; `stopped` is set when the runner ended the turn after its first tool
+ * call.
+ */
+export function backgroundResult({ status = 'done', finalText = '', failure = null, log = [], diffs = [], stopped = false } = {}, cap = 12_000) {
+  const head = `${status === 'failed' ? `[failed: ${failure || 'unknown'}]\n` : status === 'cancelled' ? '[cancelled before finishing]\n' : ''}${stopped ? `${BACKGROUND_STOPPED_NOTE}\n` : ''}`;
+  const diffText = diffs.map((d) => d.text).filter(Boolean).join('\n'), notes = diffs.map((d) => d.note).filter(Boolean);
+  const diffCap = Math.floor(cap * 0.4);
+  const edits = diffText
+    ? `File edits (diff of what changed on disk):\n\`\`\`diff\n${diffText.length > diffCap ? `${cut(diffText, diffCap)}\n[... diff cut at ${diffCap} characters; ${diffText.length - diffCap} more]` : diffText}\n\`\`\`\n`
+    : notes.length ? `File edits: none found; ${notes.join('; ')}.\n` : '';
+  const said = finalText ? `${stopped ? 'What it said' : 'Final text'}:\n${cut(finalText, Math.floor(cap * (diffText ? 0.4 : 0.7)))}` : 'It wrote no final text.';
+  let room = cap - head.length - said.length - edits.length - 64;
   const lines = [];
   for (const e of log) {
     const line = `- ${e.name} ${cut(JSON.stringify(e.input ?? {}), 160)} -> ${e.isError ? 'error: ' : ''}${cut(String(e.content ?? '').replace(/\s+/gu, ' '), 400)}`;
@@ -92,11 +104,14 @@ export function backgroundResult({ status = 'done', finalText = '', failure = nu
     room -= line.length + 1;
   }
   const calls = log.length ? `Tool calls after the owner wrote (${log.length}):\n${lines.join('\n')}\n` : 'No tool calls after the owner wrote.\n';
-  return `${head}${calls}${said}`;
+  return `${head}${calls}${edits}${said}`;
 }
 
 /** The context block a delivered background turn arrives as in the main session. */
 export function backgroundReportText(a) {
   return `The turn that was running when the owner wrote carried on in the background as ${a.agent_id} (${String(a.description || '').replace(/^Background turn: /u, '')}) and is now ${a.status}`
-    + `${a.cost_usd != null ? `, cost ${a.cost_usd} USD` : ''}. He has not seen this yet: tell him what matters of it in a line or two, folded into whatever you are doing now.\n${a.result || ''}`;
+    + `${a.cost_usd != null ? `, cost ${a.cost_usd} USD` : ''}. He has not seen this yet: tell him what matters of it in a line or two, folded into whatever you are doing now.`
+    + (String(a.result || '').includes(BACKGROUND_STOPPED_NOTE) ? ' The runner stopped it after its first tool call, so whatever it would have done next is still undone and is yours to carry on with if his message still needs it.' : '')
+    + ' If the report holds a "File edits" diff, put that diff in your message to him as it stands, in a diff code block: he wants no question left as to what it edited, so never replace it with a summary.'
+    + `\n${a.result || ''}`;
 }

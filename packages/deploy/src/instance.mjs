@@ -7,10 +7,16 @@ import path from 'node:path';
 
 const TOP = ['name', 'owner', 'scope', 'hosts', 'ports', 'paths', 'devices', 'models', 'components', 'runner', 'webchat', 'deploy', 'sources', 'hub', 'intake', 'note'];
 const REF_KEYS = ['env', 'keyring', 'file'];
+const SCOPE_NAME = /^[a-z][a-z0-9-]{1,47}$/;
+
+/** The shared hub of the tophat-users memory group (ciphertext only). Written into an instance file only by `tophat instance join`. */
+export const COMMUNITY_HUB_URL = 'https://hub.tophat.md';
+/** The keyring entry a hub token is read from when `hub.token` names none (it may not exist yet: the token is issued later). */
+export const HUB_TOKEN_KEYRING = 'hub-token';
 
 export const DEFAULTS = Object.freeze({
   owner: { label: 'the owner', addresses: [] },
-  scope: { default: null, groups: [] },
+  scope: { default: null, groups: [], join: [] },
   hosts: { public: null, bind: '127.0.0.1' },
   ports: { webchat: 4178 },
   paths: {},
@@ -84,7 +90,9 @@ export function resolveInstance(raw, { dir = process.cwd(), home = os.homedir() 
   if (c.hub !== null) {
     if (!isObj(c.hub) || typeof c.hub.url !== 'string' || !/^https?:\/\//.test(c.hub.url)) throw new Error('instance config: hub needs url (http or https)');
     for (const k of Object.keys(c.hub)) if (!['url', 'token', 'device', 'deviceKey', 'timeoutMs'].includes(k)) throw new Error(`instance config: unknown key hub.${k}`);
-    if (c.hub.token === undefined) throw new Error('instance config: hub.token is a credential reference ({ "keyring": NAME } | { "file": PATH })');
+    // The token is issued by the hub's operator, so it may not exist yet: without a reference it is the keyring entry `hub-token`,
+    // and a sync before the file exists is refused by name, never an error here.
+    if (c.hub.token === undefined) c.hub.token = { keyring: HUB_TOKEN_KEYRING };
     validateRef(c.hub.token, 'hub.token');
     if (c.hub.token.env) throw new Error('hub.token: the store reads its hub token from a file; use { "file": PATH } or { "keyring": NAME }');
     if (c.hub.deviceKey !== undefined) { validateRef(c.hub.deviceKey, 'hub.deviceKey'); if (c.hub.deviceKey.env) throw new Error('hub.deviceKey: a device key is a file or a keyring entry'); }
@@ -112,6 +120,20 @@ export function resolveInstance(raw, { dir = process.cwd(), home = os.homedir() 
   if (typeof c.owner.label !== 'string' || !c.owner.label) throw new Error('instance config: owner.label must be a non-empty string');
   if (!Array.isArray(c.owner.addresses)) throw new Error('instance config: owner.addresses is a list');
   if (!Array.isArray(c.scope.groups)) throw new Error('instance config: scope.groups is a list');
+  for (const key of ['groups', 'join']) {
+    if (!Array.isArray(c.scope[key]) || c.scope[key].some((g) => typeof g !== 'string' || !SCOPE_NAME.test(g))) throw new Error(`instance config: scope.${key} is a list of group names (lower case letters, digits, dashes)`);
+  }
+  const both = c.scope.join.filter((g) => c.scope.groups.includes(g));
+  if (both.length) throw new Error(`instance config: scope.groups creates a group and scope.join joins one made elsewhere; ${both.join(', ')} is in both`);
+  if (c.scope.screens !== undefined) {
+    if (!Array.isArray(c.scope.screens)) throw new Error('instance config: scope.screens is a list of { pattern, flags?, label?, groups? }');
+    for (const [i, x] of c.scope.screens.entries()) {
+      if (!isObj(x) || typeof x.pattern !== 'string') throw new Error(`instance config: scope.screens[${i}] needs a pattern`);
+      try { new RegExp(x.pattern, x.flags ?? 'i'); } catch (e) { throw new Error(`instance config: scope.screens[${i}].pattern: ${e.message}`); }
+      if (x.groups !== undefined && (!Array.isArray(x.groups) || x.groups.some((g) => typeof g !== 'string'))) throw new Error(`instance config: scope.screens[${i}].groups is a list of group names`);
+    }
+  }
+  if (c.scope.peopleFile !== undefined && (typeof c.scope.peopleFile !== 'string' || !c.scope.peopleFile)) throw new Error('instance config: scope.peopleFile is the path of a private-people roster');
   for (const [k, v] of Object.entries(c.ports)) if (!Number.isInteger(v) || v < 0 || v > 65535) throw new Error(`instance config: ports.${k} must be a port number`);
   for (const [name, m] of Object.entries(c.models)) {
     if (!isObj(m)) throw new Error(`instance config: models.${name} must be an object`);
@@ -130,6 +152,7 @@ export function resolveInstance(raw, { dir = process.cwd(), home = os.homedir() 
     instructions: c.paths.instructions ? abs(c.paths.instructions) : null,
     fileRoots: (c.paths.fileRoots || []).map(abs),
   };
+  if (c.scope.peopleFile) c.scope.peopleFile = abs(c.scope.peopleFile);
   // File references and home-relative source paths are absolute from here on (the processes reading them do not expand ~).
   const absRef = (ref) => (ref?.file ? { file: abs(ref.file) } : ref);
   for (const m of Object.values(c.models)) { if (m.credential) m.credential = absRef(m.credential); if (m.workspace) m.workspace = absRef(m.workspace); }
@@ -172,6 +195,9 @@ export function instanceEnv(c, { buildDir = null } = {}) {
     TOPHAT_OWNER_ADDRESSES: c.owner.addresses.join(','),
     TOPHAT_SCOPE: c.scope.default ?? c.name,
     TOPHAT_SCOPE_GROUPS: c.scope.groups.join(','),
+    ...(c.scope.join.length ? { TOPHAT_SCOPE_JOIN: c.scope.join.join(',') } : {}),
+    ...(c.scope.screens?.length ? { TOPHAT_SCOPE_SCREENS: JSON.stringify(c.scope.screens) } : {}),
+    ...(c.scope.peopleFile ? { TOPHAT_PRIVATE_PEOPLE_FILE: c.scope.peopleFile } : {}),
     ...(c.scope.user ? { TOPHAT_SCOPE_USER: c.scope.user } : {}),
     TOPHAT_PUBLIC_BASE: c.hosts.public ? origin : '',
     PRODUCT_NAME: c.name,
@@ -251,6 +277,8 @@ const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  *   webchat     the chat app (`start`), when `webchat` is a component
  *   intake      the push plane (`instance intake --forever`): sources and chat transcripts into the replica, derive, wake, hub sync;
  *               when `push` and `upkeep` are components and the instance file has an intake block
+ *   sync        one hub round every minute (`instance sync --forever`) when the instance file has a hub block and no intake job, which
+ *               syncs after each of its own passes: two processes syncing one replica reseal an action twice and the hub refuses the second
  *   fast-proxy  the loopback header proxy for a fast model behind a workspace-scoped key, when models.fast.workspace is set
  * `label` is `<deploy.labelPrefix>.<name>` for the webchat and `<that>.<job>` for the others.
  */
@@ -260,6 +288,7 @@ export function instanceJobs(c, { configFile } = {}) {
   const jobs = [];
   if (has('webchat')) jobs.push({ job: 'webchat', label: base, args: ['start', '--config', configFile], log: 'webchat' });
   if (has('push') && has('upkeep') && c.intake) jobs.push({ job: 'intake', label: `${base}.intake`, args: ['instance', 'intake', '--config', configFile, '--forever', '--tick', '30'], log: 'intake' });
+  if (c.hub && !jobs.some((j) => j.job === 'intake')) jobs.push({ job: 'sync', label: `${base}.sync`, args: ['instance', 'sync', '--config', configFile, '--forever', '--every', '60'], log: 'sync' });
   if (c.models.fast?.workspace) jobs.push({ job: 'fast-proxy', label: `${base}.fast-proxy`, args: ['instance', 'fast-proxy', '--config', configFile], log: 'fast-proxy' });
   return jobs;
 }

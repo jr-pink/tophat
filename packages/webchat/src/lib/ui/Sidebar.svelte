@@ -10,6 +10,8 @@
   import { CACHED_LIMIT, mergeResults, searchCachedChats, searchStages } from '$lib/core/search.js';
   import { isListDown, isListUp } from '$lib/core/keys.js';
   import { listedConversations, stableListing } from '$lib/core/transient.js';
+  // what the host page keeps out of the lists (core/transient.js unlistedByHost); none on the owner's own app
+  const hostUnlisted = () => (typeof window === 'undefined' ? null : window.__tophatUnlisted || null);
   import { queueEdit as queueDescription, readCached as readCachedDescs, sync as syncDescriptions } from '$lib/core/folder-descs.js';
   import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, folderKey, folderTree, listWorkspaces, moveFolder, normalizeWorkspace, partitionByWorkspace } from '$lib/core/workspaces.js';
   import { sidebarDecl, openKey } from '$lib/core/sidebar-state.js';
@@ -99,7 +101,7 @@
   let dropTarget = $state(undefined);
 
   // listedConversations returns an id-keyed map, not an array.
-  const allWorkspaces = $derived(listWorkspaces(Object.values(listedConversations(conversations, session?.isProvisional)).filter((c) => !c.archived), $sb.names));
+  const allWorkspaces = $derived(listWorkspaces(Object.values(listedConversations(conversations, session?.isProvisional, hostUnlisted())).filter((c) => !c.archived), $sb.names));
 
   function createWorkspace(name, { enter: enterNow = true, file = null } = {}) {
     // Inbox is the catch-all, not a folder to make: filing a chat there is unfiling it.
@@ -263,7 +265,7 @@
   let lastListed = null;
   const listed = $derived.by(() => {
     void chatState?.rev;
-    lastListed = stableListing(lastListed, listedConversations(conversations, session?.isProvisional));
+    lastListed = stableListing(lastListed, listedConversations(conversations, session?.isProvisional, hostUnlisted()));
     return lastListed;
   });
 
@@ -840,7 +842,7 @@
   .meta { display: flex; align-items: center; gap: 6px; flex: none; }
   .time { font-size: 10.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
   .turns { font-size: 9.5px; color: var(--ink-faint); border: 1px solid var(--line); border-radius: 999px; padding: 0 4px; }
-  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  .dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--accent); }
   
   .mark { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 30px; }
   /* The hover cluster, the swipe strip and the touch-screen rule all live in SwipeRow now; the

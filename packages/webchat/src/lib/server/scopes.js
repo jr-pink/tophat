@@ -134,6 +134,22 @@ export function createScopeService({
     return canAccess(identity, scopeOf(conversation));
   }
 
+  /** canSee for many chats of one caller: the account is looked up once and each scope's answer is kept, so a batch costs one
+   *  registry lookup per distinct scope, not two per row (a store of thousands of chats across hundreds of scopes, as the public demo's
+   *  guests make, spent seconds per bootstrap and sync re-scanning every scope for every row). For one batch only: a move changes the answer. */
+  function seerFor(identity) {
+    if (!enabled) return () => true;
+    const account = contextFor(identity)?.account || null;
+    const memo = new Map();
+    return (conversation) => {
+      if (!conversation || !account) return false;
+      const scope = scopeOf(conversation);
+      let ok = memo.get(scope);
+      if (ok === undefined) { ok = registry.canAccess(account, scope); memo.set(scope, ok); }
+      return ok;
+    };
+  }
+
   function assertCanSee(identity, conversation) {
     if (!canSee(identity, conversation)) throw new ScopeError('denied', 'No access to this chat.', 403);
     return conversation;
@@ -329,7 +345,7 @@ export function createScopeService({
 
   return {
     enabled, defaultScope, config,
-    contextFor, canAccess, canSee, assertCanSee, scopeOf, scopeForNewChat, backfill,
+    contextFor, canAccess, canSee, seerFor, assertCanSee, scopeOf, scopeForNewChat, backfill,
     rulesFor, setRules, move, resumePending,
     personalOf: (account) => personalScopeOf(account),
     isPersonal: isPersonalScope,

@@ -39,7 +39,8 @@ export function eventFilter(ctx, store, { cached = true } = {}) {
   if (!ctx.enabled) return null;
   // One batch may remember its answers; a live stream may not, because a move changes them mid-stream.
   const cache = cached ? new Map() : null;
-  const check = (conversationId) => ctx.service.canSee(ctx.identity, store.conversation(conversationId));
+  const see = cached && ctx.service.seerFor ? ctx.service.seerFor(ctx.identity) : (conversation) => ctx.service.canSee(ctx.identity, conversation);
+  const check = (conversationId) => see(store.conversation(conversationId));
   const visible = (conversationId) => {
     if (!cache) return check(conversationId);
     if (!cache.has(conversationId)) cache.set(conversationId, check(conversationId));
@@ -62,7 +63,9 @@ export function filterEvents(ctx, store, events) {
 }
 
 export function filterRows(ctx, rows) {
-  return ctx.enabled ? rows.filter((row) => ctx.service.canSee(ctx.identity, row)) : rows;
+  if (!ctx.enabled) return rows;
+  const see = ctx.service.seerFor ? ctx.service.seerFor(ctx.identity) : (row) => ctx.service.canSee(ctx.identity, row);
+  return rows.filter(see);
 }
 
 /** A store view for the event stream: subscribe and since() deliver only what the caller may see. */

@@ -286,7 +286,9 @@ export function landedImageBlocks(pending, { env = process.env, run = sips, dir 
   }
   return { blocks, still };
 }
-export const isImageRef = (b) => b?.type === 'tophat_image' && typeof b.path === 'string';
+// Any '<name>_image' block that carries a path: the assembled public build renames this block's type, so a ledger
+// written under the other name still hydrates instead of reaching the API raw.
+export const isImageRef = (b) => typeof b?.type === 'string' && /^[a-z0-9]+_image$/.test(b.type) && b.type !== 'input_image' && typeof b.path === 'string';
 export function hydrateImageBlocks(messages, { read = readFileSync, limits = null, env = process.env } = {}) {
   const lim = limits || visionLimits(env);
   if (!Array.isArray(messages)) return messages;

@@ -48,9 +48,11 @@
   const FILLED = new Set(['star-on']);
 </script>
 
+
 <svg
   width={size}
   height={size}
+  style="flex-shrink:0"
   viewBox="0 0 16 16"
   fill={FILLED.has(name) ? 'currentColor' : 'none'}
   stroke="currentColor"

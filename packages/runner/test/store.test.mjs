@@ -17,9 +17,12 @@ const db = () => path.join(tmp(), 'memory.sqlite');
 const ok = (r) => { assert.equal(r.code, 0, JSON.stringify(r.result)); return r.result; };
 
 test('scopeOf: default, groups, and a refused name', () => {
-  assert.deepEqual(scopeOf({}), { scope: 'local', user: 'local', groups: [] });
-  assert.deepEqual(scopeOf({ TOPHAT_SCOPE: 'lab', TOPHAT_SCOPE_GROUPS: 'lab, team ,' }), { scope: 'lab', user: 'lab', groups: ['team'] });
-  assert.deepEqual(scopeOf({ TOPHAT_SCOPE: 'sam-private', TOPHAT_SCOPE_USER: 'sam' }), { scope: 'sam-private', user: 'sam', groups: [] });
+  assert.deepEqual(scopeOf({}), { scope: 'local', user: 'local', groups: [], join: [] });
+  assert.deepEqual(scopeOf({ TOPHAT_SCOPE: 'lab', TOPHAT_SCOPE_GROUPS: 'lab, team ,' }), { scope: 'lab', user: 'lab', groups: ['team'], join: [] });
+  assert.deepEqual(scopeOf({ TOPHAT_SCOPE: 'sam-private', TOPHAT_SCOPE_USER: 'sam' }), { scope: 'sam-private', user: 'sam', groups: [], join: [] });
+  // a joined group is never also a created one
+  assert.deepEqual(scopeOf({ TOPHAT_SCOPE: 'sam', TOPHAT_SCOPE_GROUPS: 'team,tophat-users', TOPHAT_SCOPE_JOIN: 'tophat-users, sam' }), { scope: 'sam', user: 'sam', groups: ['team'], join: ['tophat-users'] });
+  assert.throws(() => scopeOf({ TOPHAT_SCOPE_JOIN: 'Bad Group' }), /must match/);
   assert.throws(() => scopeOf({ TOPHAT_SCOPE_USER: 'Sam' }), /must match/);
   assert.throws(() => scopeOf({ TOPHAT_SCOPE: 'Lab Group' }), /must match/);
 });
@@ -213,5 +216,64 @@ test('hub sync: a group runner and a member replica exchange the group scope thr
     const leak = ok(answer('search', { query: 'PRIVATE-SAM', kind: 'note' }, { db: labDb, env: lab }));
     assert.ok(!JSON.stringify(leak).includes('do not share'), 'a private note never reaches the group runner');
     assert.equal(ok(answer('status', {}, { db: labDb, env: lab })).hub.url, url);
+  } finally { await new Promise((r) => server.close(r)); hub.close(); }
+});
+
+test('join: a joined group is never created here, writes wait for its key, then land; screens and the roster keep private text out', async () => {
+  const { Hub, issueToken } = await import('../../linknotes/core/src/hub.mjs');
+  const { writeFileSync } = await import('node:fs');
+  const { openStore, screensOf } = await import('../store/memory.mjs');
+  const dir = tmp(), secret = 'local-test-secret-of-at-least-32-characters';
+  const hub = new Hub(path.join(dir, 'hub.sqlite'), { secret });
+  const server = await hub.listen(0);
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const tokenFile = (device, user) => { const f = path.join(dir, `${device}.token`); writeFileSync(f, issueToken(secret, { device, user, expiresAt: Math.floor(Date.now() / 1000) + 3600 }), { mode: 0o600 }); return f; };
+  const roster = path.join(dir, 'people.json');
+  writeFileSync(roster, JSON.stringify({ people: [{ id: 'aunt-may', strict: ['Aunt May Parker'] }] }));
+  try {
+    const adminDb = path.join(dir, 'admin.sqlite'), samDb = path.join(dir, 'sam.sqlite');
+    const admin = { TOPHAT_SCOPE: 'maintainers', TOPHAT_SCOPE_GROUPS: 'tophat-users', TOPHAT_DEVICE: 'admin-1', TOPHAT_HUB_URL: url, TOPHAT_HUB_TOKEN_FILE: tokenFile('admin-1', 'maintainers') };
+    const sam = { TOPHAT_SCOPE: 'sam-private', TOPHAT_SCOPE_USER: 'th-sam1', TOPHAT_SCOPE_JOIN: 'tophat-users', TOPHAT_DEVICE: 'sam-1', TOPHAT_HUB_URL: url, TOPHAT_HUB_TOKEN_FILE: tokenFile('sam-1', 'th-sam1'), TOPHAT_PRIVATE_PEOPLE_FILE: roster };
+    const fix = (id, text, groups) => ({ batch_id: id, ...(groups ? { groups } : {}), changes: { entities: [{ id: '$e', name: `Fix ${id}`, type: 'topic' }], notes: [{ body: text, entities: ['$e'] }] } });
+    // the admin makes the group (its creator is its admin) and the hub learns it
+    ok(await syncStore(adminDb, admin));
+    // the joiner opens before it has any key: the group is not created here, and a write into it is refused, nothing written
+    const rep = openStore(samDb, sam).store;
+    assert.ok(!rep.one('SELECT 1 AS ok FROM mc_groups WHERE grp=?', ['tophat-users']), 'join never creates the group');
+    const early = answer('apply', fix('early', 'BUGFIX before the key arrived', ['tophat-users']), { db: samDb, env: sam });
+    assert.equal(early.code, 2, JSON.stringify(early.result));
+    assert.deepEqual(ok(answer('status', {}, { db: samDb, env: sam })).scope.pending, ['tophat-users']);
+    // a note in the instance's own scope is unaffected
+    ok(answer('apply', fix('home', 'PRIVATE-SAM stays home'), { db: samDb, env: sam }));
+    // the device reaches the hub; the admin adds the user and the key is wrapped to the device
+    ok(await syncStore(samDb, sam));
+    ok(await syncStore(adminDb, admin));
+    openStore(adminDb, admin).store.setMember('tophat-users', 'th-sam1', 'write');
+    ok(await syncStore(adminDb, admin));
+    assert.deepEqual(ok(answer('status', {}, { db: samDb, env: sam })).scope.pending, ['tophat-users'], 'not before the joiner syncs');
+    ok(await syncStore(samDb, sam));
+    ok(await syncStore(samDb, sam));
+    const st = ok(answer('status', {}, { db: samDb, env: sam }));
+    assert.deepEqual(st.scope.pending, [], JSON.stringify(st.scope));
+    assert.deepEqual(st.scope.join, ['tophat-users']);
+    // after the key: the same write lands, reaches the admin; the private note does not
+    ok(answer('apply', fix('late', 'BUGFIX the tank pump restarts after a power cut', ['tophat-users']), { db: samDb, env: sam }));
+    ok(await syncStore(samDb, sam));
+    ok(await syncStore(adminDb, admin));
+    const seen = JSON.stringify(ok(answer('search', { query: 'BUGFIX', kind: 'note' }, { db: adminDb, env: admin })));
+    assert.ok(seen.includes('power cut'), seen.slice(0, 400));
+    assert.ok(!JSON.stringify(ok(answer('search', { query: 'PRIVATE-SAM', kind: 'note' }, { db: adminDb, env: admin }))).includes('stays home'));
+    // screens: a credential, a home path and a rostered person are refused into the group, and nothing is written
+    const before = ok(answer('status', {}, { db: samDb, env: sam })).counts;
+    for (const [id, text, re] of [['k1', 'The fix needs api_key = abcd1234efgh5678', /secret screen/], ['k2', 'It lives in /Users/sam/projects/x/a.mjs', /personal path screen/], ['k3', 'Aunt May Parker told me about this', /private-people screen/]]) {
+      const r = answer('apply', fix(id, text, ['tophat-users']), { db: samDb, env: sam });
+      assert.equal(r.code, 2, `${id}: ${JSON.stringify(r.result)}`);
+      assert.match(r.result.detail, re);
+    }
+    assert.deepEqual(ok(answer('status', {}, { db: samDb, env: sam })).counts, before, 'a screened write leaves nothing behind');
+    // the same words kept in the instance's own scope are the owner's business
+    ok(answer('apply', fix('k4', 'Aunt May Parker told me about this'), { db: samDb, env: sam }));
+    assert.deepEqual(screensOf({ TOPHAT_SCOPE: 'xx', TOPHAT_SCOPE_GROUPS: 'g1', TOPHAT_SCOPE_SCREENS: JSON.stringify([{ pattern: 'acme' }]) }).map((x) => [x.label ?? 'screen', x.groups]), [['screen', ['g1']]]);
+    assert.throws(() => screensOf({ TOPHAT_SCOPE_SCREENS: '{' }), /not JSON/);
   } finally { await new Promise((r) => server.close(r)); hub.close(); }
 });

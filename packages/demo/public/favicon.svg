@@ -1,17 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -10 512 512" width="512" height="512">
 <defs>
-<linearGradient id="be8508afbf9f7" x1="0" x2="1"><stop offset="0" stop-color="#ff93bd"/><stop offset="0.3" stop-color="#e8508a"/><stop offset="1" stop-color="#a8285c"/></linearGradient>
+<linearGradient id="be8508afbf9f7" x1="0" x2="1"><stop offset="0" stop-color="#f6c9cd"/><stop offset="0.3" stop-color="#e6a0a6"/><stop offset="1" stop-color="#b45c6e"/></linearGradient>
 <linearGradient id="re8508afbf9f7" x1="0" x2="1"><stop offset="0" stop-color="#fbf9f7"/><stop offset="0.55" stop-color="#fbf9f7"/><stop offset="1" stop-color="#d2cac4"/></linearGradient>
 </defs>
 <ellipse cx="256" cy="388" rx="176" ry="22" fill="#000" opacity="0.28"/>
-<path d="M84 336 Q78 310 104 318 Q256 290 408 318 Q434 310 428 336 Q422 376 256 380 Q90 376 84 336 Z" fill="#a8285c" stroke="#000" stroke-opacity="0.28" stroke-width="3" stroke-linejoin="round"/>
-<path d="M84 336 Q78 310 104 318 Q256 290 408 318 Q434 310 428 336 Q400 326 256 326 Q112 326 84 336 Z" fill="#ff93bd" opacity="0.4"/>
+<path d="M84 336 Q78 310 104 318 Q256 290 408 318 Q434 310 428 336 Q422 376 256 380 Q90 376 84 336 Z" fill="#b45c6e" stroke="#000" stroke-opacity="0.28" stroke-width="3" stroke-linejoin="round"/>
+<path d="M84 336 Q78 310 104 318 Q256 290 408 318 Q434 310 428 336 Q400 326 256 326 Q112 326 84 336 Z" fill="#f6c9cd" opacity="0.4"/>
 <path d="M182 344 Q176 204 168 76 Q256 52 344 76 Q336 204 330 344 Q256 370 182 344 Z" fill="url(#be8508afbf9f7)" stroke="#000" stroke-opacity="0.28" stroke-width="3" stroke-linejoin="round"/>
 <path d="M200 92 Q196 220 202 346 L224 352 Q216 220 222 90 Z" fill="#fff" opacity="0.28"/>
 <path d="M179 292 Q256 320 335 292 L331 344 Q256 370 183 344 Z" fill="url(#re8508afbf9f7)"/>
 <rect x="229" y="314" width="54" height="48" rx="6" fill="#e6dfd9"/>
 <rect x="241" y="325" width="30" height="26" rx="3" fill="#fbf9f7"/>
 <rect x="253" y="318" width="6" height="40" fill="#e6dfd9"/>
-<ellipse cx="256" cy="76" rx="88" ry="21" fill="#ff93bd" stroke="#000" stroke-opacity="0.28" stroke-width="3" stroke-linejoin="round"/>
-<ellipse cx="256" cy="78" rx="74" ry="14" fill="#e8508a" opacity="0.5"/>
-<path d="M84 336 Q90 376 256 380 Q422 376 428 336 Q422 366 256 370 Q90 366 84 336 Z" fill="#a8285c"/></svg>
+<ellipse cx="256" cy="76" rx="88" ry="21" fill="#f6c9cd" stroke="#000" stroke-opacity="0.28" stroke-width="3" stroke-linejoin="round"/>
+<ellipse cx="256" cy="78" rx="74" ry="14" fill="#e6a0a6" opacity="0.5"/>
+<path d="M84 336 Q90 376 256 380 Q422 376 428 336 Q422 366 256 370 Q90 366 84 336 Z" fill="#b45c6e"/></svg>

@@ -4,140 +4,80 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>tophat: your exobrain, for you, forever.</title>
-<meta name="description" content="Local, open-source agent memory and runner that gets stuff done so you can think.">
-<meta name="color-scheme" content="light dark">
+<meta name="description" content="I'm a local, open-source agent and memory system that does the easy stuff, so you can focus on what matters.">
+<meta name="color-scheme" content="light">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
-:root{--bg:#f3ecd8;--ink:#1b1a18;--dim:#5d5848;--line:#cfc6aa;--box:#ebe2c8;--track:#ddd3b6}
-@media (prefers-color-scheme:dark){:root{--bg:#141311;--ink:#e8e2d0;--dim:#a39d8a;--line:#34312b;--box:#1c1b18;--track:#2a2824}}
+/* white, with the new rose scheme for highlights only: deep #b45c6e (links, accents, rose text on white), light #e6a0a6, mid #dba9b3 */
+:root{color-scheme:light;--bg:#fff;--ink:#1c1b19;--dim:#77736a;--line:#e9e6dd;--rose:#b45c6e;--rose-lt:#e6a0a6;--rose-md:#dba9b3}
 *{box-sizing:border-box}
 html{background:var(--bg);color:var(--ink)}
-body{margin:0;padding:clamp(20px,6vw,64px) 18px 80px;font:15px/1.65 ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
-main{max-width:68ch;margin:0 auto}
-h1{font:inherit;font-weight:700;font-size:1.25em;margin:0 0 .2em}
+body{margin:0;padding:clamp(28px,7vw,80px) 18px 96px;font:15px/1.65 ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace}
+::selection{background:rgba(230,160,166,.45)}
+main{max-width:1040px;margin:0 auto}
+main p,main h1,main h2{max-width:74ch}
+h1{font:inherit;font-weight:400;font-size:1.3em;margin:0 0 .5em}
+h1 b{color:var(--rose);font-weight:700}
 p{margin:0}
-.sub{color:var(--dim);margin-bottom:2.4em}
-h2{font:inherit;font-weight:700;margin:0 0 .6em}
-a{color:inherit}
-code{font:inherit;background:var(--bg);border:1px solid var(--line);padding:0 .3em}
+.sub{color:var(--dim);margin-bottom:2.6em}
+.intro p{margin:0 0 1em}
+.intro{margin-bottom:1.4em}
+h2{font:inherit;font-weight:700;margin:0 0 .7em}
+a{color:var(--rose);text-decoration-color:var(--rose-lt);text-underline-offset:3px}
+a:hover{text-decoration-color:var(--rose)}
+em{font-style:italic}
 
-/* the six boxes: native details, so they open without script */
-.boxes{margin:0 0 2.4em}
-.box{background:var(--box);border:1px solid var(--line);margin:0 0 .7em}
-.box[open]{border-color:var(--dim)}
-summary{display:grid;grid-template-columns:3ch minmax(0,1fr) 2ch;gap:1ch;padding:12px 14px;cursor:pointer;list-style:none}
+/* the boxes: native details, so they open without script; closed, each is its one heading line */
+.boxes{margin:0 0 3em;border-top:1px solid var(--line)}
+.box{border-bottom:1px solid var(--line)}
+summary{display:grid;grid-template-columns:3ch minmax(0,1fr) 2ch;gap:1ch;align-items:baseline;padding:13px 4px;cursor:pointer;list-style:none}
 summary::-webkit-details-marker{display:none}
-summary:hover .line{text-decoration:underline;text-underline-offset:3px}
-summary:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
-.n{color:var(--dim)}
-.line{display:block;font-weight:700}
-.ex{display:block;margin-top:.4em;font-size:.93em;color:var(--dim)}
-.tog{text-align:right;color:var(--dim)}
+.n{color:var(--rose);font-weight:700}
+.line{font-weight:700;font-size:.95em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.box[open] .line{white-space:normal}
+summary:hover .line{color:var(--rose)}
+summary:focus-visible{outline:2px solid var(--rose);outline-offset:-2px}
+.tog{text-align:right;color:var(--rose)}
 .tog::before{content:"+"}
 .box[open] .tog::before{content:"\2212"}
-.more{padding:2px 14px 16px;border-top:1px solid var(--line);font-size:.93em}
+.more{padding:0 4px 22px calc(4ch + 4px)}
 .more>*{margin-top:1em}
-.more ul{margin:1em 0 0;padding:0;list-style:none}
-.more li{padding-left:2ch;text-indent:-2ch}
-.more li::before{content:"- "}
-.more h3{font:inherit;font-weight:700;margin-top:1.6em}
-iframe.w{display:block;width:100%;height:420px;border:1px solid var(--line);background:var(--bg)}
-@media (max-width:560px){iframe.w{height:440px}}
+.more>p:first-child{margin-top:0}
+.more b{color:var(--rose)}
 
-/* charts */
-.chart{margin:1.4em 0 0}
-.chart figcaption{color:var(--dim)}
-.chart figcaption b{color:var(--ink)}
-.chart svg{display:block;width:100%;max-width:460px;margin:.9em 0 0;overflow:visible}
-.chart text{font:11px ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;fill:var(--dim)}
-.chart text.pc{fill:var(--ink)}
-.chart text.us{fill:var(--ink);font-weight:700}
-.chart .tr{fill:var(--track)}
-.chart .bar{fill:var(--dim)}
-.chart .bar.us{fill:var(--ink)}
-.chart .bar.apart{stroke:var(--dim);stroke-width:1}
-.chart .hl{stroke:var(--dim);stroke-width:1.6}
-.chart .sep{stroke:var(--line);stroke-width:1;stroke-dasharray:3 3}
-.fn{margin-top:.6em;font-size:.86em;color:var(--dim)}
+/* the live answer's own figures, each with its shared figcaption inside the frame */
+iframe.w{display:block;width:100%;height:440px;border:1px solid var(--line);background:#fbfaf6}
+iframe.w-memory-bench{height:auto;aspect-ratio:1.85}
+iframe.w-runner-qol{height:560px}
+iframe.w-mac-desktop{height:auto;aspect-ratio:1.45}
+img.shot{display:block;width:100%;max-width:420px;height:auto;border:1px solid var(--line)}
+@media (max-width:640px){
+  body{font-size:14px}
+  .more{padding-left:4px}
+  iframe.w{height:480px}
+  iframe.w-memory-bench{height:auto;aspect-ratio:1.05}
+  iframe.w-runner-qol{height:620px}
+  iframe.w-mac-desktop{height:auto;aspect-ratio:1}
+}
 
-.code{position:relative;background:var(--box);border:1px solid var(--line);margin-top:.6em}
-pre{margin:0;padding:12px 14px;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:.93em}
-button{position:absolute;top:6px;right:6px;font:inherit;font-size:.8em;color:var(--ink);background:var(--bg);border:1px solid var(--line);padding:2px 9px;cursor:pointer}
+.code{position:relative;border:1px solid var(--line);border-left:3px solid var(--rose);margin-top:.6em;max-width:94ch}
+pre{margin:0;padding:12px 70px 12px 14px;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:.93em}
+button{position:absolute;top:8px;right:8px;font:inherit;font-size:.8em;color:var(--rose);background:var(--bg);border:1px solid var(--rose-md);padding:2px 9px;cursor:pointer}
+button:hover{border-color:var(--rose)}
 </style>
 </head>
 <body>
 <main>
-<h1>Your exobrain, for you, forever.</h1>
-<p class="sub">Local, open-source agent memory and runner that gets stuff done so you can think.</p>
-
-<h2>In the box</h2>
+<!--lead-->
+<div class="intro">
+<!--intro-->
+</div>
 <div class="boxes">
-
-<details class="box" id="memory">
-<summary><span class="n">01</span><span><span class="line">Self-hosted agent memory, structured-database-based for high recall.</span><span class="ex">Memory is a local SQLite store of entities, append-only notes that each cite the raw message or file they came from, and work items. In the runner, each turn starts with prefetched context from a full-text search fused across memory, your configured sources and past chats, plus pages derived per entity from the notes, so recall comes from structure and citations.</span></span><span class="tog" aria-hidden="true"></span></summary>
-<div class="more">
-<p>Every row carries the scopes allowed to read it, and two ids for one thing (your "Dana" and a shared "Dana Okafor") can be linked for reads and unlinked later. A push plane fills the store from your sources through a model you configure, under a daily dollar budget. Each entity's page is derived from the notes you can read. Search is full text with rank fusion, not embeddings. <code>tophat graph</code> draws the store as the graph below, and <code>tophat-mcp</code> lets any agent harness read and write the same memory.</p>
-<iframe class="w" loading="lazy" sandbox="allow-scripts" title="The memory graph" src="/_fallback/w/memory-graph"></iframe>
-<h3>Recall, measured</h3>
-<p>Two tests of recall. Each bar is questions answered correctly out of the total; every memory system gets the same answering model and judge, and the chat-assistant services answer with their own models. On the 99 personal questions tophat answers 96, level with putting the whole haystack in the prompt; on the 15 hardest LongMemEval-S questions it answers 8, against 9 for all in context (baseline).</p>
-<!--chart:personal-->
-<!--chart:hard15-->
+<!--boxes-->
 </div>
-</details>
-
-<details class="box" id="runner">
-<summary><span class="n">02</span><span><span class="line">Polished agent runner and chat interface, with a million little QoL features.</span><span class="ex">Each conversation is its own agent process with memory tools, subagents, goals, waits and a browser tool, and the chat app streams replies, thinking and tool calls as they happen. You can send while it works, a restart hands chats over instead of ending them, and the sidebar doubles as an inbox where automated arrivals open their own chats.</span></span><span class="tog" aria-hidden="true"></span></summary>
-<div class="more">
-<ul>
-<li>Subagents: a fresh model conversation with its own tools and budget, six at once, checking in with the parent every 180 s while they run.</li>
-<li>Goals and waits: a turn with open goal items is handed back to the agent, and a blocker that changes with time becomes a wait with a retry time that wakes the chat.</li>
-<li>Select text for Quote, Sidechat and Fork; side threads sit in a rail beside the transcript.</li>
-<li>Images, video, audio, HTML widgets, KaTeX math and code render in the transcript; chats can be incognito, shared by link, or open to several clients at once.</li>
-<li>A reader for articles, EPUB and PDF with highlights, a synced notes editor, a password vault the browser tool fills from without the value entering the transcript, and an offline-capable PWA.</li>
-</ul>
-<iframe class="w" loading="lazy" sandbox="allow-scripts" title="One turn in the runner, as a trace" src="/_fallback/w/runner-turn"></iframe>
-</div>
-</details>
-
-<details class="box" id="mac">
-<summary><span class="n">03</span><span><span class="line">MacOS computer use, including Contacts, iMessage, FindMy, Shortcuts, and Apple Home.</span><span class="ex">Contacts, Calendar, Notes, call history, photo metadata and iMessage (read only) ship in the public repo, along with browser control and a hook for a computer-use server. Find My, Shortcuts and Apple Home are in the full system and not in the public repo yet.</span></span><span class="tog" aria-hidden="true"></span></summary>
-<div class="more">
-<p>Contacts, Calendar and Notes go through a signed helper app that owns the macOS privacy grants; call history, photo metadata and iMessage need Full Disk Access. The public repo reads mail and messages and does not send them. The browser tool leases a Chrome tab, yours or an isolated one, through a loopback DevTools endpoint. The agent runs shell commands without a confirmation step; <code>tophat setup</code> confines its file tools to the instance workspace, not the shell. macOS is the strongest platform.</p>
-<iframe class="w" loading="lazy" sandbox="allow-scripts" title="The apps the agent can reach on a Mac" src="/_fallback/w/mac-apps"></iframe>
-</div>
-</details>
-
-<details class="box" id="connectors">
-<summary><span class="n">04</span><span><span class="line">Connectors enough to capture full context, including location, screen recording, and all-day audio.</span><span class="ex">Sources poll Gmail, IMAP, iMessage, Beeper, Apple apps and REST APIs, and take records through a file drop and a webhook, so each record enters memory with its source attached and is deduplicated by source, account and id. Continuous capture such as location, screen recording and all-day audio is in the full system, and the public repo gives you the adapter interface, file drop and webhook to feed in your own.</span></span><span class="tog" aria-hidden="true"></span></summary>
-<div class="more">
-<p>The runner owns each source's cursor and commits it only after the store has the records, and one broken source never stops the rest. Each source's text goes to your model provider during derivation, so enable them one at a time; a private-people blocklist keeps chosen people's message bodies away from the model. With wakes on, the intake model decides which new arrivals need you and posts them into the owning chat as an automated event.</p>
-<iframe class="w" loading="lazy" sandbox="allow-scripts" title="One day of context arriving, source by source" src="/_fallback/w/connectors"></iframe>
-</div>
-</details>
-
-<details class="box" id="sharing">
-<summary><span class="n">05</span><span><span class="line">Per-memory e2ee p2p sharing for collaborative projects.</span><span class="ex">Each note is sealed under its own fresh AES-256-GCM key, and that key is wrapped to the groups allowed to read it, so access is per note rather than per account or folder. Replicas on each person's devices sync through a hub that stores only ciphertext and can open none of it; <code>share</code> widens one note to a group and <code>retract</code> takes it back.</span></span><span class="tog" aria-hidden="true"></span></summary>
-<div class="more">
-<p>To join a shared scope the hub operator gives your device a token, you sync, the scope's admin adds you and syncs, and you sync again to receive its rows. Removing a member rotates the scope key. Derived pages are reused across members only when each can read every note behind them. Sync is optional and off by default. The hub operator issues device tokens, so against a hub you do not run you trust the operator not to mint devices; run your own if that matters. Team use is early.</p>
-<iframe class="w" loading="lazy" sandbox="allow-scripts" title="The same notes, drawn for four readers" src="/_fallback/w/sharing"></iframe>
-</div>
-</details>
-
-<details class="box" id="local">
-<summary><span class="n">06</span><span><span class="line">All local, private, fully customizable, and open-source.</span><span class="ex">Everything runs on your machine from one instance file: the store is a SQLite file, the chat app listens on loopback only, nothing is installed globally, and the code is MIT licensed. The only things that leave are your prompts to the model provider you chose and, if you run a hub, sealed notes it cannot read.</span></span><span class="tog" aria-hidden="true"></span></summary>
-<div class="more">
-<p>The instance file sets the models, scopes and which components are on; only the store is required. Sources, adapters, retrieval corpora, providers, backends and tools are plugin interfaces, and a local program can stand in as a model provider. The model key lives in the instance keyring, never printed. The core packages import nothing outside Node's standard library and no package has an install script. It needs macOS or Linux, Node 22.13 or newer and an Anthropic API key, and it is young: v1.0.x, not independently audited.</p>
-<iframe class="w" loading="lazy" sandbox="allow-scripts" title="What runs where" src="/_fallback/w/local"></iframe>
-</div>
-</details>
-
-</div>
-
-<h2>Ready to try on your exobrain?</h2>
-<div class="code"><pre id="install"><a href="https://github.com/tophat-md/tophat">https://github.com/tophat-md/tophat</a>
-This repo is a fully local agent memory system and runner (except model providers). Scan the repo for privacy, security, and malintent, then help me install it and fully set it up.</pre></div>
+<!--install-->
 </main>
 <script>
 (function(){var c=document.querySelector('.code'),p=document.getElementById('install');if(!c||!p)return;var b=document.createElement('button');b.type='button';b.textContent='copy';b.onclick=function(){var t=p.textContent;var done=function(){b.textContent='copied';setTimeout(function(){b.textContent='copy'},1200)};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){})}else{var r=document.createRange();r.selectNodeContents(p);var s=getSelection();s.removeAllRanges();s.addRange(r)}};c.appendChild(b)})();

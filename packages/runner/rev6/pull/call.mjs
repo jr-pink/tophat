@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { configFile } from '../base/paths.mjs';
 import { MODELS, ModelError, isOpenAIModel, sanitize, streamMessage, usageOf, writeSplit, cacheTtl } from './wire.mjs';
 import { describe, openaiAuthMode, providersAvailable, resolveCredentials } from './credentials.mjs';
+import { routeKeyed, routeOrNull } from './routes.mjs';
 
 // One import for every call() user: nightly-understanding, tophat-multiplayer, src/core/structured-call.
 export { describe, resolveCredentials, anthropicHeaders as authHeaders } from './credentials.mjs';
@@ -17,6 +18,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function readConfig(env = process.env) {
   try { return JSON.parse(readFileSync(env.TOPHAT_CONFIG || configFile({ ...env, TOPHAT_CONFIG: undefined }), 'utf8')); } catch { return {}; }
+}
+
+/** Push's model (every push-plane call: interpret, pages, wake judging, discharge): TOPHAT_RUNNER_PUSH_MODEL, else
+ *  rev5.purposeModels.push in config.json, else null (the caller then falls back to the chat default). One function,
+ *  so the push heartbeat and the per-turn push queue cannot disagree about it. */
+export function pushModel(env = process.env, config = null) {
+  return env.TOPHAT_RUNNER_PUSH_MODEL || (config || readConfig(env))?.rev5?.purposeModels?.push || null;
 }
 
 /** A named model, else TOPHAT_RUNNER_MODEL, else the config's purposeModels[purpose], else the default. */
@@ -34,7 +42,8 @@ function priceTable(env) {
 
 /** USD for a usage record, from models.json prices (TOPHAT_RUNNER_PRICES overrides); null when unpriced. */
 export function costOf(model, usage = {}, env = process.env) {
-  if (isOpenAIModel(model) && openaiAuthMode(env) === 'chatgpt') return 0;
+  // A ChatGPT-subscription call costs nothing per token; a model with its own route (routes.mjs) is billed by that route.
+  if (isOpenAIModel(model) && openaiAuthMode(env) === 'chatgpt' && !routeOrNull(model, env)) return 0;
   const price = priceTable(env)[model];
   if (!price) return null;
   const cached = usage.cache_read_input_tokens || 0, written = usage.cache_creation_input_tokens || 0;
@@ -133,7 +142,8 @@ const prefillRefusers = new Set(MODELS.prefillRefusers);
 export async function resume(request, text, model, options, stream = streamMessage) {
   const ask = (prefill) => stream({ ...request, messages: prefill ? [...request.messages, { role: 'assistant', content: text }]
     : [...request.messages, { role: 'assistant', content: text }, { role: 'user', content: CONTINUE_PROMPT }] }, options);
-  if (prefillRefusers.has(model)) return ask(false);
+  // A routed model (Chat Completions or Responses) has no assistant prefill: ask for the rest in a user turn.
+  if (prefillRefusers.has(model) || routeOrNull(model, options?.env || process.env)) return ask(false);
   try { return await ask(true); } catch (error) {
     if (!(error instanceof ModelError) || error.status !== 400 || !/prefill|must end with a user message/i.test(error.detail || '')) throw error;
     prefillRefusers.add(model);
@@ -170,7 +180,7 @@ export async function call(input = {}, options = {}) {
 
   let model = chooseModel(input, useEnv, readConfig(env));
   let chain = fallbackChain(model, useEnv).filter((n) => priced(n, useEnv) && allowed(n));
-  const keyedHere = (name) => (isOpenAI(name) ? resolution.openai : resolution.anthropic);
+  const keyedHere = (name) => { const route = routeOrNull(name, env); return route ? routeKeyed(route) : isOpenAI(name) ? resolution.openai : resolution.anthropic; };
   if (!keyedHere(model) && chain.length) {
     emit({ type: 'switch', from: model, to: chain[0], reason: 'auth', detail: `no credential for ${model} on this machine` });
     tried.push({ model, reason: 'auth', detail: 'no credential for this provider on this machine' });

@@ -97,6 +97,8 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
     const instructions = createInstructions({ cwd, roots, env }), childEnv = agentEnv(id, env);
     const tools = createTools({ db, sessionId: row.session_id, cwd, roots, env: childEnv, permissionMode, now, onPath: (p) => instructions.touch(p), factories: toolFactories,
       agents: depth + 1 < limits.depth ? createAgents({ ledger, parentSessionId: row.session_id, cwd, roots, env: childEnv, permissionMode, model: row.model, now, emit, systemContext, depth: depth + 1, toolFactories, stream }) : null });
+    // Held on the entry so a cancel can kill its foreground tool calls (a `sleep 90` kept a cancelled child alive past the stop).
+    if (entry) entry.tools = tools;
     const usage = emptyUsage(priorUsage(row));
     const spent = () => costOf(row.model, usage, env) ?? (row.cost_usd ?? null);
     let childModel = row.model, system = null, systemKey = null, r = { status: 'done', finalText: '', note: '', lastStop: null, pendingNames: [], calls: Number(row.calls) || 0 };
@@ -247,6 +249,7 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
       const entry = live.get(id);
       if (!entry?.running) return describe(row);
       entry.controller.abort();
+      try { entry.tools?.abortForeground?.(); } catch { /* best effort */ }
       return { agent_id: id, status: 'cancelling' };
     },
     /**
@@ -301,7 +304,7 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
       }
       return soonest;
     },
-    cancelAll() { for (const [, entry] of live) if (entry.running) entry.controller.abort(); },
+    cancelAll() { for (const [, entry] of live) if (entry.running) { entry.controller.abort(); try { entry.tools?.abortForeground?.(); } catch { /* best effort */ } } },
     async settled() { await Promise.all([...live.values()].map((e) => e.promise).filter(Boolean)); },
   };
 }

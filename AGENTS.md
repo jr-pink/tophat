@@ -41,7 +41,7 @@ Trade-offs to tell the user about, because they are real:
   what those sources ingest.
 - **Hub sync (optional, off by default).** Sync is end-to-end encrypted, but a hub operator issues device tokens and a
   scope admin's replica wraps scope keys to any device the hub lists for a member. Against a hub the user does not run,
-  that trusts the operator not to mint devices. Local-only use has no hub.
+  that trusts the operator not to mint devices. Local-only use has no hub. Joining the shared `tophat-users` group (`tophat instance join`) is a separate opt-in: the model then writes notes about bugfixes and customizations into it by its own judgment (content screens refuse credentials, home paths and a private-people roster, but a screen is not a guarantee), so tell the user before running it.
 - **Spend cap.** The push/intake budget (`budget.dailyUsd`) is enforced only when the model entry has a `price`.
 
 ## 2. Install the server (about two minutes)

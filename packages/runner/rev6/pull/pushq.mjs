@@ -2,7 +2,7 @@
 // records (owner words, replies, tool calls with their outcomes), and is settled only on the store's own receipt.
 import { redactSecrets } from '../tools/runner/redact.mjs';
 import { cut } from '../base/text.mjs';
-import { readConfig } from './call.mjs';
+import { pushModel } from './call.mjs';
 import { textOf } from './loop.mjs';
 import { runnerChatVerdict } from './chat-scope.mjs';
 import { memoryCli, receiptComplete } from './tools.mjs';
@@ -36,7 +36,6 @@ export function transcriptRecords(ledger, sessionId, fromSeq, toSeq) {
   return out;
 }
 
-const pushModel = (env) => env.TOPHAT_RUNNER_PUSH_MODEL || readConfig(env)?.rev5?.purposeModels?.push || null;
 async function ackState(records, env, cli = memoryCli) {
   const acked = [], unacked = [], unknown = [];
   for (const record of records) {

@@ -39,6 +39,9 @@ import { TOOL_ALIASES, aliasInput, clipHeadTail, describeTools, fastSearchEnv, h
 const REPO = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const RESULT_CHARS = 30_000;
 const FILE_BYTES = 200_000, SHELL_MS = 120_000, JOB_OUTPUT_CHARS = 200_000, MEMORY_MS = 60_000;
+// The serving process's own listen settings: the webchat's PORT reached every tool shell, so a dev server or a test
+// harness the model started tried to bind the webchat's port. Tools pick their own.
+const SERVER_ENV = /^PORT$/;
 const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|_FILE$|^SSH_AUTH_SOCK$|^SSH_AGENT_PID$/i;
 
 // ---- specs as data.
@@ -101,7 +104,7 @@ export function toolPath(env = process.env) {
 }
 export function scrubbedEnv(env = process.env) {
   const keep = {};
-  for (const [k, v] of Object.entries(env)) if (!SECRET_ENV.test(k)) keep[k] = v;
+  for (const [k, v] of Object.entries(env)) if (!SECRET_ENV.test(k) && !SERVER_ENV.test(k)) keep[k] = v;
   return { ...keep, HOME: env.HOME || homedir(), PATH: toolPath(env), LANG: env.LANG || 'en_US.UTF-8' };
 }
 const TRUSTED = ['TOPHAT_RUNNER_API_KEY_FILE', 'TOPHAT_RUNNER_OPENAI_API_KEY_FILE', 'TOPHAT_RUNNER_CHATGPT_AUTH_FILE', 'TOPHAT_RUNNER_WORKSPACE_ID_FILE', 'TOPHAT_RUNNER_MODEL', 'TOPHAT_RUNNER_MAX_TOKENS',

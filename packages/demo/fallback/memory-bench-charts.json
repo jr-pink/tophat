@@ -1,7 +1,7 @@
 {
  "personal_flooded_with_services": {
   "caption": "99 questions about one person's real messages, workouts, sleep and code history, with the answers buried in about 300k tokens of everyday text; memory systems and chat-assistant services on the same questions; same answering model and judge for every memory system, each service answers with its own model.",
-  "note": "Every row except the evidence-only assistant holds the whole flooded haystack (7,326 events): the memory systems by ingest, the three chat-assistant services sent it through their normal chat interface (Grok Bot as file attachments). One assistant, marked separately, was sent only the 137 events that hold the answers and is scored on the questions she was asked.",
+  "note": "Every row holds the whole flooded haystack (7,326 events): the memory systems by ingest, the three chat-assistant services sent it through their normal chat interface (Grok Bot as file attachments).",
   "n": 99,
   "categories": [
    "single_fact",
@@ -315,42 +315,6 @@
       "score": 1.0,
       "correct": 13,
       "n": 13
-     }
-    }
-   },
-   {
-    "system": "Evidence-only assistant",
-    "footnote": "different input: held only the 137 events that contain the evidence",
-    "separate": true,
-    "score": 0.963,
-    "correct": 77,
-    "n": 80,
-    "answered": 80,
-    "categories": {
-     "single_fact": {
-      "score": 0.947,
-      "correct": 18,
-      "n": 19
-     },
-     "multi_session": {
-      "score": 1.0,
-      "correct": 16,
-      "n": 16
-     },
-     "temporal": {
-      "score": 1.0,
-      "correct": 17,
-      "n": 17
-     },
-     "knowledge_update": {
-      "score": 0.875,
-      "correct": 14,
-      "n": 16
-     },
-     "abstention": {
-      "score": 1.0,
-      "correct": 12,
-      "n": 12
      }
     }
    }

@@ -3,6 +3,7 @@
   import RichContent from './RichContent.svelte';
   import { createMarkdownCache } from '$lib/core/markdown.js';
   import { offsetsOfRange, rangeFromOffsets } from '$lib/core/textrange.js';
+  import { fetchFileVersion, rawPathsIn, stampImages } from '$lib/core/file-version.js';
 
   let { text = '', onpath = () => {} } = $props();
 
@@ -16,6 +17,26 @@
     const id = artifactConversation();
     return id && html.includes('/api/file?path=') ? html.replaceAll('/api/file?path=', `/api/file?conversation=${encodeURIComponent(id)}&amp;path=`) : html;
   }
+
+  // A local image is addressed by its path, which does not change when the file is rewritten, and a
+  // browser keeps one picture per URL: a later reply embedding the same path showed the earlier bytes.
+  // So each image asks the server for the file's version when this message is drawn and its URL carries
+  // it (`&v=<mtime>-<size>`); the img has no src until the answer comes, so the unversioned URL is
+  // never fetched. Per component on purpose: a message drawn later asks again and gets the new bytes.
+  // A failed lookup is '' and falls back to the plain URL.
+  let versions = $state({});
+  const asked = new Set();
+  $effect(() => {
+    const conversation = artifactConversation();
+    for (const block of blocks) {
+      if (block.rich) continue;
+      for (const path of rawPathsIn(block.html)) {
+        if (asked.has(path)) continue;
+        asked.add(path);
+        fetchFileVersion(path, conversation).then((v) => { versions = { ...versions, [path]: v }; });
+      }
+    }
+  });
 
   function handle(event) {
     const target = event.target.closest('.md-path');
@@ -74,7 +95,7 @@
 
 <div class="prose" bind:this={root} onclick={handle} onpointerover={hover} role="presentation">
   {#each blocks as block (block.key)}
-    {#if block.rich}<RichContent content={block.rich} conversationId={artifactConversation()} />{:else}<div class="block">{@html withConversation(block.html)}</div>{/if}
+    {#if block.rich}<RichContent content={block.rich} conversationId={artifactConversation()} />{:else}<div class="block">{@html withConversation(stampImages(block.html, versions))}</div>{/if}
   {/each}
 </div>
 

@@ -156,7 +156,9 @@ export async function startFakeProvider({ reply = () => textReply('ok'), key = n
   const url = `http://127.0.0.1:${server.address().port}`;
   return {
     url, requests, state,
-    close: () => new Promise((resolve) => { for (const r of state.open) r.destroy(); server.close(() => resolve()); })
+    // closeAllConnections: a reply that never resolves (a hung request) has no open stream to destroy, and server.close
+    // waits on its connection for ever, which hung every test that scripted one.
+    close: () => new Promise((resolve) => { for (const r of state.open) r.destroy(); server.close(() => resolve()); server.closeAllConnections?.(); })
   };
 }
 

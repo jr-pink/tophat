@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {refuseLiveUnderTest, underTest} from './live-state-guard.mjs';
+import {routeFor} from '../rev6/pull/routes.mjs';
 
 const KNOWN_KEYS = ['version', 'profile', 'paths', 'install', 'ingress', 'heartbeat',
   'models', 'evaluation', 'briefs', 'delivery', 'mail', 'sources', 'speech', 'recognition', 'work',
@@ -256,6 +257,11 @@ export function validateRev5(rev5) {
   }
   if (rev5.backgroundTurnMinGeneratingMs !== null && (!Number.isSafeInteger(rev5.backgroundTurnMinGeneratingMs) || rev5.backgroundTurnMinGeneratingMs < 0)) throw new Error('rev5.backgroundTurnMinGeneratingMs must be an integer (milliseconds) >= 0 or unset');
   if (rev5.searxngUrl !== null && !/^https?:\/\//.test(rev5.searxngUrl || '')) throw new Error('rev5.searxngUrl must be an http(s) URL or null');
+  // Model routes (rev6/pull/routes.mjs): a malformed one fails here, at configuration time, by its key.
+  if (rev5.modelRoutes !== undefined) {
+    if (!rev5.modelRoutes || typeof rev5.modelRoutes !== 'object' || Array.isArray(rev5.modelRoutes)) throw new Error('rev5.modelRoutes must be an object keyed by model name');
+    for (const name of Object.keys(rev5.modelRoutes)) routeFor(name, {}, rev5.modelRoutes);
+  }
   if (rev5.mailAccounts !== undefined && rev5.mailAccounts !== null) throw new Error('rev5.mailAccounts is retired: the Gmail account list is config.json sources (kind "gmail", config.mailDir/email/stream)');
 }
 
