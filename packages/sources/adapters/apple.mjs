@@ -40,10 +40,25 @@ ${usage('NSCalendarsUsageDescription', 'Read calendar events into your private a
 }
 
 /** One helper run: config in a 0600 temp file, structured answer out; the helper's own result is authoritative. */
-export async function helper(source, operation, { run = exec, platform = process.platform } = {}) {
+/** Notes must be running: AEDeterminePermissionToAutomateTarget answers procNotFound (-600) for a target that is not,
+ * which the helper reports as permission-denied though the grant is intact. Launch it hidden, without focus, and wait
+ * for the process. */
+export async function ensureNotesRunning({ run = exec, waitMs = 15000 } = {}) {
+  const running = async () => { try { await run('/usr/bin/pgrep', ['-x', 'Notes'], { timeout: 5000 }); return true; } catch { return false; } };
+  if (await running()) return false;
+  try { await run('/usr/bin/open', ['-g', '-j', '-a', 'Notes'], { timeout: 30000 }); } catch { /* the helper's answer decides */ }
+  for (const end = Date.now() + waitMs; Date.now() < end; await new Promise((r) => setTimeout(r, 500))) {
+    if (await running()) { await new Promise((r) => setTimeout(r, 1500)); return true; }
+  }
+  return false;
+}
+
+export async function helper(source, operation, { run = exec, platform = process.platform, ensureTarget } = {}) {
   if (platform !== 'darwin') fail('macos-required');
   const c = source.config || {};
   if (!c.helperApp) fail('native-helper-required');
+  // Only a real run launches Notes; an injected run (tests) gets no side effect unless it passes ensureTarget.
+  if (source.kind === 'apple-notes') await (ensureTarget ?? (run === exec ? ensureNotesRunning : async () => {}))();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'linknotes-source-')); fs.chmodSync(dir, 0o700);
   const input = path.join(dir, 'input.json'), output = path.join(dir, 'output.json');
   try {

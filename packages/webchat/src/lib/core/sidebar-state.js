@@ -44,9 +44,13 @@ export const sidebarDecl = declare({
       const clean = normalizeWorkspace(to);
       if (!clean || clean === from) return s;
       const a = folderKey(from), b = folderKey(clean);
-      return { ...s, names: renamedIn(s.names, from, clean), layout: renamedLayout(s.layout, from, clean), open: swapKey(s.open, a, b), current: s.current === from ? clean : s.current };
+      const names = renamedIn(s.names, from, clean), layout = renamedLayout(s.layout, from, clean), open = swapKey(s.open, a, b), current = s.current === from ? clean : s.current;
+      return names === s.names && layout === s.layout && open === s.open && current === s.current ? s : { ...s, names, layout, open, current };
     },
-    'folder.remove': (s, { name }) => ({ ...s, names: withoutName(s.names, name), layout: removedLayout(s.layout, name), current: s.current === name ? null : s.current }),
+    'folder.remove': (s, { name }) => {
+      const names = withoutName(s.names, name), layout = removedLayout(s.layout, name), current = s.current === name ? null : s.current;
+      return names === s.names && layout === s.layout && current === s.current ? s : { ...s, names, layout, current };
+    },
     // `all` is every folder name on screen (device names plus names found on chats): the move is a pure function of it.
     'folder.move': on('layout', (layout, { all, drag, target, where }) => moveFolder(all, layout, drag, target, where)),
     'workspace.enter': set('current', 'name'),

@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { createHash } from 'node:crypto';
 import { SqliteBackend } from '@tophat-md/linknotes';
+import { hybridSearch } from '@tophat-md/linknotes/hybrid';
 
 const SCOPE_RE = /^[a-z][a-z0-9-]{1,47}$/;
 export const DEFAULT_SCOPE = 'local';
@@ -138,7 +139,9 @@ function dispatch(s, command, req, readOnly, env) {
     throw new StoreErrorLike('task op must be list, get, apply or chat');
   }
   if (command === 'ingest') return s.ingest((req.records || []).map(asRecord), req.groups ? { acl: req.groups } : {});
-  if (command === 'search') return s.search(req.query, { kind: req.kind, limit: req.limit || 20, asOf: req.as_of, allTerms: Boolean(req.all_terms) });
+  // Lexical search, plus dense retrieval fused by RRF when memory-embeddings.json beside the store turns it on (linknotes
+  // hybrid.mjs; no file: the store's own search). `derived` gives derived memory its own allowance beside the raw hits.
+  if (command === 'search') return hybridSearch(s, req.query, { kind: req.kind, limit: req.limit || 20, asOf: req.as_of, allTerms: Boolean(req.all_terms), derived: req.derived });
   if (command === 'read') return s.read(req.kind, String(req.id ?? ''), { nodes: req.nodes, budget: req.budget, asOf: req.as_of, history: Boolean(req.history) });
   if (command === 'apply') {
     // The evidence row cite() writes and the notes citing it land together or not at all: a refused batch leaves no

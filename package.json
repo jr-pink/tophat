@@ -10,7 +10,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --test --test-concurrency=1 packages/*/test/*.test.mjs test/*.test.mjs",
+    "test": "node --import ./test/hermetic-env.mjs --test --test-concurrency=1 packages/*/test/*.test.mjs test/*.test.mjs",
     "vendor": "node scripts/vendor.mjs",
     "vendor:check": "node scripts/vendor.mjs --check"
   },

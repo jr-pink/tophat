@@ -1104,6 +1104,9 @@ if (!process.env.VITEST && !bootIsBuild()) {
       return storeDeliver({ store: app.store, runner: app.runner, resolveConversation, settle })(text, opts);
     },
     probe: async (args) => { const { resolveConversation } = await import('./ff.js'); return storeProbe(app.store, resolveConversation)(args); },
+    // The goal's work row through the webchat's own door to the shared store: a due wait whose goal is gone, closed or
+    // handed to another chat is deleted instead of fired (rev5/wait-sweeper.mjs point 7).
+    getWork: async (id) => { const { getTaskAsync } = await import('./tasks-bridge.js'); return getTaskAsync(id); },
     escalate: async ({ kind, sessionId, wait, detail }) => {
       // Queued into the once-a-day #tophat digest (discord-post.mjs queues everything but --reply-to/--immediate).
       if (!process.env.TOPHAT_CHAT_POST_MODULE) throw new Error('no chat-post module configured (TOPHAT_CHAT_POST_MODULE)');

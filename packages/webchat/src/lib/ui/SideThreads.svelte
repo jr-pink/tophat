@@ -40,6 +40,14 @@
     // Comment mode (public documents): passed to each card; `onresolve(id, resolved)`.
     comments = false,
     onresolve = null,
+    // The reader (src/routes/reader/+page.svelte): its anchors are offsets into one text index
+    // over the whole article, not into a row, so it hands over the scroller, a function that turns
+    // a thread into its DOM Range, and paints its own highlights. Unset, chat and docs as before.
+    scrollRoot = null,
+    locate = null,
+    paintSpans = true,
+    // Extra buttons in a card's header (the reader's Edit / Open link / Delete), given the thread.
+    actions = null,
     // Width of the rail in px; the chat pane passes railWidthFor(its width).
     railWidth = RAIL_WIDTH
   } = $props();
@@ -68,6 +76,10 @@
   }
 
   function rangeFor(thread) {
+    if (locate) {
+      const range = locate(thread);
+      return range ? { row: scroller, range } : null;
+    }
     const row = rowFor(thread.sidechat?.itemId);
     if (!row) return null;
     const resolved = resolveAnchor(thread.sidechat, row.textContent || '');
@@ -99,6 +111,7 @@
 
 
   function paint() {
+    if (!paintSpans) return;
     const registry = globalThis.CSS?.highlights;
     if (!registry) return;
     const all = [];
@@ -125,7 +138,7 @@
 
   $effect(() => {
     if (!root) return;
-    scroller = root.closest('.scroller');
+    scroller = scrollRoot || root.closest('.scroller');
   });
 
   $effect(() => {
@@ -266,6 +279,7 @@
           {comments}
           resolved={Boolean(thread.resolvedAt)}
           onresolve={onresolve ? (value) => onresolve(thread.id, value) : null}
+          {actions}
         />
       </div>
     </div>

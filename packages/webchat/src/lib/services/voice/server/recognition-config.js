@@ -18,7 +18,7 @@ function located(name, override) {
 // and nothing else. It belongs to the webchat rather than to the recognizer,
 // which is why it is passed as configuration. The words the fast preview gets
 // wrong are names, which is what a decoder prompt is for.
-const PROMPT = process.env.TOPHAT_WHISPER_PROMPT || '';
+const PROMPT = process.env.TOPHAT_WHISPER_PROMPT || null;
 
 /**
  * The configuration this webchat transcribes under: the owner's `recognition`

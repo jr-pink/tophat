@@ -5,6 +5,13 @@
   const D = window.__DEMO, $ = (id) => document.getElementById(id);
   const demo = document.querySelector('.demo'), list = $('list'), chat = $('chat'), scroll = $('scroll'), text = $('text'), send = $('send'), left = $('left'), note = $('note'), center = $('center');
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  // the embedding page may switch theme live: pin this page and pass it to the graph frame (same origin)
+  window.addEventListener('message', (e) => {
+    const m = e.data; if (!m || m.type !== 'tophat-theme' || (m.theme !== 'dark' && m.theme !== 'light')) return;
+    document.documentElement.dataset.theme = m.theme;
+    const g = $('graph'); if (g && g.contentWindow) g.contentWindow.postMessage({ type: 'tophat-theme', theme: m.theme }, location.origin);
+  });
+  { const g = $('graph'); if (g) g.addEventListener('load', () => { const t = document.documentElement.dataset.theme; if (t) g.contentWindow.postMessage({ type: 'tophat-theme', theme: t }, location.origin); }); }
   const KEY = 'tophat-demo-session';
   let token = sessionStorage.getItem(KEY) || '', mine = [], turns = 0, resting = false, busy = false;
   let cur = { kind: 'seed', id: D.selected };

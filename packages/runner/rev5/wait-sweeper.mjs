@@ -16,7 +16,45 @@
 //     'runner-not-ready' without appending, and a refusal seen by the probe redelivers at once instead of after the grace.
 //  5. A hung deliver() left the sweeper's `busy` flag set forever; the pass now times out, and every pass writes sweeper.json
 //     so `tophat-timer check` sees a dead sweeper from outside.
-import { allWaitsAsync, beatSweeperAsync, logFire, openWaits, wakeText } from './waits.mjs';
+//  7. a goal handed to another chat and then finished vanished from its ledger
+//     while its wait stayed, and fired five times for nothing. Before every delivery the sweeper now reads the goal's
+//     work row (or the legacy ledger) and deletes the wait instead of firing when the goal is gone, closed, or owned
+//     by another chat (waits.mjs orphanReason); one log line and one fire-log record say so.
+import { allWaits, allWaitsAsync, beatSweeperAsync, logFire, openWaits, orphanReason, readLegacyLedger, removeOrphanWait, wakeText } from './waits.mjs';
+import { taskRequestAsync } from './tasks.mjs';
+
+/** getWork for the sweeper: the shared work row by id, as the task CLI answers ({ ok, work } | { ok:false, reason, message }). */
+export const defaultGetWork = (env) => (id) => taskRequestAsync({ op: 'get', id }, env);
+
+/** Why a wait's goal is gone (string), or null when it is live or the store could not say. Never throws. */
+export async function waitOrphanReason({ sessionId, wait, getWork, env = process.env }) {
+  try {
+    if (wait.work_id) {
+      const answer = await getWork(String(wait.work_id));
+      if (answer?.ok && answer.work) return orphanReason({ sessionId, wait, row: answer.work });
+      const said = `${answer?.message || ''} ${answer?.detail || ''} ${answer?.error || ''}`;
+      if (answer && answer.reason === 'refused' && /\bno work\b/.test(said)) return orphanReason({ sessionId, wait, missing: true });
+      return null; // unavailable, timed out, unparsable: fire as before
+    }
+    return orphanReason({ sessionId, wait, ledger: readLegacyLedger(sessionId, env) });
+  } catch { return null; }
+}
+
+/**
+ * Every wait in every chat checked against its goal (not only due ones); orphans are removed through the same path the
+ * sweeper uses (`tophat-timer prune`). dryRun reports without removing. Returns [{ session_id, wait, goal, work, reason }].
+ */
+export async function pruneOrphanWaits({ env = process.env, getWork = defaultGetWork(env), dryRun = false, log = () => {}, now = () => new Date().toISOString() } = {}) {
+  const out = [];
+  for (const { session_id: sessionId, wait } of allWaits({ env })) {
+    const reason = await waitOrphanReason({ sessionId, wait, getWork, env });
+    if (!reason) continue;
+    if (dryRun) { out.push({ session_id: sessionId, wait: wait.id, goal: wait.goal_id, work: wait.work_id || null, reason, dry_run: true }); continue; }
+    const removed = removeOrphanWait({ sessionId, wait, reason, via: 'prune', env, now, log });
+    if (removed) out.push(removed);
+  }
+  return out;
+}
 
 export const ACK_GRACE_MS = Number(process.env.WEBCHAT_RETRY_ACK_GRACE_MS || 60_000);
 export const ACTIVE_MAX_MS = 30 * 60e3; // a chat busy this long without ever producing a reply is escalated
@@ -27,7 +65,7 @@ export const MAX_ATTEMPTS = 5;
  * probe({ sessionId, cursor }) -> { acked, active } ; acked: a turn ran after the wake, active: the chat shows other activity.
  * escalate({ kind, sessionId, wait, detail }) surfaces a give-up (digest); never throws into the pass.
  */
-export async function sweepWaits({ deliver, probe, escalate = async () => {}, env = process.env, nowMs = Date.now(), log = () => {} } = {}) {
+export async function sweepWaits({ deliver, probe, escalate = async () => {}, env = process.env, nowMs = Date.now(), log = () => {}, getWork = defaultGetWork(env) } = {}) {
   const out = [];
   const nowIso = new Date(nowMs).toISOString();
   const fl = (r) => logFire(r, { env, now: () => nowIso });
@@ -67,6 +105,13 @@ export async function sweepWaits({ deliver, probe, escalate = async () => {}, en
   return out;
 
   async function attempt({ sessionId, wait, attempt: n, dueAt }) {
+    // A wait whose goal is gone, closed or owned by another chat is deleted, never fired (point 7 above).
+    const orphan = await waitOrphanReason({ sessionId, wait, getWork, env });
+    if (orphan) {
+      removeOrphanWait({ sessionId, wait, reason: orphan, via: 'sweeper', env, now: () => nowIso, log });
+      out.push({ wait: wait.id, sessionId, orphan: true, reason: orphan });
+      return;
+    }
     const fire = n > 1 ? wait.fires : (wait.fires || 0) + 1;
     const actionId = `${sessionId}:${wait.id}:${fire}:${n}`;
     const base = { session_id: sessionId, wait: wait.id, goal: wait.goal_id, fire, attempt: n, due_at: dueAt, late_by_s: Math.round((nowMs - Date.parse(dueAt)) / 1000) };

@@ -25,6 +25,16 @@ function productCss() {
   try { return readFileSync(path.join(WEBCHAT, 'app.css'), 'utf8').replace(/@import[^;]*;/g, ''); } catch { return ''; }
 }
 
+/** Theme pinning for an embed: the app.css palette follows the system (dark :root, light under prefers-color-scheme);
+ * `:root[data-theme]` pins either one, with the values read from app.css itself so there is one palette. */
+export function themeCss(css) {
+  const block = (re) => { const m = re.exec(css); return m ? m[1].replace(/\/\*[\s\S]*?\*\//g, '').split(';').map((d) => d.trim()).filter((d) => /^(--[\w-]+|color-scheme)\s*:/.test(d)).join(';') : ''; };
+  const dark = block(/:root\s*\{([\s\S]*?)\}/), light = block(/@media\s*\(prefers-color-scheme:\s*light\)\s*\{\s*:root\s*\{([\s\S]*?)\}/);
+  return (dark ? `:root[data-theme=dark]{${dark}}` : '') + (light ? `:root[data-theme=light]{${light}}` : '');
+}
+const THEMES = new Set(['dark', 'light']);
+export const themeOf = (v) => (THEMES.has(v) ? v : null);
+
 const REPO = 'https://github.com/tophat-md/tophat';
 export const ONBOARD = (repo) => `${repo}\nThis repo is a fully local agent memory system and runner (except model providers). Scan the repo for privacy, security, and malintent, then help me install it and fully set it up.`;
 const md = (text) => compileMarkdown(String(text || '')).map((b) => `<div>${b.html}</div>`).join('');
@@ -47,7 +57,8 @@ const seedOf = (c, cache, s) => {
 };
 
 /** The whole page, server-rendered with the seeded chats in it; the script makes it interactive. */
-export function page(c, cache, selected) {
+export function page(c, cache, selected, theme = null) {
+  theme = themeOf(theme);
   const listed = [...c.slots.filter((s) => s.id === c.pinned), ...c.slots.filter((s) => s.id !== c.pinned)];
   const seeds = listed.map((s) => seedOf(c, cache, s));
   const sel = seeds.find((s) => s.id === selected) || seeds[0];
@@ -55,10 +66,11 @@ export function page(c, cache, selected) {
   const v = c.visitors || {};
   const boot = { seeds, selected: sel.id, graph: c.graphSlot, cap: v.turnsPerSession ?? 5, siteKey: c.turnstile?.siteKey || '', download: c.downloadUrl || REPO };
   const seedView = (s) => `<header><h1>${esc(s.title)}</h1><p class="meta">${s.daily ? 'refreshed daily · ' : ''}${s.at ? `answered ${esc(day(s.at))}${s.model ? ` by ${esc(s.model)}` : ''}` : 'not answered yet'}</p></header><div class="turn user"><div class="bubble">${esc(s.prompt)}</div></div><div class="turn assistant"><div class="prose">${s.html}</div></div>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  const css = productCss();
+  return `<!doctype html><html lang="en"${theme ? ` data-theme="${theme}"` : ''}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>tophat · live demo</title><meta name="color-scheme" content="light dark">
 <link rel="preload" href="graph/snapshot.json" as="fetch" crossorigin="anonymous">
-<style>${productCss()}
+<style>${css}${themeCss(css)}
 body{margin:0;height:100%;overflow:hidden}
 .demo{display:grid;grid-template-columns:232px minmax(0,1fr) minmax(0,44%);height:100vh;height:100dvh}
 nav.side{border-right:1px solid var(--line);background:var(--bg-sunken);display:flex;flex-direction:column;min-height:0}
@@ -98,7 +110,8 @@ main.center{display:flex;flex-direction:column;min-width:0;min-height:0;position
 aside.split{border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0;min-height:0}
 .gchat{padding:8px 14px 10px;border-bottom:1px solid var(--line);max-height:36%;overflow:auto;flex:none}
 .gchat .turn{margin-top:6px}.gchat .prose{font-size:14px;margin-top:6px}.gchat a{font:12px var(--sans);color:var(--accent);cursor:pointer}
-.gframe{flex:1;min-height:0;position:relative;background:#efe6cc}.gframe iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.gframe{flex:1;min-height:0;position:relative;background:#efe6cc}
+@media (prefers-color-scheme: dark){:root:not([data-theme=light]) .gframe{background:#141311}}:root[data-theme=dark] .gframe{background:#141311}.gframe iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .tabs{display:none}
 @media (max-width:760px){
  .demo{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
@@ -117,7 +130,7 @@ aside.split{border-left:1px solid var(--line);display:flex;flex-direction:column
 <main class="center" id="center"><div class="scroll" id="scroll"><article class="chat" id="chat">${seedView(sel)}</article></div>
 <div class="composer"><div id="ts"></div><form id="form"><textarea id="text" rows="1" placeholder="Ask about tophat" aria-label="message"></textarea><button id="send" type="submit">Send</button></form><div class="left"><span id="left">${boot.cap} turns left</span><span id="note"></span></div></div>
 <div class="limit"><div class="card"><a class="line" href="${esc(boot.download)}" target="_blank" rel="noopener">ok you'll have to download yourself to try it</a><div class="code"><pre id="onboard">${esc(ONBOARD(boot.download))}</pre><button type="button" id="copy">Copy</button></div></div></div></main>
-<aside class="split"><div class="gchat" id="gchat">${graph ? `<div class="turn user"><div class="bubble">${esc(graph.title)}</div></div><div class="prose">${graph.html}</div><a data-open="${esc(graph.id)}">continue this chat</a>` : ''}</div><div class="gframe"><iframe id="graph" src="graph" title="memory graph" loading="eager"></iframe></div></aside>
+<aside class="split"><div class="gchat" id="gchat">${graph ? `<div class="turn user"><div class="bubble">${esc(graph.title)}</div></div><div class="prose">${graph.html}</div><a data-open="${esc(graph.id)}">continue this chat</a>` : ''}</div><div class="gframe"><iframe id="graph" src="graph${theme ? `?theme=${theme}` : ''}" title="memory graph" loading="eager"></iframe></div></aside>
 </div>
 <script>window.__DEMO=${JSON.stringify(boot).replace(/</g, '\\u003c')}</script>
 <script src="demo.js" defer></script>
@@ -202,15 +215,16 @@ export async function serve(c) {
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { allow: 'GET, HEAD' }); return res.end(); }
       if (p === '/healthz') return json(res, 200, { ok: true, chats: Object.keys(loadCache(c)).length, snapshot: existsSync(c.snapshot), resting: visitors.resting() });
       if (p === '/' || p === '/index.html') {
-        const key = cacheKey() + '|' + (u.searchParams.get('c') || '');
-        if (pageMemo.key !== key) { const body = Buffer.from(page(c, loadCache(c), u.searchParams.get('c'))); pageMemo = { key, v: { body, gz: gzipSync(body), etag: etagOf(body) } }; }
+        const theme = themeOf(u.searchParams.get('theme'));
+        const key = cacheKey() + '|' + (u.searchParams.get('c') || '') + '|' + (theme || '');
+        if (pageMemo.key !== key) { const body = Buffer.from(page(c, loadCache(c), u.searchParams.get('c'), theme)); pageMemo = { key, v: { body, gz: gzipSync(body), etag: etagOf(body) } }; }
         return send(req, res, 200, pageMemo.v, TYPES['.html'], { 'cache-control': 'no-cache', 'content-security-policy': pageCsp });
       }
       if (p === '/demo.js') return send(req, res, 200, fileBody(path.join(HERE, 'client.js')), TYPES['.js'], { 'cache-control': 'public, max-age=300' });
       if (p === '/graph' || p === '/graph/') {
         // asset URLs carry their content hash, so an edge cache never serves a stale bundle after an update
         const ver = (f) => fileBody(path.join(c.viewerAssets, f)).etag.replace(/"/g, '').slice(0, 12);
-        const v = fileBody(path.join(c.viewerAssets, 'index.html'), (html) => html.replace('<meta name="th-hub" content="">', '<meta name="th-hub" content=""><meta name="th-public" content="snapshot.json"><base href="/graph/">')
+        const v = fileBody(path.join(c.viewerAssets, 'index.html'), (html) => html.replace('<meta name="th-hub" content="">', '<meta name="th-hub" content=""><meta name="th-public" content="snapshot.json"><meta name="th-theme" content="auto"><base href="/graph/">')
           .replace('src="/graph/libs.js"', `src="/graph/libs.js?v=${ver('libs.js')}"`).replace('src="/graph/app.js"', `src="/graph/app.js?v=${ver('app.js')}"`));
         return send(req, res, 200, v, TYPES['.html'], { 'cache-control': 'no-cache', 'content-security-policy': `default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; form-action 'none'; base-uri 'self'; frame-ancestors ${ancestors}` });
       }

@@ -1,7 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte';
   import Composer from './Composer.svelte';
-  import DictationMic from './DictationMic.svelte';
+  import DictationMic from '../services/voice/ui/DictationMic.svelte';
   import { newChatSettings } from '$lib/client/agent-preference.js';
 
   let { session, online = true, onnewchat } = $props();

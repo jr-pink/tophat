@@ -8,10 +8,10 @@ import { join } from 'node:path';
 import {
   MAX_AUDIO_BYTES as RECOGNITION_MAX_BYTES, RecognitionError, cleanTranscript,
   recognitionReady, recognitionSettings, resolveModel, stageClip, transcribeSpeech
-} from '../../../../runner/src/speech/recognition.mjs';
-import { readSecret } from './auth.js';
+} from '../../../../../../runner/src/speech/recognition.mjs';
+import { readSecret } from '../../../server/auth.js';
 import { recognitionConfig, recognitionSettingsNow } from './recognition-config.js';
-import { signalTree } from './kill-tree.mjs';
+import { signalTree } from '../../../server/kill-tree.mjs';
 import { FINAL_PORT, LIVE_PORT, ensure, modelFor, transcribeBuffer, transcribeVia } from './whisper-service.js';
 
 const TTS_URL = process.env.TOPHAT_TTS_URL || 'http://127.0.0.1:8823';

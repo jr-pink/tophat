@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { readSecret } from './auth.js';
+import { readSecret } from '../../../server/auth.js';
 import { transcribe, whisperModel, transcriptionReady } from './voice.js';
 
 const REPO = process.env.WEBCHAT_REPO || join(homedir(), '.local', 'share', 'tophat', 'workspace');

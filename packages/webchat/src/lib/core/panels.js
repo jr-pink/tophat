@@ -20,6 +20,12 @@ const clamp = (value, low, high) => (value < low ? low : value > high ? high : v
 
 const openCount = (collapsed) => collapsed.filter((shut) => !shut).length;
 
+// Every exported transition is total over whatever a payload carries (a replayed log written by another build, a
+// generated test step): an index that is not an integer naming a panel, or an id that is not a non-empty string, is a
+// no-op returning the same state, never a throw and never a copy (the kit's validate() checks both laws).
+const isPanel = (state, index) => Number.isInteger(index) && index >= 0 && index < state.panels.length;
+const isId = (id) => typeof id === 'string' && id.length > 0;
+
 function normalised(widths, collapsed) {
   const total = widths.reduce((sum, width, index) => sum + (collapsed[index] ? 0 : width), 0);
   const open = openCount(collapsed);
@@ -27,7 +33,7 @@ function normalised(widths, collapsed) {
   return widths.map((width, index) => (collapsed[index] ? 0 : width / total));
 }
 
-function insertAfter(state, at, conversationId) {
+function insertAfter(state, at, conversationId, key = null) {
   if (state.panels.length >= MAX_PANELS) {
     
     
@@ -44,7 +50,7 @@ function insertAfter(state, at, conversationId) {
   const widths = [...from.widths];
   const donor = widths[at] ?? 1;
   panels.splice(at + 1, 0, conversationId);
-  keys.splice(at + 1, 0, `p${seq}`);
+  keys.splice(at + 1, 0, key ?? `p${seq}`);
   collapsed.splice(at + 1, 0, false);
   if (donor / 2 < MIN_WIDTH) {
     
@@ -91,10 +97,10 @@ function closeAt(state, at) {
 }
 
 export function activate(state, conversationId) {
-  if (!conversationId) return state;
+  if (!isId(conversationId)) return state;
   if (!state.panels.length) return initial(conversationId);
   const at = state.panels.indexOf(conversationId);
-  if (at !== -1) return state.collapsed[at] ? expand(state, at) : { ...state, focused: at };
+  if (at !== -1) return expand(state, at);
   return replaceAt(state, state.focused, conversationId);
 }
 
@@ -117,7 +123,7 @@ export function splitFits(state, viewportPx, { comfortable = COMFORTABLE_PX } = 
 }
 
 export function openContextual(state, conversationId, { viewportPx, comfortable } = {}) {
-  if (!conversationId) return state;
+  if (!isId(conversationId)) return state;
   if (!state.panels.length) return initial(conversationId);
   if (state.panels.includes(conversationId)) return activate(state, conversationId);
   return splitFits(state, viewportPx, { comfortable })
@@ -135,22 +141,23 @@ export function willSplit(state, split, viewportPx) {
 }
 
 export function openFor(state, conversationId, { split = false, viewportPx } = {}) {
-  if (!conversationId) return state;
+  if (!isId(conversationId)) return state;
   if (split === true) return openBeside(state, conversationId);
   if (split === 'fit') return openContextual(state, conversationId, { viewportPx });
   return activate(state, conversationId);
 }
 
 export function openBeside(state, conversationId) {
-  if (!conversationId) return state;
+  if (!isId(conversationId)) return state;
   if (!state.panels.length) return initial(conversationId);
   if (state.panels.includes(conversationId)) return activate(state, conversationId);
   return insertAfter(state, state.focused, conversationId);
 }
 
 export function focusPanel(state, index) {
-  if (!state.panels.length) return state;
-  return { ...state, focused: clamp(index, 0, state.panels.length - 1) };
+  if (!state.panels.length || !Number.isInteger(index)) return state;
+  const focused = clamp(index, 0, state.panels.length - 1);
+  return focused === state.focused ? state : { ...state, focused };
 }
 
 // The pane Ctrl-H (delta -1) or Ctrl-L (delta +1) lands on: the next open pane in tree order,
@@ -166,12 +173,12 @@ export function neighbour(state, delta) {
 }
 
 export function closePanel(state, index) {
-  if (index < 0 || index >= state.panels.length) return state;
+  if (!isPanel(state, index)) return state;
   return closeAt(state, index);
 }
 
 export function collapse(state, index) {
-  if (index < 0 || index >= state.panels.length) return state;
+  if (!isPanel(state, index)) return state;
   if (state.collapsed[index]) return state;
   if (openCount(state.collapsed) <= 1) return state;
   const collapsed = [...state.collapsed];
@@ -182,8 +189,8 @@ export function collapse(state, index) {
 }
 
 export function expand(state, index) {
-  if (index < 0 || index >= state.panels.length) return state;
-  if (!state.collapsed[index]) return { ...state, focused: index };
+  if (!isPanel(state, index)) return state;
+  if (!state.collapsed[index]) return state.focused === index ? state : { ...state, focused: index };
   const collapsed = [...state.collapsed];
   collapsed[index] = false;
   const open = openCount(collapsed);
@@ -205,19 +212,28 @@ export function expand(state, index) {
 
 
 export function togglePanel(state, index) {
-  if (index < 0 || index >= state.panels.length) return state;
+  if (!isPanel(state, index)) return state;
   return state.collapsed[index] ? expand(state, index) : focusPanel(state, index);
 }
 
 export function duplicatePanel(state, index) {
-  if (index < 0 || index >= state.panels.length) return state;
+  if (!isPanel(state, index)) return state;
   if (state.panels.length >= MAX_PANELS) return state;
   return insertAfter(state, index, state.panels[index]);
 }
 
 
+// A new panel with its own id, showing `chat`, right after the panel `after`. Absolute: the id already there, a
+// missing anchor, or a full row is a no-op (same state).
+export function addPanel(state, { id, chat, after } = {}) {
+  if (!isId(id) || !isId(chat) || state.keys.includes(id)) return state;
+  const at = state.keys.indexOf(after);
+  if (at < 0 || state.panels.length >= MAX_PANELS) return state;
+  return insertAfter(state, at, chat, id);
+}
+
 export function movePanel(state, index, delta) {
-  if (index < 0 || index >= state.panels.length) return state;
+  if (!isPanel(state, index) || !Number.isInteger(delta) || delta === 0) return state;
   const to = index + delta;
   if (to < 0 || to >= state.panels.length) return state;
   const swap = (list) => {
@@ -237,13 +253,19 @@ export function movePanel(state, index, delta) {
 }
 
 export function resize(state, index, delta) {
-  if (index < 0 || index >= state.panels.length - 1) return state;
-  if (!Number.isFinite(delta) || delta === 0) return state;
-  
+  if (!isPanel(state, index) || !Number.isFinite(delta) || delta === 0) return state;
+  return resizeTo(state, index, state.widths[index] + delta);
+}
+
+// The divider left of panel `index + 1` put where the panel at `index` is `wanted` wide (a fraction of the open
+// width): the clamp and the collapse threshold of `resize`, from an absolute target, so the logged action is the same
+// on a repeat (a second identical `pane.resize` finds the width already there, or the panel already a rail).
+export function resizeTo(state, index, wanted) {
+  if (!isPanel(state, index) || index >= state.panels.length - 1) return state;
+  if (!Number.isFinite(wanted) || wanted === state.widths[index]) return state;
   if (state.collapsed[index] || state.collapsed[index + 1]) return state;
   const widths = [...state.widths];
   const pair = widths[index] + widths[index + 1];
-  const wanted = widths[index] + delta;
   if (wanted < COLLAPSE_AT) return collapse(state, index);
   if (pair - wanted < COLLAPSE_AT) return collapse(state, index + 1);
   const next = clamp(wanted, MIN_WIDTH, pair - MIN_WIDTH);

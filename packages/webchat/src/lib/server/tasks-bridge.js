@@ -26,6 +26,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { TASK_MAX_BUFFER as SHARED_TASK_MAX_BUFFER, rev5Python, rev5Repo as sharedRev5Repo } from '../../../../runner/rev5/tasks.mjs';
 import { rev5MemoryPath } from './state-report.js';
+import { settleWaitsForWork, settleWaitsForWorkAsync } from '../../../../runner/rev5/waits.mjs';
 
 /** The repository the CLI lives in, as rev5/tasks.mjs resolves it. */
 export function rev5Repo({ env = process.env } = {}) {
@@ -144,6 +145,8 @@ export async function applyTasksAsync({ opId, actor, tasks, sourceRefs = null },
   clearTaskCache();
   const answer = await tasksCliAsync({ op: 'apply', op_id: opId, actor, tasks, ...(sourceRefs ? { source_refs: sourceRefs } : {}) }, options);
   clearTaskCache();
+  // A row closed or handed off here (a notes check-off, an owner edit) takes its goal_wait timer with it (rev5/waits.mjs, "Orphans").
+  if (answer?.ok && Array.isArray(answer.work)) await settleWaitsForWorkAsync(answer.work, { env: options?.env || process.env, log: console.log, getRow: async (id) => { const got = await getTaskAsync(id, options); return got?.ok ? got.work : null; } });
   return answer;
 }
 
@@ -162,5 +165,6 @@ export const applyTasks = ({ opId, actor, tasks, sourceRefs = null }, options) =
   clearTaskCache();
   const answer = tasksCli({ op: 'apply', op_id: opId, actor, tasks, ...(sourceRefs ? { source_refs: sourceRefs } : {}) }, options);
   clearTaskCache();
+  if (answer?.ok && Array.isArray(answer.work)) settleWaitsForWork(answer.work, { env: options?.env || process.env, log: console.log, getRow: (id) => { const got = getTask(id, options); return got?.ok ? got.work : null; } });
   return answer;
 };

@@ -15,6 +15,7 @@
   "exports": {
     ".": "./src/index.mjs",
     "./interface": "./src/interface.mjs",
+    "./hybrid": "./core/vendor/rev6/push/hybrid.mjs",
     "./testing": "./test/kit.mjs"
   },
   "scripts": {

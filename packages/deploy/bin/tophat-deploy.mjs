@@ -6,7 +6,7 @@
 //   tophat start --config FILE [--build DIR]         boot the instance's enabled app components (webchat) in the foreground
 //   tophat instance env --config FILE                the environment an instance hands its components (no secret values)
 //   tophat instance start|stop|status|health --config FILE   run the instance in the background, and ask after it
-//   tophat instance release --config FILE [--set DIR]         the build the instance serves (printed, or set)
+//   tophat instance release --config FILE [--set DIR]         the webchat build-current pointer (printed, or flipped)
 //   tophat instance ship --config FILE [--keep N]     build the webchat into a fresh build.<stamp>, flip build-current and
 //                                                    SIGHUP the running server (same process, children untouched); never
 //                                                    rebuild the directory a server is serving
@@ -58,7 +58,7 @@ try {
     const { healthInstance, release, startInstance, statusInstance, stopInstance } = await import('../src/service.mjs');
     if (sub === 'start') { const r = startInstance({ configFile: file, buildDir: flag('--build') }); out(r); process.exit(r.ok ? 0 : 1); }
     if (sub === 'stop') { const r = await stopInstance({ configFile: file }); out(r); process.exit(r.ok ? 0 : 1); }
-    if (sub === 'status') { const r = statusInstance({ configFile: file }); out(r); process.exit(r.running ? 0 : 1); }
+    if (sub === 'status') { const r = await statusInstance({ configFile: file }); out(r); process.exit(r.running ? 0 : 1); }
     if (sub === 'health') { const r = await healthInstance({ configFile: file }); out(r); process.exit(r.ok ? 0 : 1); }
     const { loadInstance: li } = await import('../src/instance.mjs');
     const set = flag('--set');

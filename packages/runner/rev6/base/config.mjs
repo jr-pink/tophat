@@ -178,7 +178,7 @@ export function validateIngress(g) {
 
 const RETRIEVAL_KEYS = ['indexDir', 'knowledgeRoot', 'docsPaths', 'codePaths', 'codeGlobs', 'claudeMemoryDir', 'chatDb', 'beeperIndex',
   'messageStreams', 'workDb', 'fileIndexRoots', 'fileIndexSkip', 'contractsRoot', 'filedRoots', 'documentRoots', 'spotlightSkip', 'streams',
-  'communicationSources', 'fanin', 'webCacheDir', 'headspaces', 'journalBuilder', 'docstoreStreams', 'claudeArchives', 'contactsBackupDir',
+  'communicationSources', 'fanin', 'webCacheDir', 'headspaces', 'journalBuilder', 'docstoreStreams', 'docstoreStreams', 'claudeArchives', 'contactsBackupDir',
   'ownerLabel', 'privatePeople', 'skipStreams'];
 const DEFAULT_STREAMS = { email: [], 'beeper+calls+time+hevy+oura': [], 'agent-sessions': [] };
 
@@ -273,7 +273,8 @@ export function resolveRetrievalConfig(raw, { env = process.env, home = homeOf(e
       entriesDir: env.TOPHAT_HEADSPACE_DIR ? path.resolve(env.TOPHAT_HEADSPACE_DIR) : headspaces.entriesDir !== undefined ? abs(headspaces.entriesDir, 'headspaces.entriesDir') : null,
     },
     journalBuilder: opt('journalBuilder', 'TOPHAT_JOURNAL_BUILDER'),
-    docstoreStreams: opt('docstoreStreams', 'DOCSTORE_STREAMS'),
+    // docstoreStreams is tophat's name for the same key.
+    docstoreStreams: opt('docstoreStreams', 'DOCSTORE_STREAMS') ?? opt('docstoreStreams', 'DOCSTORE_STREAMS'),
     claudeArchives: opt('claudeArchives', 'CHATS_ARCHIVES'),
     contactsBackupDir: opt('contactsBackupDir'),
     ownerLabel: raw.ownerLabel || 'me',

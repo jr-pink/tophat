@@ -23,18 +23,32 @@
 // state) are neither logged nor saved nor pushed.
 
 import { compile } from './schema.js';
+import { createHlc } from './engine/hlc.js';
+import { ulid } from './engine/ulid.js';
+import { ActionError, ConcurrencyConflictError, InvalidActionError, InvalidTransitionError } from './errors.js';
+import { refusalFor, CONFLICT_MODELS, CONFLICT_NOT_EXECUTED, UNDO_MODELS, UNDO_NOT_EXECUTED, registerDeclaration } from './declare-keys.js';
+import { uiContract } from './laws-ui/contract.js';
+import { undoModel, undoReducer, withUndo, UNDO_ACTION } from './undo.js';
 import { createEngineDefaults } from './engine/defaults.js';
 
 const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const MAX_TAIL = 200;
+const ID_RING = 512; // intent ids remembered past the tail, so a retried dispatch stays a no-op
 
-/** Total order of entries on every device: event time, then device id, then device sequence. */
+/** Total order of entries on every device: the hybrid logical clock (ts, then l; lib/engine/hlc.js), then device id,
+ *  then device sequence. ts is never raw wall time: a dispatch after an ingest is ordered after what it saw (A8). */
 export function compareEntries(a, b) {
-  return a.ts - b.ts || (a.device < b.device ? -1 : a.device > b.device ? 1 : 0) || a.seq - b.seq;
+  return a.ts - b.ts || (a.l || 0) - (b.l || 0) || (a.device < b.device ? -1 : a.device > b.device ? 1 : 0) || a.seq - b.seq;
 }
 
-/** A declaration is data: the kit derives hydrate, persist, undo/replay and sync from it. */
+/** A declaration is data: the kit derives hydrate, persist, undo/replay and sync from it. The key set is closed
+ *  (lib/declare-keys.js): an unknown key, or an axis the design names that nothing in the kit executes, is refused here,
+ *  as is a malformed UI contract (budget, owner, waits: laws-ui/contract.js uiContract). Every declaration is recorded
+ *  for validate() (lib/validate.js), which the deploy gate runs over every app. Declaring a declaration returns it. */
 export function declare(spec) {
+  if (spec && spec[DECLARED]) return spec;
+  const label = spec?.name ?? '(unnamed)';
+  for (const k of Object.keys(spec || {})) { const why = refusalFor(k); if (why) throw new Error(`declare ${label}: ${why}`); }
   const d = { scope: 'cloud', version: 1, migrations: {}, ...compile(spec) };
   if (!d.name || typeof d.name !== 'string') throw new Error('declare: name is required (it is the storage key and the Stream id)');
   if (!['cloud', 'local', 'ephemeral'].includes(d.scope)) throw new Error(`declare ${d.name}: scope must be cloud, local or ephemeral`);
@@ -42,9 +56,61 @@ export function declare(spec) {
   for (const [k, a] of Object.entries(d.actions)) if (typeof a !== 'function') throw new Error(`declare ${d.name}: action "${k}" needs \`fields\` (it is a set/merge/on/reset shorthand)`);
   if (d.initial === undefined) throw new Error(`declare ${d.name}: initial is required`);
   d.conflict ??= 'lww';
-  if (!['lww', 'log', 'crdt'].includes(d.conflict)) throw new Error(`declare ${d.name}: conflict must be lww, log or crdt`);
+  if (CONFLICT_NOT_EXECUTED[d.conflict]) throw new Error(`declare ${d.name}: conflict "${d.conflict}" is ${CONFLICT_NOT_EXECUTED[d.conflict]}`);
+  if (!Object.hasOwn(CONFLICT_MODELS, d.conflict)) throw new Error(`declare ${d.name}: conflict must be ${Object.keys(CONFLICT_MODELS).join(' or ')}`);
+  if (d.guards !== undefined) checkGuards(d);
   if (d.states) checkLifecycle(d);
-  return Object.freeze(d);
+  if (!d.states && (d.transitions || d.terminal || d.stateField)) throw new Error(`declare ${d.name}: transitions, terminal and stateField need states`);
+  if (d.undo !== undefined) checkUndo(d);
+  uiContract(d); // budget for an undeclared action, owner not an action, waits without a declared exit edge: refused now
+  Object.defineProperty(d, DECLARED, { value: true });
+  Object.freeze(d);
+  registerDeclaration(d);
+  return d;
+}
+const DECLARED = Symbol('quicklook-kit.declared');
+
+// The undo axis (lib/undo.js): 'compensating' records the inverse of every dispatch by value and applies it as a new
+// action (UNDO_ACTION) through compare-and-set; it is refused with a lifecycle (an inverse would walk an edge backwards).
+function checkUndo(d) {
+  const m = undoModel(d.undo);
+  if (m && UNDO_NOT_EXECUTED[m]) throw new Error(`declare ${d.name}: undo "${m}" is ${UNDO_NOT_EXECUTED[m]}`);
+  if (!UNDO_MODELS.includes(m)) throw new Error(`declare ${d.name}: undo must be ${UNDO_MODELS.join(' or ')} (or { model: 'compensating', limit })`);
+  if (d.undo !== null && typeof d.undo === 'object') {
+    for (const k of Object.keys(d.undo)) if (!['model', 'limit'].includes(k)) throw new Error(`declare ${d.name}: undo takes { model, limit }, not "${k}"`);
+    if (d.undo.limit !== undefined && !(Number.isInteger(d.undo.limit) && d.undo.limit > 0)) throw new Error(`declare ${d.name}: undo.limit must be a positive integer`);
+  }
+  if (m === 'none') return;
+  if (d.states) throw new Error(`declare ${d.name}: undo with a lifecycle is not executed (an inverse would take a lifecycle edge backwards); declare the undoable fields in their own state`);
+  if (d.initial === null || typeof d.initial !== 'object' || Array.isArray(d.initial)) throw new Error(`declare ${d.name}: undo needs an object state (fields are compared by value)`);
+  if (d.actions[UNDO_ACTION]) throw new Error(`declare ${d.name}: action "${UNDO_ACTION}" is reserved for the undo axis`);
+  d.actions = { ...d.actions, [UNDO_ACTION]: undoReducer(d.initial) };
+}
+
+// Guards (DOCSTORE3-DESIGN section 7, P1:314-334, py l2/guards.py): pure (state, { type, payload, actor }) -> refusal | null per
+// action, run in declaration order at dispatch before the reducer; the first refusal wins and dispatch throws it as an
+// ActionError { code, message, context, resolution }. Guards decide at acceptance only: a fold never runs them (a guard
+// reading the outside world would make replicas disagree), so an accepted entry replays everywhere.
+function checkGuards(d) {
+  if (!d.guards || typeof d.guards !== 'object' || Array.isArray(d.guards)) throw new Error(`declare ${d.name}: guards must be { action: [guard, ...] }`);
+  for (const [k, list] of Object.entries(d.guards)) {
+    if (!d.actions[k]) throw new Error(`declare ${d.name}: guards name undeclared action "${k}"`);
+    if (!Array.isArray(list) || !list.length || list.some((g) => typeof g !== 'function')) throw new Error(`declare ${d.name}: guards.${k} must be a non-empty list of functions`);
+  }
+}
+/** The first guard refusal for `type` against `state`, as an ActionError, or null. A guard returns null/undefined to
+ *  pass, or an ActionError, `{ code, message?, context?, resolution? }` or a code string to refuse. */
+export function guardError(decl, state, type, payload, { actor = null } = {}) {
+  for (const g of decl.guards?.[type] || []) {
+    let r;
+    try { r = g(state, { type, payload, actor }); } catch (e) { r = { code: 'GUARD_THREW', message: String(e?.message || e) }; }
+    if (r == null || r === true) continue;
+    if (r instanceof ActionError) return r;
+    if (typeof r === 'string') return new ActionError({ code: r });
+    if (r === false) return new ActionError({ code: 'REFUSED' });
+    return new ActionError({ code: String(r.code || 'REFUSED'), message: r.message || '', context: r.context || {}, resolution: r.resolution || null });
+  }
+  return null;
 }
 
 // Lifecycle (from Docstore's Model.states/transitions/terminal, DOCSTORE.md LifecycleMixin): a declared state machine on one
@@ -93,20 +159,25 @@ export function fold(decl, state, entries) {
 }
 
 /** The Stream entry for an action: one-to-one with L1 `PUT /v1/streams/{stream}/entries/{entry-id}`. */
-export const toStreamEntry = (e) => ({ entry_id: `${e.device}:${e.seq}`, device_id: e.device, device_seq: e.seq, event_time: new Date(e.ts).toISOString(), payload: { type: e.type, payload: e.payload } });
-export const fromStreamEntry = (r) => ({ device: r.device_id, seq: r.device_seq, ts: Date.parse(r.event_time), type: r.payload.type, payload: r.payload.payload });
+// The HLC's logical part `l` and the intent id `id` ride inside the (encrypted) payload envelope; an entry from an older
+// build has neither (l = 0, no id) and orders by event time as before.
+export const toStreamEntry = (e) => ({ entry_id: `${e.device}:${e.seq}`, device_id: e.device, device_seq: e.seq, event_time: new Date(e.ts).toISOString(), payload: { type: e.type, payload: e.payload, ...(e.l ? { l: e.l } : {}), ...(e.id ? { id: e.id } : {}) } });
+export const fromStreamEntry = (r) => ({ ...(r.payload.id ? { id: r.payload.id } : {}), device: r.device_id, seq: r.device_seq, ts: Date.parse(r.event_time), ...(Number.isInteger(r.payload.l) && r.payload.l > 0 ? { l: r.payload.l } : {}), type: r.payload.type, payload: r.payload.payload });
 
 function readRecord(storage, key) {
   try { const raw = storage?.getItem(key); return raw ? JSON.parse(raw) : null; } catch { return null; }
 }
 
-export function createReplica(decl, { storage, device, now = Date.now, schedule = (f) => setTimeout(f, 0), transport = null, onSaveError = () => {} }) {
+export function createReplica(decl, { storage, device, now = Date.now, schedule = (f) => setTimeout(f, 0), transport = null, onSaveError = () => {}, clock = createHlc }) {
   const key = `qk:${decl.name}`;
   const persists = decl.scope !== 'ephemeral';
   let wire = transport; // the sink: replaceable, a component that unmounts hands the next one a fresh closure
   const syncs = () => decl.scope === 'cloud' && Boolean(wire);
   const subs = new Set();
-  let base = clone(decl.initial), tail = [], pending = [], seq = 0, lastTs = 0, cursor = null, aborted = null, legacyFound = false;
+  let base = clone(decl.initial), tail = [], pending = [], seq = 0, clockAt = null, cursor = null, aborted = null, legacyFound = false;
+  // version (assert_version, snapshot cursors): cloud = entries folded (baseN folded into base + tail + pending), equal on
+  // converged replicas; local/ephemeral = accepted changes on this device. ids: recent intent ids (idempotent dispatch).
+  let baseN = 0, changes = 0, ids = [];
   // `durable` (local): an outbox. Every dispatch first adopts what storage holds (another tab may have written), and
   // the record is on disk before dispatch returns, so whatever the caller does next (a send) happens after the write.
   // `dropEmpty` (local): a state equal to its initial value has no record (the key is removed), as `if (v) setItem
@@ -121,13 +192,14 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
       try {
         let v = rec.version || 1;
         base = clone(rec.base ?? rec.state ?? base); tail = rec.tail || []; pending = rec.pending || [];
-        seq = rec.seq || 0; lastTs = rec.lastTs || 0; cursor = rec.cursor ?? null;
+        seq = rec.seq || 0; clockAt = { ts: rec.lastTs || 0, l: rec.lastL || 0 }; cursor = rec.cursor ?? null;
+        baseN = rec.baseN || 0; changes = rec.changes || 0; ids = Array.isArray(rec.ids) ? rec.ids.slice(-ID_RING) : [];
         if (v < decl.version) {
           // upcast: fold what the old shape knew into base, then migrate; unpushed entries are baked in (flush before upgrading)
           try { storage.setItem(`__archive__${key}__${Date.now()}`, JSON.stringify(rec)); } catch { /* quota */ }
           let s = fold(decl, fold(decl, base, tail), pending);
           while (v < decl.version) { const up = decl.migrations[v + 1]; if (!up) throw new Error(`no upcaster for v${v + 1}`); s = up(s); v++; }
-          base = s; tail = []; pending = [];
+          baseN += tail.length + pending.length; base = s; tail = []; pending = [];
         }
         base = { ...clone(decl.initial), ...base };
         if (decl.normalize) base = decl.normalize(base);
@@ -136,14 +208,23 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
       try { const old = decl.legacy(storage); if (old) { base = { ...base, ...old }; legacyFound = true; } if (decl.normalize) base = decl.normalize(base); } catch { /* ignore a bad legacy value */ }
     }
   }
+  // the one order source: restored from the record, and lifted past every entry the record holds (by construction a
+  // dispatch after a reload is later than everything this device logged or saw)
+  const hlc = clock({ now, last: clockAt }); // `clock`: the HLC factory (tests plant a broken one to prove the order laws)
+  for (const e of tail) hlc.observe(e);
+  for (const e of pending) hlc.observe(e);
+  const version = () => (decl.scope === 'cloud' ? baseN + tail.length + pending.length : changes);
+  const known = new Set(ids);
+  const remember = (id) => { if (!id || known.has(id)) return; known.add(id); ids.push(id); if (ids.length > ID_RING) known.delete(ids.shift()); };
+  for (const e of [...tail, ...pending]) remember(e.id);
   let confirmed = fold(decl, base, tail);
   let view = fold(decl, confirmed, pending);
   let dirty = false, scheduled = false;
 
   const emit = () => { for (const f of [...subs]) f(view); };
   const record = () => (decl.scope === 'local'
-    ? { version: decl.version, savedAt: now(), base: decl.persist ? decl.persist(view) : view }
-    : { version: decl.version, savedAt: now(), base, tail, pending, seq, lastTs, cursor });
+    ? { version: decl.version, savedAt: now(), base: decl.persist ? decl.persist(view) : view, changes }
+    : { version: decl.version, savedAt: now(), base, tail, pending, seq, lastTs: hlc.peek().ts, lastL: hlc.peek().l, cursor, baseN, ids });
   const projected = (s) => JSON.stringify(decl.persist ? decl.persist(s) : s);
   const emptyText = dropEmpty ? projected(clone(decl.initial)) : null;
   function save() {
@@ -169,7 +250,7 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     if (dirty || aborted) return false; // an unsaved change of ours is newer than the disk
     const next = stored();
     if (!next || JSON.stringify(next) === JSON.stringify(view)) return false;
-    base = next; confirmed = next; view = next;
+    base = next; confirmed = next; view = next; changes += 1;
     return true;
   }
   function touch() {
@@ -177,15 +258,38 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     if (!scheduled) { scheduled = true; schedule(save); }
   }
 
-  function dispatch(type, payload = {}) {
-    if (!decl.actions[type]) throw new Error(`${decl.name}: unknown action "${type}"`);
+  /** dispatch(type, payload, { id, assertVersion, actor }) -> the logged entry, or null for a no-op.
+   *  Order (py ActionBus): idempotent return for an id already logged, version, guards, reducer + lifecycle.
+   *  - id: the intent id (a ULID minted once at the gesture, A7). Omitted: minted here. A retried id returns the entry it
+   *    logged (or null once it left the log) and changes nothing.
+   *  - assertVersion: optimistic concurrency (P1:445): refused with ConcurrencyConflictError unless it equals `version`.
+   *  Refusals are typed (lib/errors.js): InvalidActionError, ConcurrencyConflictError, ActionError (a guard),
+   *  InvalidTransitionError (code InvalidTransition | TerminalState); nothing is logged, saved or pushed. */
+  function dispatch(type, payload = {}, opts = {}) {
+    if (!decl.actions[type]) throw new InvalidActionError({ op: type, entity_type: decl.name, valid_ops: Object.keys(decl.actions) }, { message: `${decl.name}: unknown action "${type}"` });
+    const id = opts?.id ?? null;
+    if (id !== null) {
+      if (typeof id !== 'string' || !id) throw new TypeError(`${decl.name}: an intent id is a non-empty string`);
+      if (known.has(id)) return [...pending, ...tail].find((e) => e.id === id) || null;
+    }
     if (durable) adopt();
+    if (opts?.assertVersion !== undefined && opts.assertVersion !== version()) {
+      throw new ConcurrencyConflictError({ entity_type: decl.name, entity_id: decl.name, expected_version: opts.assertVersion, actual_version: version() });
+    }
+    const refusal = decl.guards ? guardError(decl, view, type, payload, { actor: opts?.actor ?? null }) : null;
+    if (refusal) throw refusal;
     const { state: next, error } = step(decl, view, type, payload);
-    if (error) throw Object.assign(new Error(`${decl.name}: ${error} for "${type}" from ${JSON.stringify(view[decl.stateField])}`), { code: error });
+    if (error) {
+      const f = decl.stateField || 'state', from = view?.[f];
+      let to = null; try { to = decl.actions[type](view, clone(payload))?.[f] ?? null; } catch { /* the reducer is total */ }
+      throw new InvalidTransitionError({ from_state: from ?? null, to_state: to, valid_next: (decl.terminal || []).includes(from) ? [] : (decl.transitions?.[from] || []) },
+        { code: error, message: `${decl.name}: ${error} for "${type}" from ${JSON.stringify(from)}` });
+    }
     if (next === view) return null; // idempotent no-op: nothing logged, saved, pushed
-    const ts = Math.max(now(), lastTs);
-    lastTs = ts;
-    const entry = { device, seq: ++seq, ts, type, payload: clone(payload) };
+    const t = hlc.tick();
+    const entry = { id: id ?? ulid(), device, seq: ++seq, ts: t.ts, ...(t.l ? { l: t.l } : {}), type, payload: clone(payload) };
+    remember(entry.id);
+    changes += 1;
     view = next;
     if (decl.scope === 'cloud') pending.push(entry); // local and ephemeral state have no log to replay elsewhere
     if (durable) { dirty = true; save(); } else touch();
@@ -222,7 +326,7 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     for (const e of entries) { const id = `${e.device}:${e.seq}`; if (!have.has(id)) { tail.push(e); have.add(id); changed = true; } }
     if (!changed) return false;
     tail.sort(compareEntries);
-    if (tail.length > MAX_TAIL) { const old = tail.splice(0, tail.length - MAX_TAIL); base = fold(decl, base, old); }
+    if (tail.length > MAX_TAIL) { const old = tail.splice(0, tail.length - MAX_TAIL); baseN += old.length; base = fold(decl, base, old); }
     return true;
   }
   function recompute() {
@@ -238,7 +342,7 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     if (!decl.crossTab || decl.scope !== 'local' || aborted) return false;
     const next = stored();
     if (!next || JSON.stringify(next) === JSON.stringify(view)) return false;
-    base = next; confirmed = next; view = next; dirty = false;
+    base = next; confirmed = next; view = next; dirty = false; changes += 1;
     emit();
     return true;
   }
@@ -246,6 +350,7 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
   /** Remote entries (already Stream entries) enter the tail by order; local pending is re-applied on top. */
   function ingest(rows) {
     const entries = rows.map(fromStreamEntry);
+    for (const e of entries) { hlc.observe(e); remember(e.id); } // advance on ingest: the next dispatch orders after what arrived
     const mine = new Set(entries.filter((e) => e.device === device).map((e) => e.seq));
     if (mine.size) pending = pending.filter((e) => !mine.has(e.seq));
     if (!insertTail(entries) && !mine.size) return false;
@@ -287,7 +392,7 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
       if (!e || typeof e.type !== 'string' || !Number.isInteger(e.seq) || have.has(`${e.device}:${e.seq}`)) continue;
       pending.push(clone(e)); have.add(`${e.device}:${e.seq}`); n += 1;
       if (e.device === device && e.seq > seq) seq = e.seq;
-      if (e.ts > lastTs) lastTs = e.ts;
+      hlc.observe(e); remember(e.id);
     }
     if (!n) return 0;
     pending.sort(compareEntries);
@@ -297,7 +402,7 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     return n;
   }
 
-  return {
+  const api = {
     name: decl.name, decl, adoptPending,
     get: () => { if (durable) adopt(); return view; }, // a durable state reads the disk, as the old outbox modules did
     subscribe(fn) { subs.add(fn); fn(view); return () => subs.delete(fn); }, // Svelte store contract
@@ -305,8 +410,13 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     get pending() { return pending.slice(); },
     get log() { return [...tail, ...pending].sort(compareEntries); },
     get aborted() { return aborted; },
+    /** The optimistic-concurrency version (dispatch's assertVersion) and the cursor a derived snapshot is stamped with. */
+    get version() { return version(); },
+    /** The replica's hybrid logical clock: the latest { ts, l } issued or observed. */
+    get clock() { return hlc.peek(); },
     get saved() { return readRecord(storage, key); },
   };
+  return withUndo(api, decl); // the undo axis (lib/undo.js); the same object when the declaration has none
 }
 
 const tabBox = () => { try { return globalThis.sessionStorage; } catch { return undefined; } };

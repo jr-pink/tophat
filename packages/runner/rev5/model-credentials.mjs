@@ -1,6 +1,8 @@
 // One answer to "what credential and what model can THIS process actually use".
 //
-// The variable was the single point of failure. The webchat has the same scar: see
+// The variable was the single point of failure. io.tophat.nightly-understanding set no
+// TOPHAT_RUNNER_API_KEY_FILE in its launchd plist and ran fine for weeks on gpt-6-astra, whose auth
+// resolves off ~/.codex/auth.json with no variable at all. The webchat has the same scar: see
 // webchat/src/lib/server/app.js around line 220 and keyless-spawn.test.js, seven turns lost to a
 // spawned process that did not inherit the variable.
 //

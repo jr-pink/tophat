@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { json } from '@sveltejs/kit';
+import { localRefusal } from '$lib/server/local-gate.js';
 import { threadpoolState } from '$lib/server/threadpool-watch.js';
 import { interactionStats } from '$lib/server/interaction.js';
 import { readingTraceStats } from '$lib/server/reading-trace-store.js';
@@ -13,17 +14,18 @@ function telemetryState() {
   try { return { interaction: interactionStats(), readingTrace: readingTraceStats() }; } catch (error) { return { error: String(error?.message || error) }; }
 }
 
-export function GET({ getClientAddress, request }) {
-  
-  
-  
-  let address = '';
-  try { address = getClientAddress(); } catch { address = ''; }
-  const local = address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
-  
-  
-  const forwarded = request.headers.has('x-forwarded-for') || request.headers.has('cf-connecting-ip');
-  if (!local || forwarded) return json({ error: 'not found' }, { status: 404 });
+export function GET(event) {
+  // Loopback, and not through the tunnel. Cloudflared delivers a remote request as a local socket,
+  // so a forwarding header is the tell however local the peer looks, and an address the adapter
+  // cannot give is never local.
+  //
+  // That rule has ONE owner, $lib/server/local-gate.js, which /api/inbound and
+  // /api/replies/projection already ask. four copies of an authorization rule are four places for
+  // it to drift, and the half that loosens is the half nobody notices. The behaviour is unchanged
+  // to the byte: no service token here, because health is the deploy guard's probe and reveals
+  // nothing private, so loopback alone is the whole gate, and every refusal is a 404 rather than a
+  // 401, because a machine surface does not tell a stranger it is there.
+  if (localRefusal(event)) return json({ error: 'not found' }, { status: 404 });
 
   // Health is what the chat path really does, measured: the store's own synthetic probe (a real durable append,
   // a read back through the read-only index connection and a stream round trip, on a timer), its writer's queue
@@ -43,28 +45,11 @@ export function GET({ getClientAddress, request }) {
     product: process.env.PRODUCT_NAME || 'tophat',
     instance,
     uptimeSeconds: process.uptime(),
-    
-    
-    
-    
     build: process.env.WEBCHAT_BUILD_ID || 'unknown',
-    
-    
     busy: busyConversations().length,
-    
     live: liveConversations().length,
-    
-    
-    
     store: createHash('sha256').update(storeShape()).digest('hex').slice(0, 12),
-    
-    
     runner: createHash('sha256').update(runnerShape()).digest('hex').slice(0, 12),
-    
-    
-    
-    
-    
     code: bootCodeShape(),
     // The shape of the handover record this process writes (code-shape.js handoverShape): deploy.sh compares it with the
     // one the build it is about to restart into accepts, and refuses a restart that would end the live children.

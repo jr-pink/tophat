@@ -88,6 +88,9 @@ export function storageKeys(storage) {
 export function keyed(base, { legacy, legacyPrefix = null, ...spec }) {
   const decls = new Map();
   const prefix = `qk:${base}:`;
+  // the family's shape, declared once now: a bad spec is refused at import, and validate() (the deploy gate) checks the
+  // family's laws through this template even when no key has been used yet
+  declare({ scope: 'local', dropEmpty: true, crossTab: true, ...spec, name: `${base}:*` });
   const decl = (key) => {
     let d = decls.get(key);
     if (!d) { d = declare({ scope: 'local', dropEmpty: true, crossTab: true, ...spec, name: `${base}:${key}`, ...(legacy ? { legacy: legacy(key) } : {}) }); decls.set(key, d); }

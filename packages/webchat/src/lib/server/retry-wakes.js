@@ -59,7 +59,7 @@ export function mayRunWakes({ env = process.env, pid = process.pid, flag = globa
 }
 
 /** The timer. Replaces its own, so a hot swap that adopts the app leaves one. */
-export function startRetryWakes({ deliver, probe, escalate, interval = RETRY_SWEEP_MS, env = process.env, log = console.log, canRun = () => mayRunWakes({ env }) } = {}) {
+export function startRetryWakes({ deliver, probe, escalate, getWork, interval = RETRY_SWEEP_MS, env = process.env, log = console.log, canRun = () => mayRunWakes({ env }) } = {}) {
   const key = Symbol.for('tophat.webchat.retrywakes');
   try { clearInterval(globalThis[key]); } catch { /* none yet */ }
   let busySince = 0;
@@ -72,7 +72,7 @@ export function startRetryWakes({ deliver, probe, escalate, interval = RETRY_SWE
     if (busySince && Date.now() - busySince < PASS_TIMEOUT_MS) return;
     if (busySince) console.error(`[retry-wakes] previous pass hung ${Math.round((Date.now() - busySince) / 1000)}s, starting a new one`);
     const mine = busySince = Date.now();
-    sweepWaits({ deliver, probe, escalate, env, log }).catch((error) => console.error(`[retry-wakes] sweep failed: ${error.message}`)).finally(() => { if (busySince === mine) busySince = 0; });
+    sweepWaits({ deliver, probe, escalate, env, log, ...(getWork ? { getWork } : {}) }).catch((error) => console.error(`[retry-wakes] sweep failed: ${error.message}`)).finally(() => { if (busySince === mine) busySince = 0; });
   };
   const timer = setInterval(pass, interval);
   timer.unref?.();

@@ -140,7 +140,7 @@ export async function setup(o = {}, log = (s) => console.error(s)) {
   const startable = keyPresent && appDepsInstalled() && webchatBuilt();
   if (o.start !== false && startable) {
     const { healthInstance, startInstance, statusInstance } = await import('./service.mjs');
-    const status = statusInstance({ configFile });
+    const status = await statusInstance({ configFile });
     if (!status.running) {
       if (!(await portFree(c.ports.webchat))) throw new Error(`port ${c.ports.webchat} is already in use by another program: rerun with --port N (a free port)`);
       started = startInstance({ configFile });

@@ -113,13 +113,16 @@ tophat instance stop   --config tophat.instance.json
 tophat instance release --config tophat.instance.json [--set DIR]
 ```
 
-`start` detaches the webchat into its own session, logs to `<paths.state>/logs/webchat.log`, and records the process in
-`<paths.state>/run/webchat.json`; a second `start` while it runs answers `already_running`. Liveness is the kernel's
-answer about the pid, never the file, so a record left by a crash is stale and the next `start` replaces it. `stop` is
-SIGTERM then SIGKILL after ten seconds, and stopping what is not running is not an error. `status` prints the pid, the
-port, the release and the log; `health` is `GET /api/health` on the loopback port (exit 1 when it does not answer).
-The release pointer (`<paths.state>/run/release.json`) names the build the instance serves: `start` writes it, and a
-`start` without `--build` uses it. Nothing here installs a service; `tophat instance unit` still prints one.
+`start` detaches the webchat into its own session, logs to `<paths.state>/logs/webchat.log`, and records the process it
+spawned in `<paths.state>/run/webchat.json` so `stop` can signal it; a second `start` while it runs answers
+`already_running`, and a port held by anything else answers `port_in_use`. `stop` is SIGTERM then SIGKILL after ten
+seconds, and stopping what is not running is not an error. `status` reads the live process, never the record, so it is
+right however the instance was started (`instance start`, `tophat start` under a unit, or by hand): the pid listening on
+the loopback port, its parent chain (`ancestry`), and its `/api/health` answer, which names its pid and the build it
+serves (`build`). `running` is true only when that listener is this instance; anything else on the port is reported as
+`port_holder`. `release` is the `build-current` pointer a restart would serve; `health` is `GET /api/health` on the
+loopback port (exit 1 when it does not answer). `instance release [--set DIR]` reads or flips that same pointer.
+Nothing here installs a service; `tophat instance unit` still prints one.
 
 Releasing a new webchat build to a running instance: `tophat instance ship --config FILE [--keep N]`. It builds into a
 fresh `packages/webchat/build.<stamp>`, flips the `build-current` pointer (temp+rename) and SIGHUPs serve.mjs (the pid

@@ -13,6 +13,13 @@
 //    a push wake takes. A fired wait re-arms itself with a growing gap until the goal is closed, so a turn that
 //    crashed or forgot cannot leave the item silent. Only goal_close (done, or dropped with a real why) clears it.
 //
+// Orphans: a shared goal is a work item owned by its chat (goals.mjs openSharedGoals reads the ledger as "work owned
+// by this chat"). task_update moved it to another chat and later marked it done; from that moment g2 was simply
+// absent from the ledger, goal_close g2 said no_such_id, and the only path that cleared a wait (goal_close) could
+// never run. The wait fired five times into a chat that had nothing to do. Two fixes: every task apply settles the
+// waits of the rows it wrote (settleWaitsForWork, called from rev5/tasks.mjs and webchat tasks-bridge.js), and the
+// sweeper asks orphanReason before every delivery and deletes the wait instead of firing (wait-sweeper.mjs).
+//
 // One JSON file per chat, written atomically under a lock directory, because the runner (goal tools) and the server
 // (sweeper) both write.
 import { scrubForStore } from '../src/vault/scrub-store.mjs';
@@ -136,6 +143,14 @@ export function openWaits({ sessionId, env = process.env, now = () => new Date()
       const ids = new Set(goalIds.map(String));
       if (!ids.size || !existsSync(path)) return 0;
       return mutate((state) => { const before = state.waits.length; state.waits = state.waits.filter((w) => !ids.has(String(w.goal_id)) && !ids.has(String(w.work_id))); return before - state.waits.length; });
+    },
+    /** Remove one wait by id (an orphan: its goal is gone, closed or handed off). Returns the removed wait or null. */
+    remove(waitId) {
+      if (!existsSync(path)) return null;
+      return mutate((state) => {
+        const i = state.waits.findIndex((w) => w.id === waitId);
+        return i < 0 ? null : state.waits.splice(i, 1)[0];
+      });
     },
     /** Goal ids whose timer is armed and not yet due-and-fired: the hook must not hold a stop for these. */
     sleeping() { return new Set(readFile(path, sessionId).waits.filter((w) => !w.awake).map((w) => String(w.goal_id))); },
@@ -321,4 +336,100 @@ export function wakeText(wait, nowIso, tz = process.env.TOPHAT_RUNNER_TIMEZONE |
     'Check whether the blocker has changed and finish the task now. If it has landed, goal_close it with the proof. If it is still blocked, call goal_wait again with the next time to look.',
     'This timer re-arms itself until the goal is closed; it is not a reason to stop. Never goal_close dropped for a blocker.'
   ].join('\n');
+}
+
+/**
+ * Why this wait no longer has a goal to wake for, or null when it still does (or when that cannot be told).
+ *   row: the shared work row for wait.work_id; missing: true when the store answered "no work <id>".
+ *   ledger: the chat's legacy goals file ({ items, shared_work }) for a wait without a work id.
+ * A store that could not be reached is never a reason: the wait fires as before.
+ */
+export function orphanReason({ sessionId, wait, row = null, missing = false, ledger = null }) {
+  if (wait.work_id) {
+    if (missing) return `work item ${wait.work_id} no longer exists`;
+    if (!row) return null;
+    if (row.status && row.status !== 'todo') return `work item ${wait.work_id} is ${row.status}`;
+    if ('owner_kind' in row && (row.owner_kind !== 'chat' || String(row.owner_ref) !== String(sessionId))) return `work item ${wait.work_id} is owned by ${row.owner_kind}:${row.owner_ref}, not this chat`;
+    return null;
+  }
+  if (!ledger || ledger.unreadable) return null;
+  const item = (ledger.items || []).find((i) => String(i.id) === String(wait.goal_id));
+  if (item && item.status !== 'todo') return `goal ${wait.goal_id} is ${item.status}`;
+  if (!item && !ledger.shared_work) return `goal ${wait.goal_id} is not in this chat's ledger`;
+  return null;
+}
+
+/** The legacy goals file of a chat as { items, shared_work }, or null when there is none or it is unreadable. */
+export function readLegacyLedger(sessionId, env = process.env) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(goalsDir(env), `${String(sessionId).replace(/[^\w.-]/g, '_')}.json`), 'utf8'));
+    return { items: Array.isArray(parsed?.items) ? parsed.items : [], shared_work: parsed?.shared_work === true };
+  } catch { return null; }
+}
+
+/**
+ * The waits a set of just-written work rows leave without a goal: [{ session_id, wait, reason }].
+ * An apply answers each row as { id, op, version, status } without its owner, so a still-open row that a wait points
+ * at is read in full (getRow) before its ownership is judged; rows no wait points at cost nothing.
+ */
+function candidatesOf(rows, all) {
+  const byId = new Map((rows || []).filter((r) => r && r.id).map((r) => [String(r.id), r]));
+  return byId.size ? all.filter(({ wait }) => wait.work_id && byId.has(String(wait.work_id))).map((hit) => ({ ...hit, row: byId.get(String(hit.wait.work_id)) })) : [];
+}
+const needsRead = (row) => (!row.status || row.status === 'todo') && !('owner_kind' in row);
+const judge = ({ session_id, wait, row }) => {
+  const reason = row ? orphanReason({ sessionId: session_id, wait, row }) : null;
+  return reason ? { session_id, wait, reason } : null;
+};
+
+function dropOrphans(found, { env, now, via, log }) {
+  const removed = [];
+  for (const { session_id, wait, reason } of found) {
+    try {
+      if (!openWaits({ sessionId: session_id, env, now }).remove(wait.id)) continue;
+      logFire({ event: 'orphan-removed', via, session_id, wait: wait.id, goal: wait.goal_id, work: wait.work_id || null, reason }, { env, now });
+      log(`[retry-wakes] removed orphan wait ${session_id} ${wait.id} (goal ${wait.goal_id}): ${reason}`);
+      removed.push({ session_id, wait: wait.id, goal: wait.goal_id, work: wait.work_id || null, reason });
+    } catch (error) { log(`[retry-wakes] orphan wait ${session_id} ${wait.id} not removed: ${error.message}`); }
+  }
+  return removed;
+}
+
+/**
+ * Called after every task apply with the rows it wrote: a row that is no longer `todo`, or no longer owned by the chat
+ * holding a wait on it, takes that wait with it, whichever chat or tool made the change (a handoff by task_update, a
+ * check-off in notes, goal_close). Never throws: the apply already stands.
+ */
+export function settleWaitsForWork(rows, { env = process.env, now = () => new Date().toISOString(), log = () => {}, getRow = null } = {}) {
+  try {
+    if (!(rows || []).some((r) => r?.id)) return [];
+    const found = [];
+    for (const hit of candidatesOf(rows, allWaits({ env }))) {
+      let row = hit.row;
+      if (needsRead(row)) { try { row = getRow ? getRow(String(row.id)) : null; } catch { row = null; } }
+      const orphan = judge({ ...hit, row });
+      if (orphan) found.push(orphan);
+    }
+    return dropOrphans(found, { env, now, via: 'task-apply', log });
+  } catch { return []; }
+}
+
+/** settleWaitsForWork for the webchat server's HTTP thread: the directory and the rows are read without blocking. */
+export async function settleWaitsForWorkAsync(rows, { env = process.env, now = () => new Date().toISOString(), log = () => {}, getRow = null } = {}) {
+  try {
+    if (!(rows || []).some((r) => r?.id)) return [];
+    const found = [];
+    for (const hit of candidatesOf(rows, await allWaitsAsync({ env }))) {
+      let row = hit.row;
+      if (needsRead(row)) { try { row = getRow ? await getRow(String(row.id)) : null; } catch { row = null; } }
+      const orphan = judge({ ...hit, row });
+      if (orphan) found.push(orphan);
+    }
+    return dropOrphans(found, { env, now, via: 'task-apply', log });
+  } catch { return []; }
+}
+
+/** Remove one wait the sweeper or a scan judged orphaned; logged once in fire-log.jsonl and once through `log`. */
+export function removeOrphanWait({ sessionId, wait, reason, via = 'sweeper', env = process.env, now = () => new Date().toISOString(), log = () => {} }) {
+  return dropOrphans([{ session_id: sessionId, wait, reason }], { env, now, via, log })[0] || null;
 }

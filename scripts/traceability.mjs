@@ -19,7 +19,7 @@ export const DENY_FILE = path.join(ROOT, 'scripts/traceability-deny.txt');
 /** Tracked files that name the terms on purpose: the list itself and the repo-local vendoring configs. All must be export-ignored. */
 export const NOT_SCANNED = ['scripts/traceability-deny.txt', 'scripts/vendor.upstream.json', 'scripts/vendor-app.upstream.json'];
 /** Files that must never be in a release. */
-export const NEVER_SHIPPED = [...NOT_SCANNED, 'scripts/vendor.mjs', 'scripts/vendor-app.mjs', 'scripts/scrub.mjs', 'scripts/release.mjs', 'ASSEMBLY.json', 'VENDOR.json'];
+export const NEVER_SHIPPED = [...NOT_SCANNED, 'scripts/vendor.mjs', 'scripts/vendor-app.mjs', 'scripts/scrub.mjs', 'scripts/release.mjs', 'scripts/publish.mjs', 'test/publish.test.mjs', 'RELEASING.md', 'ASSEMBLY.json', 'VENDOR.json'];
 
 export function loadDeny(file = DENY_FILE) {
   if (!existsSync(file)) return null;

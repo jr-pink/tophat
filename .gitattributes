@@ -9,3 +9,7 @@ scripts/scrub.mjs export-ignore
 ASSEMBLY.json export-ignore
 VENDOR.json export-ignore
 scripts/release.mjs export-ignore
+# Publishing to the GitHub repository: the script, its test (it imports the script) and the maintainer notes.
+scripts/publish.mjs export-ignore
+test/publish.test.mjs export-ignore
+RELEASING.md export-ignore

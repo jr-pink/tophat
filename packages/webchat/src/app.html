@@ -10,6 +10,19 @@
     <title>tophat chat</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <script>
+      // Start the notes request now, before the scripts that will use it have loaded; the page takes
+      // the answer through takeEarly() (src/lib/client/early.js). A failure is the page's to handle.
+      (function () {
+        try {
+          if (location.pathname !== '/notes') return;
+          var url = '/api/notes?view=present&rollover=1&limit=200&past=6&future=120';
+          var table = (window.__tophatEarly = {});
+          table[url] = fetch(url, { credentials: 'same-origin' });
+          table[url]['catch'](function () {});
+        } catch (e) {}
+      })();
+    </script>
+    <script>
       
 
 

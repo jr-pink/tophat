@@ -137,6 +137,8 @@ export function moveFolder(names, layout, drag, target, where) {
 export function renamedLayout(layout, from, to) {
   const a = folderKey(from), b = folderKey(to);
   const { order, parent } = cleanLayout(layout);
+  // Nothing to rename (same key, or the key is nowhere in the layout): the same layout back, so the reducer is a no-op.
+  if (a === b || (!order.includes(a) && !(a in parent) && !Object.values(parent).includes(a))) return layout;
   const swap = (k) => (k === a ? b : k);
   const next = {};
   for (const [k, v] of Object.entries(parent)) next[swap(k)] = swap(v);
@@ -147,6 +149,8 @@ export function renamedLayout(layout, from, to) {
 export function removedLayout(layout, name) {
   const gone = folderKey(name);
   const { order, parent } = cleanLayout(layout);
+  // Nothing names the folder: the same layout back, so a reducer removing an absent folder is a no-op (same reference).
+  if (!order.includes(gone) && !(gone in parent) && !Object.values(parent).includes(gone)) return layout;
   const up = parent[gone];
   const next = {};
   for (const [k, v] of Object.entries(parent)) {
@@ -190,7 +194,8 @@ export function withName(names, name) {
 }
 
 export function withoutName(names, name) {
-  return names.filter((n) => !sameName(n, name));
+  const next = names.filter((n) => !sameName(n, name));
+  return next.length === names.length ? names : next;
 }
 
 export function renamedIn(names, from, to) {
@@ -198,6 +203,6 @@ export function renamedIn(names, from, to) {
   if (!clean) return names;
   const at = names.findIndex((n) => sameName(n, from));
   if (at < 0) return withName(names, clean);
-  const next = names.filter((n, i) => i === at || !sameName(n, clean));
-  return next.map((n) => (sameName(n, from) ? clean : n));
+  const next = names.filter((n, i) => i === at || !sameName(n, clean)).map((n) => (sameName(n, from) ? clean : n));
+  return next.length === names.length && next.every((n, i) => n === names[i]) ? names : next;
 }

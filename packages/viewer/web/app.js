@@ -26,6 +26,32 @@ import { snapshotView } from '../src/core/snapshot.mjs';
   const PUBLIC = ((document.querySelector('meta[name="th-public"]') || {}).content || '').trim();
   const CACHE_SCHEMA = 1;
 
+  // ---------- theme: manila (light) unless the page asks for dark ----------
+  // ?theme=dark|light wins; <meta name="th-theme" content="auto"> (an embedding page, e.g. the public demo) follows the
+  // system setting; without either the viewer stays manila. A parent frame may switch it live with
+  // postMessage({ type: 'tophat-theme', theme }). The canvas colours below are read through T at draw time.
+  const LIGHT = { dark: false, label: '#111', edge: 'rgba(90,70,30,0.13)', pair: 'rgba(60,45,20,0.28)', edgeHi: 'rgba(30,22,5,0.65)', hub: '#a2946a', hubHi: '#3a2f12', tint: '#a89d7e',
+    hull: 'rgba(60,45,20,0.07)', hullLine: 'rgba(60,45,20,0.35)', hullStrong: 'rgba(138,53,18,0.16)', hullStrongLine: 'rgba(138,53,18,0.85)',
+    regions: ['#161616', '#8a3512', '#2c5e4c', '#2a4876', '#7b6420', '#6a6250'] };
+  const DARK = { dark: true, label: '#e6dfcb', edge: 'rgba(230,215,180,0.10)', pair: 'rgba(230,215,180,0.24)', edgeHi: 'rgba(250,240,215,0.7)', hub: '#6f6650', hubHi: '#e9dcb8', tint: '#7d7560',
+    hull: 'rgba(230,215,180,0.06)', hullLine: 'rgba(230,215,180,0.3)', hullStrong: 'rgba(224,120,70,0.18)', hullStrongLine: 'rgba(232,132,84,0.9)',
+    regions: ['#e6dfcb', '#d97a48', '#62b393', '#7a9fe0', '#cfab4c', '#9a917c'] };
+  const themeMeta = ((document.querySelector('meta[name="th-theme"]') || {}).content || '').trim();
+  const themeAsked = new URLSearchParams(location.search).get('theme');
+  const sysDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const pickTheme = (asked) => (asked === 'dark' || asked === 'light' ? asked : themeMeta === 'auto' && sysDark && sysDark.matches ? 'dark' : 'light');
+  const T = { ...LIGHT };
+  let onTheme = null; // set once the renderer exists: recolours what is drawn
+  const setTheme = (name) => {
+    Object.assign(T, name === 'dark' ? DARK : LIGHT);
+    document.documentElement.classList.toggle('mg-dark', T.dark);
+    if (onTheme) onTheme();
+  };
+  let themeLive = themeAsked;
+  setTheme(pickTheme(themeLive));
+  if (sysDark && sysDark.addEventListener) sysDark.addEventListener('change', () => { if (!themeLive) setTheme(pickTheme(null)); });
+  window.addEventListener('message', (e) => { const m = e.data; if (m && m.type === 'tophat-theme' && (m.theme === 'dark' || m.theme === 'light')) { themeLive = m.theme; setTheme(m.theme); } });
+
   // ---------- loading bar: one thin line, driven by bytes, then a phase label ----------
   const loadBar = (() => {
     const box = $('mg-load'), fill = $('mg-load-fill');
@@ -74,14 +100,14 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     trace.saveStateMs = performance.now() - t;
   }
 
-  // ---------- regions (type -> area) ----------
+  // ---------- regions (type -> area); colours in T.regions, same order ----------
   const REGIONS = [
-    { label: 'people', color: '#161616', types: ['person', 'agent', 'group'] },
-    { label: 'organizations', color: '#8a3512', types: ['organization', 'program', 'course'] },
-    { label: 'places & events', color: '#2c5e4c', types: ['place', 'event', 'trip', 'reservation'] },
-    { label: 'projects & ideas', color: '#2a4876', types: ['project', 'topic', 'research', 'feature', 'defect', 'system', 'repository', 'concept', 'paper', 'essay', 'book', 'film', 'game'] },
-    { label: 'things & services', color: '#7b6420', types: ['product', 'artifact', 'file', 'document', 'software', 'service', 'tool', 'order', 'domain', 'link', 'account', 'subscription', 'equipment', 'machine', 'device', 'component', 'website', 'thread', 'exercise', 'object'] },
-    { label: '', color: '#6a6250', types: [] },
+    { label: 'people', types: ['person', 'agent', 'group'] },
+    { label: 'organizations', types: ['organization', 'program', 'course'] },
+    { label: 'places & events', types: ['place', 'event', 'trip', 'reservation'] },
+    { label: 'projects & ideas', types: ['project', 'topic', 'research', 'feature', 'defect', 'system', 'repository', 'concept', 'paper', 'essay', 'book', 'film', 'game'] },
+    { label: 'things & services', types: ['product', 'artifact', 'file', 'document', 'software', 'service', 'tool', 'order', 'domain', 'link', 'account', 'subscription', 'equipment', 'machine', 'device', 'component', 'website', 'thread', 'exercise', 'object'] },
+    { label: '', types: [] },
   ];
   const regionOf = {}; REGIONS.forEach((r, i) => r.types.forEach((t) => (regionOf[t] = i)));
   const R = 620;
@@ -120,10 +146,10 @@ import { snapshotView } from '../src/core/snapshot.mjs';
   const sizeOf = (n) => Math.min(20, 2.8 + 2.1 * Math.sqrt(n));
   function makeGraph(xy) {
     const g = new Graph({ type: 'undirected', multi: false });
-    ents.forEach((e, i) => g.addNode('e' + i, { label: e.name, size: sizeOf(e.n), color: REGIONS[e.region].color, x: xy[2 * i], y: xy[2 * i + 1], ent: true, zIndex: 2 }));
-    hubIdx.forEach((j, k) => { const [x, y] = hubXY(j, xy); g.addNode('h' + k, { label: '', size: 1.8 + Math.min(2, hyper[j].k * 0.12), color: '#a2946a', x, y, hub: true, hj: j, zIndex: 1 }); });
-    hubIdx.forEach((j, k) => hyper[j].m.forEach((i) => g.addEdge('h' + k, 'e' + i, { size: 0.5, color: 'rgba(90,70,30,0.13)', spoke: true, hj: j, s: 'h' + k, t: 'e' + i })));
-    pairs.forEach((hs, key) => { const [a, b] = key.split('_'); g.addEdge('e' + a, 'e' + b, { size: 0.6 + 0.5 * Math.log2(hs.length + 1), color: 'rgba(60,45,20,0.28)', pair: key, s: 'e' + a, t: 'e' + b }); });
+    ents.forEach((e, i) => g.addNode('e' + i, { label: e.name, size: sizeOf(e.n), color: T.regions[e.region], x: xy[2 * i], y: xy[2 * i + 1], ent: true, zIndex: 2 }));
+    hubIdx.forEach((j, k) => { const [x, y] = hubXY(j, xy); g.addNode('h' + k, { label: '', size: 1.8 + Math.min(2, hyper[j].k * 0.12), color: T.hub, x, y, hub: true, hj: j, zIndex: 1 }); });
+    hubIdx.forEach((j, k) => hyper[j].m.forEach((i) => g.addEdge('h' + k, 'e' + i, { size: 0.5, color: T.edge, spoke: true, hj: j, s: 'h' + k, t: 'e' + i })));
+    pairs.forEach((hs, key) => { const [a, b] = key.split('_'); g.addEdge('e' + a, 'e' + b, { size: 0.6 + 0.5 * Math.log2(hs.length + 1), color: T.pair, pair: key, s: 'e' + a, t: 'e' + b }); });
     return g;
   }
 
@@ -161,25 +187,40 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     if (s.internals && s.internals.nodeStyleAnalysis) s.internals.nodeStyleAnalysis.dependency = 'item-state';
     if (s.edgeStyleAnalysis) s.edgeStyleAnalysis.dependency = 'item-state';
   };
+  // ---------- embedded: no scroll trap ----------
+  // In a frame a transparent shield covers the graph: it has no wheel or touch handler, so the wheel and a one-finger
+  // drag scroll the embedding page. A click removes it (the graph then takes the wheel); leaving the pane, Esc or the
+  // frame losing focus puts it back.
+  const EMBEDDED = (() => { try { return window.self !== window.top; } catch { return true; } })();
+  if (EMBEDDED) {
+    const shield = el('div'); shield.id = 'mg-shield'; shield.appendChild(el('span', null, 'click to interact'));
+    container.parentNode.insertBefore(shield, container.nextSibling);
+    const guard = (on) => { shield.hidden = !on; };
+    shield.addEventListener('click', () => { guard(false); container.focus({ preventScroll: true }); });
+    $('mg').addEventListener('pointerleave', (e) => { if (e.pointerType !== 'touch') guard(true); });
+    document.addEventListener('mouseout', (e) => { if (!e.relatedTarget) guard(true); }); // the pointer left the frame
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modalOpen()) guard(true); });
+    window.addEventListener('blur', () => guard(true));
+  }
   const makeSigma = () => {
     const s = new Sigma(graph, container, {
       renderEdgeLabels: false, enableEdgeEvents: true, zIndex: true,
-      labelFont: 'ui-monospace, Menlo, monospace', labelSize: 11, labelColor: { color: '#111' },
+      labelFont: 'ui-monospace, Menlo, monospace', labelSize: 11, labelColor: { color: T.label },
       labelDensity: 0.7, labelGridCellSize: 100, labelRenderedSizeThreshold: 7,
-      defaultEdgeColor: 'rgba(90,70,30,0.13)', minCameraRatio: 0.015, maxCameraRatio: 6, hideEdgesOnMove: false,
-      defaultDrawNodeHover: (ctx, d) => { ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#111'; if (d.label) ctx.fillText(d.label, d.x + d.size + 3, d.y + 4); },
+      defaultEdgeColor: T.edge, minCameraRatio: 0.015, maxCameraRatio: 6, hideEdgesOnMove: false,
+      defaultDrawNodeHover: (ctx, d) => { ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.fillStyle = T.label; if (d.label) ctx.fillText(d.label, d.x + d.size + 3, d.y + 4); },
       nodeReducer: (key, a) => {
         if (!hl && !st.vis && st.mode !== 'community') return a;
         const o = { ...a };
-        if (a.ent && st.mode === 'community' && tintColors) o.color = tintColors[key] || '#a89d7e';
+        if (a.ent && st.mode === 'community' && tintColors) o.color = tintColors[key] || T.tint;
         if (st.vis && !st.vis.has(key)) { o.hidden = true; o.label = ''; return o; }
-        if (hl && hl.nodes.has(key)) { o.zIndex = 3; if (a.ent) o.forceLabel = true; if (a.hub) { o.color = '#3a2f12'; o.size = a.size + 1.2; } }
+        if (hl && hl.nodes.has(key)) { o.zIndex = 3; if (a.ent) o.forceLabel = true; if (a.hub) { o.color = T.hubHi; o.size = a.size + 1.2; } }
         return o;
       },
       edgeReducer: (key, a) => {
         if (!hl && !st.vis && !st.liveHyper) return a;
         if (edgeHidden(a, st.vis, st.liveHyper, st.livePairs)) return { ...a, hidden: true };
-        if (hl && hl.nodes.has(a.s) && hl.nodes.has(a.t) && (a.spoke ? hl.hullSet.has(a.hj) || hl.strong === a.hj : true)) return { ...a, color: 'rgba(30,22,5,0.65)', size: a.size + 0.7, zIndex: 2 };
+        if (hl && hl.nodes.has(a.s) && hl.nodes.has(a.t) && (a.spoke ? hl.hullSet.has(a.hj) || hl.strong === a.hj : true)) return { ...a, color: T.edgeHi, size: a.size + 0.7, zIndex: 2 };
         return a;
       },
     });
@@ -187,6 +228,13 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     unhookGraphState(s);
     container.appendChild(hullCanvas); hctx = hullCanvas.getContext('2d');
     return s;
+  };
+  onTheme = () => {
+    if (!sigma || !graph) return;
+    graph.forEachNode((k, a) => { if (a.ent) graph.setNodeAttribute(k, 'color', T.regions[ents[+k.slice(1)].region]); else if (a.hub) graph.setNodeAttribute(k, 'color', T.hub); });
+    graph.forEachEdge((k, a) => graph.setEdgeAttribute(k, 'color', a.spoke ? T.edge : T.pair));
+    sigma.setSetting('labelColor', { color: T.label }); sigma.setSetting('defaultEdgeColor', T.edge);
+    sigma.refresh();
   };
 
   // ---------- hulls ----------
@@ -209,8 +257,8 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     if (pts.length < 6) return;
     const hp = hullOf(pts);
     hctx.beginPath(); hp.forEach((p, n) => (n ? hctx.lineTo(p[0], p[1]) : hctx.moveTo(p[0], p[1]))); hctx.closePath();
-    hctx.fillStyle = strong ? 'rgba(138,53,18,0.16)' : 'rgba(60,45,20,0.07)'; hctx.fill();
-    hctx.lineJoin = 'round'; hctx.lineWidth = strong ? 1.6 : 1; hctx.strokeStyle = strong ? 'rgba(138,53,18,0.85)' : 'rgba(60,45,20,0.35)'; hctx.stroke();
+    hctx.fillStyle = strong ? T.hullStrong : T.hull; hctx.fill();
+    hctx.lineJoin = 'round'; hctx.lineWidth = strong ? 1.6 : 1; hctx.strokeStyle = strong ? T.hullStrongLine : T.hullLine; hctx.stroke();
   };
   const drawHulls = () => {
     if (!hctx) return;
@@ -230,6 +278,11 @@ import { snapshotView } from '../src/core/snapshot.mjs';
   // ---------- simulation (worker) ----------
   const worker = new Worker('/graph/sim.js');
   let latest = null, settled = true, rafPending = false, gen = 0, lastT = 0, onSettle = null;
+  // follow: during a cold first layout the camera keeps the whole graph framed (a small graph no longer sits tiny in
+  // the corner of the region box), until it settles or the user pans, zooms or picks something
+  let follow = false, lastFollow = 0;
+  const stopFollow = () => { follow = false; };
+  ['wheel', 'pointerdown', 'touchstart', 'keydown'].forEach((ev) => container.addEventListener(ev, stopFollow, { passive: true }));
   const apply = (t) => {
     rafPending = false;
     if (!latest) return;
@@ -241,6 +294,7 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     for (let i = 0; i < N; i++) put('e' + i, xy[2 * i], xy[2 * i + 1]);
     hubIdx.forEach((j, k) => { const [x, y] = hubXY(j, xy); put('h' + k, x, y); });
     sigma.processNodes(); sigma.render();
+    if (follow && !st.sel && st.mode === 'plain' && t - lastFollow > 250) { lastFollow = t; fitCamera(null, false); }
     if (trace.frames.length < 4000) { trace.frames.push(lastT ? +(t - lastT).toFixed(1) : 0); trace.applyMs.push(+(performance.now() - t0).toFixed(1)); }
     lastT = t;
     if (!settled) worker.postMessage({ type: 'next' });
@@ -536,7 +590,7 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     const comm = louvain(g, { getEdgeWeight: 'weight', resolution: 1 }), sizes = {};
     Object.values(comm).forEach((c) => (sizes[c] = (sizes[c] || 0) + 1));
     const rank = Object.keys(sizes).sort((a, b) => sizes[b] - sizes[a]), color = {}; rank.forEach((c, r) => { if (sizes[c] > 4 && r < palette.length) color[c] = palette[r]; });
-    tintColors = {}; Object.keys(comm).forEach((i) => (tintColors['e' + i] = color[comm[i]] || '#a89d7e'));
+    tintColors = {}; Object.keys(comm).forEach((i) => (tintColors['e' + i] = color[comm[i]] || T.tint));
     communityInfo = { n: rank.length, top: rank.slice(0, 12).map((c) => sizes[c]) };
   };
   const repaintEntities = () => sigma.refresh({ partialGraph: { nodes: ents.map((_, i) => 'e' + i), edges: [] }, skipIndexation: true });
@@ -631,7 +685,7 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     if (st.mode === 'community') { communities(); repaintEntities(); }
     if (st.sel) select(st.sel, false); else { panel.classList.remove('open'); pbody.replaceChildren(); }
     if (st.mode === 'local' || st.mode === 'time') applyFilter(0.25, { settle: st.mode === 'time' && how !== 'cache' });
-    if (how === 'cold') { onSettle = () => { onSettle = null; fitCamera(null); saveSoon(); }; run(1, { presettle: 0.03 }); }
+    if (how === 'cold') { follow = true; onSettle = () => { onSettle = null; const wasFollowing = follow; follow = false; if (wasFollowing) fitCamera(null); saveSoon(); }; run(1, { presettle: 0.03 }); }
     else if (how === 'delta' && fresh.length && st.mode !== 'local') {
       const sub = new Set(fresh); fresh.forEach((i) => nbrs[i].forEach((_, b) => sub.add(b)));
       onSettle = () => { onSettle = null; saveSoon(); };
@@ -699,6 +753,9 @@ import { snapshotView } from '../src/core/snapshot.mjs';
     const want0 = hp.get('e') && idxOf.get(hp.get('e')), mode0 = hp.get('mode');
     if (want0 != null) select({ kind: 'e', id: want0 }, true);
     if (mode0 && mode0 !== 'plain' && modeBtns.some((b) => b.dataset.mode === mode0)) setMode(mode0);
+    let userMoved = false; ['wheel', 'pointerdown', 'touchstart'].forEach((ev) => container.addEventListener(ev, () => { userMoved = true; }, { passive: true }));
+    let lastSize = container.clientWidth + 'x' + container.clientHeight;
+    new ResizeObserver(() => { const sz = container.clientWidth + 'x' + container.clientHeight; if (sz === lastSize || !container.clientWidth || !container.clientHeight) return; lastSize = sz; if (!userMoved && !st.sel) fitCamera(null, false); }).observe(container);
     // an embedding page points the graph at an entity by changing the hash (#e=<id>)
     window.addEventListener('hashchange', () => { const h = new URLSearchParams(location.hash.slice(1)), i = h.get('e') && idxOf.get(h.get('e')); if (i != null) select({ kind: 'e', id: i }, true); });
     return;

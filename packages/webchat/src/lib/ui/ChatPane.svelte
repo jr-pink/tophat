@@ -149,6 +149,9 @@
 
   function openThread(anchor, { seed = '' } = {}) {
     if (!anchor || !conversationId) return null;
+    // The anchor usually arrives as a reactive proxy (it lives in `selection`); the engine posts
+    // it across a MessagePort, which refuses a proxy (DataCloneError), so hand it a plain copy.
+    anchor = $state.snapshot(anchor);
     const id = session.newConversationId();
     if (seed) writeDraft(id, seed);
     const label = String(anchor.quote).replace(/\s+/gu, ' ').trim().slice(0, 48);
@@ -254,8 +257,41 @@
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(refreshSelection);
     };
-    document.addEventListener('selectionchange', onchange);
-    return () => { document.removeEventListener('selectionchange', onchange); cancelAnimationFrame(frame); };
+    // While the button is down the selection is still being dragged out: the pill waits for the
+    // release instead of flickering in and out under the pointer on every selectionchange.
+    let dragging = false;
+    const down = (event) => {
+      if (event.button !== 0 || event.target?.closest?.('[data-sidechat], [data-reader-pop]')) return;
+      if (!transcriptEl()?.contains(event.target)) return;
+      dragging = true;
+      if (selection) selection = null;
+    };
+    const up = () => {
+      if (!dragging) return;
+      dragging = false;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(refreshSelection);
+    };
+    // Pressing on already-selected text starts the browser's text drag, which floats a ghost copy
+    // of the selection under the pointer (the doubled text in the recording); nothing here takes
+    // a dropped passage, so a drag that starts on text is cancelled.
+    const dragstart = (event) => {
+      if (transcriptEl()?.contains(event.target) && !event.target?.closest?.('img, a, [draggable="true"]')) event.preventDefault();
+    };
+    const wrapped = () => { if (dragging) return; onchange(); };
+    document.addEventListener('selectionchange', wrapped);
+    document.addEventListener('pointerdown', down, true);
+    document.addEventListener('pointerup', up, true);
+    document.addEventListener('pointercancel', up, true);
+    document.addEventListener('dragstart', dragstart, true);
+    return () => {
+      document.removeEventListener('selectionchange', wrapped);
+      document.removeEventListener('pointerdown', down, true);
+      document.removeEventListener('pointerup', up, true);
+      document.removeEventListener('pointercancel', up, true);
+      document.removeEventListener('dragstart', dragstart, true);
+      cancelAnimationFrame(frame);
+    };
   });
 
   
@@ -399,7 +435,7 @@
   }
 
   async function highlightSelection(color) {
-    const anchor = selection?.anchor;
+    const anchor = selection?.anchor ? $state.snapshot(selection.anchor) : null;
     if (!anchor || !chatDoc) return;
     selection = null;
     globalThis.getSelection?.()?.removeAllRanges();
@@ -801,6 +837,7 @@
   // sends in it (store.js, message.user), not left as "<parent> ↳".
   function forkFromSelection(anchor) {
     if (!anchor || !conversationId) return;
+    anchor = $state.snapshot(anchor);
     const item = items.find((entry) => entry?.id === anchor.itemId);
     globalThis.getSelection?.()?.removeAllRanges();
     selection = null;

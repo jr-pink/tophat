@@ -4,13 +4,14 @@
 // the webchat's door to the same `python3 -m rev5.cli ... tasks`. This file owns the rule, and the
 // three resolvers below are exported so the other side can be held to them and so a test can read
 // them without spawning anything.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { isLive, liveRoots, realHome, underTest } from '../src/live-state-guard.mjs';
 import { scrubForStore } from '../src/vault/scrub-store.mjs';
+import { settleWaitsForWork } from './waits.mjs';
 
 /** The checkout holding rev5/cli.py: this file's own, unless the environment names another. */
 export function rev5Repo(env = process.env) {
@@ -66,5 +67,35 @@ export function taskRequest(request, env = process.env, command = 'tasks') {
   let answer;
   try { answer = JSON.parse(result.stdout); } catch { throw Error(result.error?.message || 'Shared work unavailable'); }
   if (!answer.ok) { const error = Error(answer.detail || answer.reason || 'Task refused'); error.current = answer.current; throw error; }
+  // A row this apply closed or handed to another chat takes its goal_wait timer with it (rev5/waits.mjs, "Orphans").
+  if (request.op === 'apply' && Array.isArray(answer.work)) settleWaitsForWork(answer.work, { env, getRow: (id) => taskRequest({ op: 'get', id }, env).work });
   return answer;
+}
+
+/**
+ * taskRequest without blocking the calling thread, for read requests from the webchat server's sweeper.
+ * Never throws: { ok:false, reason:'unavailable' } when the store or the CLI cannot be reached, so a caller can tell
+ * "the store said no such work" (reason 'refused', message 'no work <id>') from "nobody answered".
+ */
+export function taskRequestAsync(request, env = process.env, { timeoutMs = 30_000 } = {}) {
+  let db;
+  try { db = rev5Db(env); } catch (error) { return Promise.resolve({ ok: false, reason: 'unavailable', detail: error.message }); }
+  if (!existsSync(db)) return Promise.resolve({ ok: false, reason: 'unavailable', detail: `no work store at ${db}` });
+  const repo = rev5Repo(env);
+  return new Promise((resolve) => {
+    let out = '', settled = false, timer = null, child;
+    const finish = (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+    try { child = spawn(process.execPath, [join(repo, 'store', 'cli.mjs'), '--db', db, 'tasks'], { cwd: repo, env: { ...env, PYTHONPATH: repo }, stdio: ['pipe', 'pipe', 'ignore'] }); }
+    catch (error) { return finish({ ok: false, reason: 'unavailable', detail: String(error?.message || error) }); }
+    timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish({ ok: false, reason: 'unavailable', detail: 'the task cli timed out' }); }, timeoutMs);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.on('error', (error) => finish({ ok: false, reason: 'unavailable', detail: String(error?.message || error) }));
+    child.on('close', (code) => {
+      try { finish(JSON.parse(out.trim().split('\n').pop())); }
+      catch { finish({ ok: false, reason: 'unavailable', detail: `no answer from the task cli (exit ${code})` }); }
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(JSON.stringify(scrubForStore(request, { env, label: 'tasks' }).value));
+  });
 }

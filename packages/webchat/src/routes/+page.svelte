@@ -27,7 +27,7 @@
   import {
     MAX_PANELS, RAIL_PX, neighbour as paneNeighbour, willSplit
   } from '$lib/core/panels.js';
-  import { panesDecl } from '$lib/core/panes-state.js';
+  import { panesDecl, paneGesture } from '$lib/core/panes-state.js';
   import { createIncognitoSession } from '$lib/client/incognito.js';
   import { isIncognito } from '$lib/core/incognito.js';
   import { sidebarDecl } from '$lib/core/sidebar-state.js';
@@ -544,7 +544,7 @@
     const closing = layout.panels[index];
     if (isIncognito(closing) && incognito.hasContent(closing)
         && !confirm('Close this incognito chat? Nothing from it is saved anywhere.')) return;
-    pane('pane.close', { index });
+    paneGesture(paneStore, 'close', { index });
     activeId = layout.panels[layout.focused] ?? null;
     if (activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
@@ -557,9 +557,9 @@
   }
 
   function paneAction(index, action) {
-    if (action === 'duplicate') { pane('pane.duplicate', { index }); return settlePanes(); }
-    if (action === 'left') { pane('pane.move', { index, delta: -1 }); return settlePanes(); }
-    if (action === 'right') { pane('pane.move', { index, delta: 1 }); return settlePanes(); }
+    if (action === 'duplicate') { paneGesture(paneStore, 'duplicate', { index }); return settlePanes(); }
+    if (action === 'left') { paneGesture(paneStore, 'move', { index, delta: -1 }); return settlePanes(); }
+    if (action === 'right') { paneGesture(paneStore, 'move', { index, delta: 1 }); return settlePanes(); }
     if (action === 'close') return closePane(index);
   }
 
@@ -599,7 +599,7 @@
       frame = 0;
       if (pending === null) return;
       const width = document.querySelector('main')?.clientWidth || viewportPx;
-      pane('pane.resize', { index, delta: (pending - lastX) / width });
+      paneGesture(paneStore, 'resizeBy', { index, delta: (pending - lastX) / width });
       lastX = pending;
       pending = null;
     };
@@ -919,8 +919,8 @@
             tabindex="0"
             onpointerdown={(event) => startDrag(index - 1, event)}
             onkeydown={(event) => {
-              if (event.key === 'ArrowLeft') { event.preventDefault(); pane('pane.resize', { index: index - 1, delta: -0.02 }); }
-              if (event.key === 'ArrowRight') { event.preventDefault(); pane('pane.resize', { index: index - 1, delta: 0.02 }); }
+              if (event.key === 'ArrowLeft') { event.preventDefault(); paneGesture(paneStore, 'resizeBy', { index: index - 1, delta: -0.02 }); }
+              if (event.key === 'ArrowRight') { event.preventDefault(); paneGesture(paneStore, 'resizeBy', { index: index - 1, delta: 0.02 }); }
             }}
           ></div>
         {/if}

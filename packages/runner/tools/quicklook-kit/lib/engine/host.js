@@ -21,6 +21,7 @@
 //   client.subscribe((state, status) => render(state)); await client.call('add', { id: ulid(), text })
 
 import { apply, diff } from './patch.js';
+import { ulid } from './ulid.js';
 
 const randomId = () => { try { const b = new Uint8Array(8); globalThis.crypto.getRandomValues(b); return [...b].map((x) => x.toString(16).padStart(2, '0')).join(''); } catch { return Math.random().toString(16).slice(2); } };
 const errorOf = (cause) => ({ name: cause?.name || 'Error', message: String(cause?.message || cause), code: cause?.code ?? null });
@@ -31,6 +32,9 @@ export function serveEngine({ methods, view, status = () => null, subscribe, dif
   let last = view();
   let lastStatus = status();
   let rev = 0;
+  // a snapshot and every patch carry (epoch, rev): rev counts within one engine incarnation, the epoch names the
+  // incarnation, so a tab never applies a patch derived from another engine's state (a leader change restarts rev at 0)
+  const epoch = ulid();
   let queued = false;
   const counts = { patches: 0, snapshots: 0, calls: 0, ports: 0 };
 
@@ -46,7 +50,7 @@ export function serveEngine({ methods, view, status = () => null, subscribe, dif
     last = next;
     lastStatus = nextStatus;
     counts.patches += 1;
-    for (const port of ports) { try { port.postMessage({ t: 'patch', from, to: rev, p, status: statusChanged ? nextStatus : undefined }); } catch { ports.delete(port); } }
+    for (const port of ports) { try { port.postMessage({ t: 'patch', epoch, from, to: rev, p, status: statusChanged ? nextStatus : undefined }); } catch { ports.delete(port); } }
   }
   const dirty = () => { if (!queued) { queued = true; schedule(flush); } };
   subscribe?.(dirty);
@@ -59,7 +63,7 @@ export function serveEngine({ methods, view, status = () => null, subscribe, dif
         if (queued) flush();
         ports.add(port);
         counts.snapshots += 1;
-        port.postMessage({ t: 'snap', rev, state: last, status: lastStatus });
+        port.postMessage({ t: 'snap', epoch, rev, state: last, status: lastStatus });
         return;
       }
       if (msg.t === 'bye') { ports.delete(port); return; }
@@ -74,7 +78,7 @@ export function serveEngine({ methods, view, status = () => null, subscribe, dif
       } catch (cause) { port.postMessage({ t: 'ret', id: msg.id, ok: false, e: errorOf(cause) }); }
     });
   }
-  return { connect, flush, stats: () => ({ ...counts, rev, ports: ports.size }) };
+  return { connect, flush, epoch, stats: () => ({ ...counts, epoch, rev, ports: ports.size }) };
 }
 
 /** A MessageChannel-shaped pair that delivers in microtasks (structured clone kept): deterministic under fake timers. */
@@ -113,7 +117,7 @@ export function connectEngine({ name, shared = null, dedicated = null, local = n
   const tab = randomId();
   const subs = new Set();
   const pending = new Map(); // id -> { m, a, resolve, reject }
-  let state = null, status = null, rev = -1, kind = null, send = null, seq = 0;
+  let state = null, status = null, rev = -1, epoch = null, kind = null, send = null;
   let readyResolve; const ready = new Promise((r) => { readyResolve = r; });
   const counts = { snaps: 0, patches: 0, resyncs: 0, applyMs: 0, worstApplyMs: 0, rejoins: 0 };
   const clock = () => (globalThis.performance?.now?.() ?? Date.now());
@@ -121,10 +125,13 @@ export function connectEngine({ name, shared = null, dedicated = null, local = n
 
   function receive(msg) {
     if (msg.t === 'snap') {
-      state = msg.state; status = msg.status; rev = msg.rev; counts.snaps += 1;
+      state = msg.state; status = msg.status; rev = msg.rev; epoch = msg.epoch ?? null; counts.snaps += 1;
       notify(); readyResolve(); return;
     }
     if (msg.t === 'patch') {
+      // a patch applies only to the snapshot it was derived from: same engine epoch, from === our rev; anything else
+      // is a stale projection, and the tab asks for a fresh snapshot instead of patching the wrong state
+      if ((msg.epoch ?? null) !== epoch) { counts.resyncs += 1; send({ t: 'hello', tab }); return; }
       if (msg.from !== rev) { if (msg.to > rev) { counts.resyncs += 1; send({ t: 'hello', tab }); } return; }
       const t0 = clock();
       state = apply(state, msg.p);
@@ -205,7 +212,7 @@ export function connectEngine({ name, shared = null, dedicated = null, local = n
     status: () => status,
     subscribe(fn) { subs.add(fn); if (state) fn(state, status); return () => subs.delete(fn); },
     call(m, ...a) {
-      const id = `${tab}:${++seq}`;
+      const id = ulid(); // one intent id per call, minted once; a call re-sent after a transport change keeps it
       return new Promise((resolve, reject) => { pending.set(id, { m, a, resolve, reject }); send({ t: 'call', id, m, a, tab }); });
     },
     stats: () => ({ ...counts, pending: pending.size, rev, kind }),

@@ -21,6 +21,7 @@
 
 import { canonical } from './canonical.js';
 import { parseSpec, matches } from './keys.js';
+import { casStep } from './history.js';
 
 const same = (a, b) => canonical(a) === canonical(b);
 const isInt = (v) => Number.isInteger(v);
@@ -214,7 +215,12 @@ export function documentCursor() {
  *    batch {open}: open=true starts a batch (already open: no-op, nothing is dropped); open=false commits it as one entry.
  *    seek {position}: commits an open batch first, then moves to the clamped position. Absolute, so two devices that
  *      both "undo once" from the same position land on the same position, not two steps back.
- *  gestures undo, redo -> seek. What to apply or revert is the caller's job: entries[position-1].actions after an undo. */
+ *    drop {id}: removes the entry holding id (a step skipped as a compare-and-set conflict leaves history, so a later
+ *      redo cannot apply it twice); an entry before the position moves the position back one. Unknown id: no-op.
+ *  gestures undo, redo -> seek. What to apply or revert is the caller's job: entries[position-1].actions after an undo.
+ *  For row stores, record actions as puts with their prior values ({ id, set, prev }) and let casSeek (below, from
+ *  lib/history.js) turn a seek into guarded puts plus the ids to drop; the reference notes app's fuzz found the unguarded form overwrites
+ *  newer remote edits, revives remote deletes and duplicates text. */
 export function undoHistory() {
   const commit = (s) => (s.batch && s.batch.ids.length ? { entries: [...s.entries, s.batch], position: s.entries.length + 1, batch: null } : { entries: s.entries, position: s.position, batch: null });
   const seen = (s, id) => s.entries.some((e) => e.ids.includes(id)) || Boolean(s.batch?.ids.includes(id));
@@ -236,6 +242,12 @@ export function undoHistory() {
         if (open) return s.batch ? s : { ...s, batch: { ids: [], actions: [], cursor_before: null, cursor_after: null } };
         return s.batch ? commit(s) : s;
       },
+      drop: (s, { id } = {}) => {
+        if (!isStr(id)) return s;
+        const c = commit(s), at = c.entries.findIndex((e) => e.ids.includes(id));
+        if (at < 0) return s;
+        return { entries: [...c.entries.slice(0, at), ...c.entries.slice(at + 1)], position: at < c.position ? c.position - 1 : c.position, batch: null };
+      },
       seek: (s, { position } = {}) => {
         if (!isInt(position)) return s;
         const c = commit(s);
@@ -252,6 +264,23 @@ export function undoHistory() {
 const effective = (s) => s.position + (s.batch?.ids.length ? 1 : 0); // an open batch counts as done: a seek commits it
 export const undone = (before, after) => after.entries.slice(after.position, Math.max(after.position, effective(before))).reverse();
 export const redone = (before, after) => after.entries.slice(effective(before), Math.max(effective(before), after.position));
+/** Guarded puts for an undoHistory seek over row puts recorded as { id, set, prev } (prev: what set overwrote, as
+ *  history.js inverse() computes it). Each entry is one all-or-nothing compare-and-set against get(id) (live or
+ *  tombstoned rows); a conflicting entry contributes nothing and is listed in `drop` (dispatch ['drop', { id }] for
+ *  each). Returns { puts, drop }. `opts` are history.js casStep options (tombstone, stamp, derived, now). */
+export function casSeek(before, after, get, opts) {
+  const puts = [], drop = [], overlay = new Map();
+  const view = get ? (id) => overlay.get(id) || get(id) : null;
+  const back = (e) => e.actions.slice().reverse().map((a) => ({ id: a.id, set: a.prev || {} }));
+  const fwd = (e) => e.actions.map((a) => ({ id: a.id, set: a.set || {} }));
+  for (const [e, undo] of [...undone(before, after).map((e) => [e, true]), ...redone(before, after).map((e) => [e, false])]) {
+    const r = undo ? casStep(back(e), fwd(e), view, opts) : casStep(fwd(e), back(e), view, opts);
+    if (r.conflict) { drop.push(e.ids[0]); continue; }
+    puts.push(...r.puts);
+    for (const p of r.puts) overlay.set(p.id, { ...(view(p.id) || { id: p.id }), ...p.set }); // a multi-step seek: later steps see earlier ones
+  }
+  return { puts, drop };
+}
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The four below were designed from webchat's real overlays, panes, orderings and long lists (GUIDE.md 3c, with file:line
@@ -682,9 +711,9 @@ export function windowFor(index, { scroll_top, viewport_px, overscan_px = 600 })
 }
 /** The anchor to log for a scroll position: the first row whose bottom is below scroll_top, and how far its top sits from
  *  the viewport top (negative when it is partly scrolled past), as scrollAnchor's user_scrolled {top_block_id, offset}. */
-// `skip(i)`: rows that must never be the anchor because they do not move with the content when rows are prepended above
-// them: a "loading older" sentinel at index 0, a sticky head. Anchoring on one holds the page at the top while a whole
-// page arrives under it. The first row at or after the scroll position that is not skipped is used.
+// `skip(i)`: rows that must never be the anchor because they do not move with the content when rows are prepended above them: a "loading
+// older" sentinel at index 0, a sticky head. Anchoring on one holds the page at the top while a whole page arrives under it. The first row
+// at or after the scroll position that is not skipped is used.
 export function anchorAt(index, scroll_top, idAt, { skip = null } = {}) {
   if (!index.count) return null;
   let i = index.indexAt(scroll_top);
@@ -705,9 +734,64 @@ export function preview(comp, s, name, payload = {}) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+/** request(): an async answer as kit state (Docstore AsyncStatusMixin / AsyncActionMixin, P1:1259, py l2/mixins.py; DOCSTORE3
+ *  section 8
+ *  One request at a time, latest wins; every action names its request `id` (a ULID minted
+ *  once when the request is made), so an answer is an ABSOLUTE action keyed by request id:
+ *    request  {id, at?, deadline_at?}  a newer request (larger ULID) supersedes whatever is current; an equal or older id
+ *                                      is a no-op (a duplicate or a stale request).
+ *    start    {id, at?}                pending|failed|cancelled -> running (clears error), py start().
+ *    progress {id, value 0..1, text?}  only while running.
+ *    complete {id, result?, at?}       running -> completed, progress 1.
+ *    fail     {id, error, at?}         pending|running -> failed; error {code, message?, ...} or a code string. Pending
+ *                                      may fail (a deadline that fired before the work started: the waits exit edge).
+ *    cancel   {id, actor?, at?}        pending|running -> cancelled.
+ *  An answer whose id is not the current one (superseded) or arrives after its request ended (late, duplicated) changes
+ *  nothing. Times are opaque numbers the caller passes (reducers never read the clock). `waits`: pending and running have
+ *  a deadline exit to failed (laws-ui contract; lib/engine/request.js arms the timer). The runner with JobHandle, timeouts
+ *  and cancellation is lib/engine/request.js. Gestures: retry (failed|cancelled -> start same id), cancel (the current one).
+ */
+export function request({ deadline_ms = 20_000 } = {}) {
+  const at = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const errOf = (e) => (isStr(e) && e ? { code: e } : e && typeof e === 'object' && !Array.isArray(e) && isStr(e.code) && e.code && isJson(e) ? jsonCopy(e) : null);
+  const mine = (s, id) => isStr(id) && id !== '' && id === s.id;
+  const initial = { status: 'idle', id: null, progress: 0, status_text: null, result: null, error: null, requested_at: null, deadline_at: null, started_at: null, ended_at: null };
+  return component({
+    kind: 'request', args: deadline_ms === 20_000 ? [] : [{ deadline_ms }], conflict: 'lww',
+    initial,
+    states: ['idle', 'pending', 'running', 'completed', 'failed', 'cancelled'],
+    transitions: { idle: ['pending'], pending: ['running', 'failed', 'cancelled'], running: ['completed', 'failed', 'cancelled', 'pending'], completed: ['pending'], failed: ['pending', 'running'], cancelled: ['pending', 'running'] },
+    terminal: [], stateField: 'status',
+    waits: { pending: { deadline_ms, to: 'failed' }, running: { deadline_ms, to: 'failed' } },
+    actions: {
+      request: (s, { id, at: t, deadline_at } = {}) => {
+        if (!isStr(id) || !id || (s.id !== null && id <= s.id)) return s;
+        // a pending request superseded by a newer one is replaced in place (pending -> pending), so no edge is needed
+        return { ...initial, status: 'pending', id, requested_at: at(t), deadline_at: at(deadline_at) };
+      },
+      start: (s, { id, at: t } = {}) => (mine(s, id) && ['pending', 'failed', 'cancelled'].includes(s.status) ? { ...s, status: 'running', error: null, started_at: at(t) } : s),
+      progress: (s, { id, value, text } = {}) => {
+        if (!mine(s, id) || s.status !== 'running' || !isNum(value) || value < 0 || value > 1) return s;
+        return keep(s, { ...s, progress: value, status_text: isStr(text) ? text : s.status_text });
+      },
+      complete: (s, { id, result = null, at: t } = {}) => (mine(s, id) && s.status === 'running' && isJson(result) ? { ...s, status: 'completed', result: jsonCopy(result), progress: 1, ended_at: at(t) } : s),
+      fail: (s, { id, error, at: t } = {}) => {
+        const e = errOf(error);
+        return mine(s, id) && e && ['pending', 'running'].includes(s.status) ? { ...s, status: 'failed', error: e, ended_at: at(t) } : s;
+      },
+      cancel: (s, { id, actor = 'user', at: t } = {}) => (mine(s, id) && ['pending', 'running'].includes(s.status) ? { ...s, status: 'cancelled', error: { code: 'AsyncCancelled', actor: isStr(actor) ? actor : 'user' }, ended_at: at(t) } : s),
+    },
+    gestures: {
+      retry: (s, { at: t } = {}) => (['failed', 'cancelled'].includes(s.status) ? ['start', { id: s.id, at: at(t) }] : null),
+      cancel: (s, { actor = 'user', at: t } = {}) => (['pending', 'running'].includes(s.status) ? ['cancel', { id: s.id, actor, at: at(t) }] : null),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 /** Every state component, by kind, for vectors and generic tests: the seven ported first, modes, and the four designed
  *  from webchat's overlays, panes, orderings and long lists. */
-export const registry = { toggle, modes, listSelect, search, connection, scrollAnchor, documentCursor, undoHistory, modal, splitPane, sort, pagination };
+export const registry = { toggle, modes, listSelect, search, connection, scrollAnchor, documentCursor, undoHistory, modal, splitPane, sort, pagination, request };
 
 /** Resolve a gesture against a state: [op, payload] or null (nothing to do). An action name is its own gesture. */
 export function resolve(comp, state, name, payload = {}) {
@@ -775,6 +859,6 @@ export function keymap(layers) {
 
 /** The declaration for a component (model.js declare): `app.use(declareComponent('conn', connection(), { scope: 'ephemeral' }))`. */
 export function declareComponent(name, comp, opts = {}) {
-  const life = comp.states ? { states: comp.states, transitions: comp.transitions, terminal: comp.terminal, stateField: comp.stateField } : {};
+  const life = comp.states ? { states: comp.states, transitions: comp.transitions, terminal: comp.terminal, stateField: comp.stateField, ...(comp.waits ? { waits: comp.waits } : {}) } : {};
   return { name, initial: comp.initial, actions: comp.actions, conflict: comp.conflict, ...life, ...opts };
 }

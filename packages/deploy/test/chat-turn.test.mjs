@@ -4,7 +4,7 @@
 // and every state directory are temporary, and nothing of the owner's is read.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -126,6 +126,14 @@ test('a chat turn: post a message, the runner answers through the local fake pro
     assert.deepEqual(readdirSync(path.join(dir, 'home')).filter((n) => n !== 'Library'), [], 'nothing of ours was written under HOME');
   } finally {
     if (child && child.exitCode === null) { child.kill('SIGTERM'); await new Promise((r) => { child.once('exit', r); setTimeout(r, 5000); }); }
+    // The runner child runs under scripts/relay.mjs and outlives the server by design (a restart hands it over), so the
+    // test ends it itself: every process whose command line names this scratch directory (relay, runner, store reader).
+    try {
+      for (const line of execFileSync('ps', ['-eo', 'pid=,command='], { encoding: 'utf8' }).split('\n')) {
+        const m = /^\s*(\d+)\s+(.*)$/u.exec(line);
+        if (m && Number(m[1]) !== process.pid && m[2].includes(dir)) { try { process.kill(Number(m[1]), 'SIGKILL'); } catch { /* gone */ } }
+      }
+    } catch { /* ps unavailable */ }
     await fake?.close?.();
     rmSync(dir, { recursive: true, force: true });
   }

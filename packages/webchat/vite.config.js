@@ -1,6 +1,6 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
-import { codeShapeDetail } from './src/lib/server/code-shape.js';
+import { codeShape, codeShapeDetail, HANDOVER_ROOTS } from './src/lib/server/code-shape.js';
 
 export default {
   plugins: [tailwindcss(), sveltekit()],
@@ -11,7 +11,7 @@ export default {
   
   
   
-  define: { __WEBCHAT_CODE_SHAPE__: JSON.stringify(codeShapeDetail()) },
+  define: { __WEBCHAT_CODE_SHAPE__: JSON.stringify(codeShapeDetail()), __WEBCHAT_HANDOVER_SHAPE__: JSON.stringify(codeShape(HANDOVER_ROOTS)) },
   server: { fs: { allow: ['..'] } },
   test: {
     environment: 'jsdom',

@@ -77,10 +77,14 @@ function priced(model, env) {
   const p = table[model];
   return p && Number.isFinite(p.input) && p.input >= 0 && Number.isFinite(p.output) && p.output >= 0;
 }
-function reserveFor(model, bodyBytes, maxTokens, env) {
+function reserveFor(model, bodyBytes, maxTokens, env, prefixBytes = 0) {
   if (!priced(model, env)) return null;
+  // With the stable prefix cached, its worst case is a fresh one-hour write at 2x input, so it is reserved at that.
+  const prefix = env.TOPHAT_RUNNER_CACHE === '0' ? 0 : Math.min(bodyBytes, prefixBytes);
+  const written = Math.ceil(prefix / RESERVE_BYTES_PER_TOKEN);
   return costOf(model, {
-    input_tokens: Math.ceil(bodyBytes / RESERVE_BYTES_PER_TOKEN),
+    input_tokens: Math.ceil((bodyBytes - prefix) / RESERVE_BYTES_PER_TOKEN),
+    cache_creation_input_tokens: written, cache_creation_1h_input_tokens: written, cache_creation_5m_input_tokens: 0,
     output_tokens: maxTokens
   }, env);
 }
@@ -120,7 +124,10 @@ export async function call(input = {}, options = {}) {
 
   // Credentials first, and from one place, so a process that inherited no variables still runs.
   const resolution = resolved || await resolveCredentials(env);
-  const useEnv = { ...resolution.env, TOPHAT_RUNNER_RETRIES: '0', TOPHAT_RUNNER_CACHE: '0' };
+  // One-shot bodies are unique, so a rolling message breakpoint is a write no later call reads. The stable prefix
+  // (tools, system) is another matter: a batch caller repeats it call after call, so it is cached for an hour and
+  // read at a tenth of input price. TOPHAT_RUNNER_CACHE=0 from the caller still turns caching off.
+  const useEnv = { ...resolution.env, TOPHAT_RUNNER_RETRIES: '0', TOPHAT_RUNNER_CACHE: env.TOPHAT_RUNNER_CACHE === '0' ? '0' : 'prefix' };
   if (!resolution.anthropic && !resolution.openai) {
     // The one genuinely terminal failure, and it is loud: no model on this machine has a credential.
     return {
@@ -147,6 +154,7 @@ export async function call(input = {}, options = {}) {
   const cycleCap = Number(maxCycles ?? env.TOPHAT_RUNNER_MAX_CYCLES ?? DEFAULT_MAX_CYCLES);
   const maxTokens = input.max_tokens || 16_000;
   if (!(Number.isFinite(cap) && cap > 0) || !(Number.isFinite(maxTokens) && maxTokens > 0)) return { ok: false, reason: 'cost', detail: 'maxUsd and max_tokens must be finite positive numbers', tried, attempts };
+  const prefixBytes = Buffer.byteLength(JSON.stringify({ system: input.system || '', tools: input.tools || [], schema: input.schema || null }));
   const bodyBytes = Buffer.byteLength(JSON.stringify({
     system: input.system || '', user: input.user || '', messages: input.messages || [], tools: input.tools || [], schema: input.schema || null
   })) + 2048;
@@ -177,6 +185,8 @@ export async function call(input = {}, options = {}) {
       const request = { model, max_tokens: maxTokens,
         messages: hasMessages ? input.messages : [{ role: 'user', content: input.user }] };
       for (const field of ['system', 'tools', 'reasoning_effort', 'output_config', 'tool_choice']) if (input[field]) request[field] = input[field];
+      // The purpose key it bills to (rev5/model.mjs keyRoute): push is push, every other one-shot caller is a pipe.
+      request.caller = input.caller || useEnv.TOPHAT_RUNNER_CALLER || (input.purpose === 'push' ? 'push' : 'pipes');
       if (input.schema) {
         request.tools = [{ name: 'emit', description: 'Return the structured result.', input_schema: input.schema }];
         request.tool_choice = { type: 'tool', name: 'emit' };
@@ -245,7 +255,7 @@ export async function call(input = {}, options = {}) {
       tried.push({ model, reason: 'ineligible', detail });
       return { ok: false, reason: 'ineligible', detail, tried, attempts, cost_usd: round(spend) };
     }
-    const reserve = reserveFor(model, bodyBytes, maxTokens, useEnv);
+    const reserve = reserveFor(model, bodyBytes, maxTokens, useEnv, prefixBytes);
     if (reserve === null) {
       const detail = `${model} has no entry in PRICES (rev5/model.mjs), so a call to it cannot be bounded by maxUsd`;
       tried.push({ model, reason: 'unpriced', detail });

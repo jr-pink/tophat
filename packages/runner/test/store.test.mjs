@@ -72,6 +72,10 @@ test('memory: ingest, apply, search, read', () => {
   assert.equal(ap.ok, true);
   const hits = ok(answer('search', { query: 'kiln', limit: 5 }, { db: file, env }));
   assert.ok(hits.hits.length > 0, JSON.stringify(hits));
+  // no memory-embeddings.json beside the store: lexical only, no dense leg; `derived` gives notes their own allowance
+  assert.equal(hits.coverage.dense, undefined);
+  const both = ok(answer('search', { query: 'kiln', limit: 1, derived: 2 }, { db: file, env }));
+  assert.deepEqual(both.hits.map((h) => h.kind).sort(), ['entity', 'note', 'raw']);
   const ent = ok(answer('read', { kind: 'entity', id: ap.id_map.$d }, { db: file, env }));
   assert.equal(ent.entity.name, 'Kiln Mk1');
   assert.equal(ent.notes.length, 1);
@@ -164,10 +168,14 @@ test('the assembled callers reach this store, not a Python CLI', async () => {
     assert.ok(!/'-m', 'rev5\.cli'/.test(readFileSync(path.join(HERE, '..', f), 'utf8')), `${f} still spawns the Python CLI`);
   }
   const file = db();
-  const { taskRequest } = await import(path.join(HERE, '../rev5/tasks.mjs'));
+  const { taskRequest, taskRequestAsync } = await import(path.join(HERE, '../rev5/tasks.mjs'));
   const out = taskRequest({ op: 'apply', op_id: 'tr1', actor: 'test', tasks: [{ id: '$t', title: 'through the assembled caller', status: 'todo' }] }, { TOPHAT_RUNNER_DB: file });
   assert.equal(out.ok, true);
   assert.equal(taskRequest({ op: 'list' }, { TOPHAT_RUNNER_DB: file }).tasks[0].title, 'through the assembled caller');
+  // the sweeper's non-blocking reader goes through the same store child
+  const listed = await taskRequestAsync({ op: 'list' }, { TOPHAT_RUNNER_DB: file });
+  assert.equal(listed.ok, true, JSON.stringify(listed));
+  assert.equal(listed.tasks[0].title, 'through the assembled caller');
   // rev6/pull/tools.mjs needs the runner's npm dependencies to import, so the store wiring is read from its text.
   const tools = readFileSync(path.join(HERE, '../rev6/pull/tools.mjs'), 'utf8');
   assert.match(tools, /installed: true, python: process\.execPath, cli: join\(REPO, 'store', 'cli\.mjs'\)/);

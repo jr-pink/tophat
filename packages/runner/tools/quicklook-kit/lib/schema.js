@@ -40,7 +40,8 @@ export const reset = (...fs) => ({ act: 'reset', fs });
 const expand = (F, a) => {
   if (typeof a === 'function') return a;
   if (a.f && !F[a.f]) throw new Error(`action refers to unknown field "${a.f}"`);
-  if (a.act === 'set') return (s, p) => assign(s, { [a.f]: F[a.f].clean(a.key ? p[a.key] : p) });
+  // A keyed set names its payload key: the generic generator (lib/validate.js genericGen) reads `payloadKey` to reach it.
+  if (a.act === 'set') return Object.assign((s, p) => assign(s, { [a.f]: F[a.f].clean(a.key ? p[a.key] : p) }), a.key ? { payloadKey: a.key } : {});
   if (a.act === 'merge') return (s, p) => assign(s, { [a.f]: F[a.f].clean({ ...s[a.f], ...p }) });
   if (a.act === 'on') return (s, p) => { const v = a.fn(s[a.f], p, s); return same(v, s[a.f]) ? s : { ...s, [a.f]: v }; };
   const names = a.fs.length ? a.fs : Object.keys(F);
