@@ -10,7 +10,7 @@ const WIDGETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..'
 
 test('one closed box per bold feature heading, its summary that heading alone', () => {
   const page = renderFallback();
-  const headings = [...sections(DESCRIPTION).features.map((f) => f.body).join('\n').matchAll(/^\*\*(\d+)\.\s+([^*]+)\*\*/gm)].map((m) => m[2].trim());
+  const headings = [...sections(DESCRIPTION).intro.matchAll(/^<summary>\*\*(\d+)\.\s+([^*]+)\*\*<\/summary>/gm)].map((m) => m[2].trim());
   const summaries = [...page.matchAll(/<summary>.*?<span class="line">(.*?)<\/span>/g)].map((m) => m[1]);
   assert.equal(headings.length, 6);
   assert.deepEqual(summaries, headings.map((h) => h.replace(/&/g, '&amp;')));
@@ -23,7 +23,7 @@ test('every paragraph of the copy is on the page, and every figure of the live a
   const b = boxes();
   assert.equal(b.length, 6);
   assert.match(page, /I'm your <b>exobrain<\/b>, for <b>you<\/b>, <b>forever<\/b>\./);
-  assert.match(page, /This system is state of the art against both research memory systems and production products\./);
+  assert.match(page, /Benchmark results comparing research memory systems and production assistants:/);
   assert.match(page, /Scan this repo for privacy, security, and malintent; then help me install it:\n<a href="https:\/\/github.com\/tophat-md\/tophat">/);
   for (const name of FRAMED) {
     // a built widget (memory-graph) ships as its template; its .html is generated from a private snapshot and gitignored, so a release tree has only the template

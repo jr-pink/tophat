@@ -1,0 +1,169 @@
+#!/usr/bin/env node
+/** tophat-commit-guard: refuse a commit that silently undoes a committed change.
+ *
+ * Why this exists. Several agent sessions may share one checkout, and they share its index.
+ * `git checkout <rev> -- <path>` writes the old blob into the index as well as the working tree.
+ * Seconds later another session, committing its own unrelated work with `git add a b && git commit`
+ * and no pathspec, takes the whole index and carries that staged reversion with it.
+ *
+ * The invariant: a commit may not contain a byte-exact reversion of an earlier commit's change
+ * to a file, because that is what an accidental index pickup looks like and is almost never what
+ * a deliberate commit looks like.
+ *
+ * Verbs: check (default, the pre-commit hook body), install, uninstall, status.
+ */
+
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync, chmodSync, unlinkSync, mkdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const TOOL = fileURLToPath(import.meta.url);
+const MARK = 'tophat-commit-guard';
+// How many staged paths are worth two git calls each. A commit wider than this is a bulk
+// operation (a move, a vendored tree) where the check buys little and costs seconds.
+const MAX_PATHS = 200;
+
+function git(args, { cwd = process.cwd(), allowFail = false } = {}) {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).trim();
+  } catch (error) {
+    if (allowFail) return null;
+    throw error;
+  }
+}
+
+/** Staged entries against HEAD, renames off so every entry is one plain path. */
+function stagedEntries(cwd) {
+  // --abbrev=40 or the raw format hands back shortened object names that no rev-parse output matches.
+  const raw = execFileSync('git', ['diff', '--cached', '--raw', '--no-renames', '--abbrev=40', '-z', 'HEAD'], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const parts = raw.split('\0');
+  const out = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const meta = parts[i];
+    const path = parts[i + 1];
+    if (!meta.startsWith(':') || !path) continue;
+    const fields = meta.slice(1).split(' ');
+    if (fields.length < 5) continue;
+    out.push({ path, stagedSha: fields[3], status: fields[4] });
+  }
+  return out;
+}
+
+/**
+ * Is this staged change an exact undo of the last commit that touched the path? Returns the
+ * commit it would revert, or null. Content reverts and deletions of a just-added file both
+ * count: both are how another session's work disappears.
+ */
+function revertedCommit(entry, cwd) {
+  const last = git(['rev-list', '-1', 'HEAD', '--', entry.path], { cwd, allowFail: true });
+  if (!last) return null;
+  const line = git(['rev-list', '--parents', '-n', '1', last], { cwd, allowFail: true });
+  const parent = line ? line.split(' ')[1] : null;
+  if (!parent) return null;
+  const before = git(['rev-parse', '--verify', '-q', `${parent}:${entry.path}`], { cwd, allowFail: true });
+  if (entry.status === 'D') return before ? null : { commit: last, kind: 'deletes the file it added' };
+  if (!before) return null;
+  return before === entry.stagedSha ? { commit: last, kind: 'restores the content it replaced' } : null;
+}
+
+function subject(sha, cwd) {
+  return git(['log', '-1', '--format=%h %ad %s', '--date=iso', sha], { cwd, allowFail: true }) || sha;
+}
+
+function check(cwd) {
+  if (process.env.TOPHAT_ALLOW_REVERT || (process.env.TOPHAT_LEGACY_ENV_PREFIX && process.env[`${process.env.TOPHAT_LEGACY_ENV_PREFIX}ALLOW_REVERT`])) return 0;
+  if (!git(['rev-parse', '--verify', '-q', 'HEAD'], { cwd, allowFail: true })) return 0;
+  const gitDir = git(['rev-parse', '--path-format=absolute', '--git-dir'], { cwd, allowFail: true });
+  // A merge or a rebase legitimately reintroduces old blobs; this guard is about a lone commit.
+  if (gitDir && ['MERGE_HEAD', 'REVERT_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'rebase-apply'].some((n) => existsSync(join(gitDir, n)))) return 0;
+
+  const entries = stagedEntries(cwd);
+  if (!entries.length || entries.length > MAX_PATHS) return 0;
+  const hits = [];
+  for (const entry of entries) {
+    const found = revertedCommit(entry, cwd);
+    if (found) hits.push({ ...entry, ...found });
+  }
+  if (!hits.length) return 0;
+
+  const lines = [
+    'tophat-commit-guard: refusing a commit that undoes committed work.',
+    '',
+    ...hits.map((hit) => `  ${hit.path}\n    staged content ${hit.kind} in ${subject(hit.commit, cwd)}`),
+    '',
+    'Several sessions share this checkout and its index, so a `git checkout <rev> -- <path>`',
+    'in one session is staged for whoever commits next. If you meant to commit only your own',
+    'files, name them: `git commit -m ... -- path1 path2`. If the revert is deliberate, repeat',
+    'the commit with TOPHAT_ALLOW_REVERT=1 (or --no-verify).',
+  ];
+  process.stderr.write(`${lines.join('\n')}\n`);
+  return 1;
+}
+
+function hookPath(cwd) {
+  const common = git(['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd });
+  return join(common, 'hooks', 'pre-commit');
+}
+
+function shim() {
+  return [
+    '#!/bin/sh',
+    `# ${MARK}: installed by tophat-commit-guard install`,
+    '# node may not be on the login PATH; find it, and never block a commit for want of it or of the guard.',
+    `GUARD='${TOOL.replace(/'/g, `'\\''`)}'`,
+    '[ -f "$GUARD" ] || exit 0',
+    'for candidate in "$(command -v node 2>/dev/null)" "$HOME"/.local/opt/node-*/bin/node /opt/homebrew/bin/node /usr/local/bin/node; do',
+    '  if [ -x "$candidate" ]; then',
+    '    exec "$candidate" "$GUARD" check',
+    '  fi',
+    'done',
+    'exit 0',
+    '',
+  ].join('\n');
+}
+
+function install(cwd, force) {
+  const path = hookPath(cwd);
+  if (existsSync(path) && !readFileSync(path, 'utf8').includes(MARK) && !force) {
+    process.stderr.write(`tophat-commit-guard: ${path} exists and is not ours; re-run with --force to replace it\n`);
+    return 2;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, shim());
+  chmodSync(path, 0o755);
+  process.stdout.write(`installed ${path}\n`);
+  return 0;
+}
+
+function uninstall(cwd) {
+  const path = hookPath(cwd);
+  if (existsSync(path) && readFileSync(path, 'utf8').includes(MARK)) {
+    unlinkSync(path);
+    process.stdout.write(`removed ${path}\n`);
+    return 0;
+  }
+  process.stdout.write('nothing of ours is installed\n');
+  return 0;
+}
+
+function status(cwd) {
+  const path = hookPath(cwd);
+  const ours = existsSync(path) && readFileSync(path, 'utf8').includes(MARK);
+  process.stdout.write(`${ours ? 'installed' : 'not installed'} ${path}\n`);
+  return ours ? 0 : 1;
+}
+
+const [verb = 'check', ...rest] = process.argv.slice(2);
+const cwd = resolve(process.env.GIT_WORK_TREE || process.cwd());
+const verbs = {
+  check: () => check(cwd),
+  install: () => install(cwd, rest.includes('--force')),
+  uninstall: () => uninstall(cwd),
+  status: () => status(cwd),
+};
+if (!verbs[verb]) {
+  process.stderr.write('usage: tophat-commit-guard [check|install|uninstall|status]\n');
+  process.exit(2);
+}
+process.exit(verbs[verb]());

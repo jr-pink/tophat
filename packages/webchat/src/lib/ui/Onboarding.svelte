@@ -4,7 +4,7 @@
   // does he have workspaces), (2) reports the anchor's rectangle and its own size so the store can compute the tip's
   // absolute position, and (3) draws the tip at the position the store holds. Nothing here decides a step.
   import { onMount, tick } from 'svelte';
-  import { every } from '../../../../runner/tools/quicklook-kit/lib/timers.js';
+  import { every } from '../../../../runner/tools/docstore-kit/lib/timers.js';
   import { onboardingStore } from '$lib/client/onboarding.js';
   import { activeTip, anchorSelector, tipText, STEPS } from '$lib/core/onboarding-state.js';
   import { automatedTitle } from '$lib/core/title.js';

@@ -1,7 +1,7 @@
 {
   "name": "@tophat-md/tools",
   "version": "1.0.0",
-  "description": "tophat memory as agent tools: a tool registry over any MemoryStore and an MCP stdio server",
+  "description": "tophat memory as agent tools (a tool registry over any MemoryStore and an MCP stdio server) and the generic command-line tools (tophat-cdp, tophat-pass, ...)",
   "license": "MIT",
   "author": "tophat contributors",
   "type": "module",
@@ -9,7 +9,18 @@
     "node": ">=22.13"
   },
   "bin": {
-    "tophat-mcp": "./bin/tophat-mcp.mjs"
+    "tophat-mcp": "./bin/tophat-mcp.mjs",
+    "tophat-cdp": "./bin/tophat-cdp.mjs",
+    "tophat-pass": "./bin/tophat-pass.mjs",
+    "tophat-fanout": "./bin/tophat-fanout.mjs",
+    "tophat-timer": "./bin/tophat-timer.mjs",
+    "tophat-onboard": "./bin/tophat-onboard.mjs",
+    "tophat-transcribe": "./bin/tophat-transcribe.mjs",
+    "tophat-vnc": "./bin/tophat-vnc.mjs",
+    "tophat-mcp-client": "./bin/tophat-mcp-client.mjs",
+    "tophat-multiplayer": "./bin/tophat-multiplayer.mjs",
+    "tophat-commit-guard": "./bin/tophat-commit-guard.mjs",
+    "tophat-redeploy": "./bin/tophat-redeploy.mjs"
   },
   "exports": {
     ".": "./index.mjs",

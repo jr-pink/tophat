@@ -1,9 +1,9 @@
-// The clips waiting to upload are the kit's synchronous outbox (tools/quicklook-kit/lib/engine/outbox-local.js) under
+// The clips waiting to upload are the kit's synchronous outbox (tools/docstore-kit/lib/engine/outbox-local.js) under
 // `qk-outbox:dictation`, one row per clip keyed by its clip id, read synchronously by DictationMic; the bytes stay in
 // their own IndexedDB below. The old list `tophat.dictation.pending` is imported once and kept: a clip leaves it only
 // when it is settled, so a rolled-back build finds exactly the clips still owed. pinned old module:
 // ui/__oracle__/dictation/dictation-outbox.v1.js; differential: ui/DictationOutbox.diff.test.js.
-import { localOutbox } from '../../../../../../runner/tools/quicklook-kit/lib/engine/outbox-local.js';
+import { localOutbox } from '../../../../../../runner/tools/docstore-kit/lib/engine/outbox-local.js';
 
 const PENDING_KEY = 'qk-outbox:dictation';
 const LEGACY_PENDING_KEY = 'tophat.dictation.pending';

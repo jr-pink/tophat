@@ -1,7 +1,7 @@
 // Which chat core a tab runs. this module only reads it, and it holds across tabs and reloads). Only the app's own session is ever
 // switched: an incognito session, a multiplayer room and a test that injects its own replica, fetch or EventSource always get the
 // legacy session.
-import { declare } from '../../../../runner/tools/quicklook-kit/lib/model.js';
+import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
 import { uiApp } from '../client/ui-app.js';
 
 export const ENGINE_FLAG_KEY = 'tophat:engine';

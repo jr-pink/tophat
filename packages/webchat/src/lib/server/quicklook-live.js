@@ -8,11 +8,11 @@ import { join } from 'node:path';
 // allow-same-origin), so it cannot use cookies or storage; this is how it hears the owner's agent
 // and reports what it shows, through files in its own artifact directory:
 //
-//   <artifact>/state.json  written by `quicklook-kit push`      -> event `state` (the file's text)
+//   <artifact>/state.json  written by `docstore-kit push`      -> event `state` (the file's text)
 //   <artifact>/view.json   written here from the page's POST    <- what the page currently shows
-//   any other file         republished by `quicklook-kit publish --into` -> event `code`
+//   any other file         republished by `docstore-kit publish --into` -> event `code`
 //                          (payload: every file's content hash; the page diffs it and swaps only
-//                          what changed, see tools/quicklook-kit/README.md)
+//                          what changed, see tools/docstore-kit/README.md)
 //
 // Every writer is single (the CLI writes state.json and the files, this module writes view.json) and
 // every write is temp + rename in the same directory, so a reader sees a whole old or a whole new

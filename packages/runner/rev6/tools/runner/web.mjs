@@ -21,9 +21,10 @@ const defaultCdpBin = () => process.env.TOPHAT_CDP_BIN || '';
 const secretDirs = (env) => [env.TOPHAT_SECRETS_DIR].filter(Boolean);
 
 export function webConfig(env = process.env) {
-  const order = (env.TOPHAT_RUNNER_WEB_SEARCH_ORDER || 'google,searxng,brave,jina,browser').split(',').map((s) => s.trim()).filter(Boolean);
+  const order = (env.TOPHAT_RUNNER_WEB_SEARCH_ORDER || 'serpapi,brave,google,searxng,jina,browser').split(',').map((s) => s.trim()).filter(Boolean);
   return { order, searxng: env.TOPHAT_RUNNER_SEARXNG_URL || null, searxngParallel: Number(env.TOPHAT_RUNNER_SEARXNG_PARALLEL) || 2, retryMs: env.TOPHAT_RUNNER_WEB_RETRY_MS === undefined ? 500 : Number(env.TOPHAT_RUNNER_WEB_RETRY_MS) || 0,
     searxngFallbackEngines: env.TOPHAT_RUNNER_SEARXNG_FALLBACK_ENGINES ?? 'bing,yahoo,yep,duckduckgo web', braveKeyFile: keyFileIn(env.TOPHAT_RUNNER_BRAVE_KEY_FILE, secretDirs(env), ['brave-search-api-key', 'brave-api-key']),
+    serpapiKeyFile: keyFileIn(env.TOPHAT_RUNNER_SERPAPI_KEY_FILE, secretDirs(env), ['serpapi-api-key']),
     googleKeyFile: keyFileIn(env.TOPHAT_RUNNER_GOOGLE_KEY_FILE, secretDirs(env), ['gemini-api-key', 'google-gemini-api-key']), googleModel: env.TOPHAT_RUNNER_GOOGLE_MODEL || 'gemini-3.8-flash',
     jina: env.TOPHAT_RUNNER_WEB_JINA !== '0', pageChars: Number(env.TOPHAT_RUNNER_WEB_PAGE_CHARS) || PAGE_CHARS, timeoutMs: Number(env.TOPHAT_RUNNER_WEB_MS) || FETCH_MS,
     allowLocal: env.TOPHAT_RUNNER_WEB_ALLOW_LOCAL === '1',
@@ -34,7 +35,7 @@ export function webConfig(env = process.env) {
 
 export function webConfigured(env = process.env) {
   const c = webConfig(env);
-  return env.TOPHAT_RUNNER_WEB !== '0' && Boolean(c.searxng || c.googleKeyFile || c.braveKeyFile || c.jina);
+  return env.TOPHAT_RUNNER_WEB !== '0' && Boolean(c.searxng || c.serpapiKeyFile || c.googleKeyFile || c.braveKeyFile || c.jina);
 }
 
 export function webToolSpecs() {
@@ -230,6 +231,36 @@ async function searchGoogle(query, { count, config, fetchImpl }) {
   return out;
 }
 
+// ---- SerpAPI: Google's own organic results as JSON ------------------------------------------------------------------------
+//
+// Gemini grounding returns the pages a model chose to cite, not Google's ranked list, and ignores operators like site:;
+// SerpAPI runs the query on google.com and returns the organic results in rank order, so `site:linkedin.com/in...` works as
+// typed. SerpAPI takes the key only as the api_key query parameter, so every error is scrubbed of it before it leaves this
+// function.
+const SERPAPI = 'https://serpapi.com/search.json';
+
+async function searchSerpapi(query, { count, config, fetchImpl }) {
+  let key = '';
+  try { key = readFileSync(config.serpapiKeyFile, 'utf8').trim(); } catch (error) { throw new Error('serpapi key file unreadable (' + (error.code || 'error') + ')'); }
+  if (!key) throw new Error('serpapi key file is empty');
+  const scrub = (text) => String(text).split(key).join('[key]');
+  const url = SERPAPI + '?' + new URLSearchParams({ engine: 'google', q: query, num: String(Math.min(Math.max(count, 10), 100)), hl: 'en', gl: 'us', api_key: key });
+  let res;
+  try { res = await fetchBounded(url, { fetchImpl, timeoutMs: Math.max(config.timeoutMs, 30_000), headers: { accept: 'application/json' } }); } catch (error) { throw new Error('serpapi unreachable: ' + scrub(error.message).slice(0, 200)); }
+  let data = null;
+  try { data = JSON.parse(res.body); } catch { /* not JSON */ }
+  if (res.status !== 200) throw new Error('serpapi answered HTTP ' + res.status + (data?.error ? ': ' + scrub(data.error).slice(0, 200) : ''));
+  if (!data) throw new Error('serpapi answered something other than JSON');
+  if (data.error) {
+    if (/hasn't returned any results/i.test(data.error)) throw Object.assign(new Error('google returned no results for this query'), { noMatches: true });
+    throw new Error('serpapi: ' + scrub(data.error).slice(0, 200));
+  }
+  const out = (data.organic_results || []).filter((r) => r.link).slice(0, count).map((r) => ({ title: r.title || '', url: r.link, snippet: cut((r.snippet || '').trim(), 300), published: r.date || null, engine: 'google via serpapi' }));
+  const box = data.answer_box?.answer || data.answer_box?.snippet;
+  if (box) out.answer = cut(String(box), 1200);
+  return out;
+}
+
 async function searchBrave(query, { count, config, fetchImpl }) {
   let key = '';
   try { key = readFileSync(config.braveKeyFile, 'utf8').trim(); } catch (error) { throw new Error(`brave key file unreadable (${error.code || 'error'})`); }
@@ -301,7 +332,7 @@ async function searchBrowser(query, { count, config, browserImpl }) {
   throw new Error('the search page in the browser had no results');
 }
 
-const PROVIDERS = { google: searchGoogle, searxng: searchSearxng, brave: searchBrave, jina: searchJina, browser: searchBrowser };
+const PROVIDERS = { serpapi: searchSerpapi, google: searchGoogle, searxng: searchSearxng, brave: searchBrave, jina: searchJina, browser: searchBrowser };
 
 /**
  * One query: the first configured provider that returns results. A provider that answers with nothing counts as a
@@ -317,6 +348,7 @@ export async function searchWeb(query, { count = 8, env = process.env, fetchImpl
     const provider = PROVIDERS[name];
     if (!provider) { tried.push({ provider: name, skipped: 'unknown provider' }); continue; }
     if (name === 'searxng' && !config.searxng) { tried.push({ provider: name, skipped: 'TOPHAT_RUNNER_SEARXNG_URL unset' }); continue; }
+    if (name === 'serpapi' && !config.serpapiKeyFile) { tried.push({ provider: name, skipped: 'no SerpAPI key (drop one at ' + (secretDirs(env)[0] || '$TOPHAT_SECRETS_DIR') + '/serpapi-api-key or set TOPHAT_RUNNER_SERPAPI_KEY_FILE)' }); continue; }
     if (name === 'google' && !config.googleKeyFile) { tried.push({ provider: name, skipped: 'no Gemini API key (drop one at ' + (secretDirs(env)[0] || '$TOPHAT_SECRETS_DIR') + '/gemini-api-key or set TOPHAT_RUNNER_GOOGLE_KEY_FILE)' }); continue; }
     if (name === 'brave' && !config.braveKeyFile) { tried.push({ provider: name, skipped: 'TOPHAT_RUNNER_BRAVE_KEY_FILE unset' }); continue; }
     if (name === 'jina' && !config.jina) { tried.push({ provider: name, skipped: 'TOPHAT_RUNNER_WEB_JINA=0' }); continue; }

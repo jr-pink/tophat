@@ -7,9 +7,9 @@
 // scope 'local', `durable`: the sequence is minted by read-modify-write against storage and is on disk before the
 // action carrying it is sent, so two tabs and a reload never hand out the same number (the old code did the same with
 // getItem/setItem). `crossTab`: a change in another tab reaches this one (the old page re-read auto-mic every report).
-import { declare } from '../../../../runner/tools/quicklook-kit/lib/model.js';
-import { bool, set } from '../../../../runner/tools/quicklook-kit/lib/schema.js';
-import { range, counter, advance, mint } from '../../../../runner/tools/quicklook-kit/lib/recipes.js';
+import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
+import { bool, set } from '../../../../runner/tools/docstore-kit/lib/schema.js';
+import { range, counter, advance, mint } from '../../../../runner/tools/docstore-kit/lib/recipes.js';
 
 export const TEXT_STEPS = [0.85, 0.925, 1, 1.1, 1.2, 1.35, 1.5];
 

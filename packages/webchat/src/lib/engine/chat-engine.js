@@ -2,13 +2,13 @@
 // chat store, the core (engine/core.js), the one /api/events connection and the telemetry lane; tabs call its methods
 // and receive snapshots and patches (kit lib/engine/host.js).
 
-import { serveEngine } from '../../../../runner/tools/quicklook-kit/lib/engine/host.js';
-import { createTelemetryLane } from '../../../../runner/tools/quicklook-kit/lib/engine/lane.js';
-import { createDeadlineFetch } from '../../../../runner/tools/quicklook-kit/lib/engine/deadline.js';
+import { serveEngine } from '../../../../runner/tools/docstore-kit/lib/engine/host.js';
+import { createTelemetryLane } from '../../../../runner/tools/docstore-kit/lib/engine/lane.js';
+import { createDeadlineFetch } from '../../../../runner/tools/docstore-kit/lib/engine/deadline.js';
 import { createEngineCore } from './core.js';
 import { openChatStore } from './chat-store.js';
 import { importLegacy, importLegacyEvents } from './migrate.js';
-import { ulid } from '../../../../runner/tools/quicklook-kit/lib/engine/ulid.js';
+import { ulid } from '../../../../runner/tools/docstore-kit/lib/engine/ulid.js';
 
 export const CHAT_DIFF = Object.freeze({ maps: ['conversations', 'items', 'earlier'], skip: ['seen', 'itemIndex'] });
 

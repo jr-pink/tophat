@@ -11,7 +11,7 @@
 // legacy entries the engine imported and has since delivered are removed, every action still owed is present once,
 // and the engine's newer header snapshot is written into the legacy replica so the first paint shows current placement.
 
-import { done, openExisting, req, walk } from '../../../../runner/tools/quicklook-kit/lib/engine/idb.js';
+import { done, openExisting, req, walk } from '../../../../runner/tools/docstore-kit/lib/engine/idb.js';
 import { readOutboxSync, writeOutboxSync } from '../client/replica.js';
 
 export const LEGACY_DB = 'tophat-webchat';

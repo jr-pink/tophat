@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -243,7 +243,43 @@ export function coverageLines(result, stamp = (iso) => iso) {
   return lines;
 }
 
-export function messagesText(result, env = process.env) {
+/** Names from the owner's Contacts app, so a bare number or address in a message row reads as the person. Read-only,
+ * once per call; a Mac without Contacts, or a locked database, yields no names and the raw handle stays.
+ */
+export function contactNameLookup(env = process.env) {
+  const byPhone = new Map(); const byMail = new Map();
+  const root = join(env.HOME || homedir(), 'Library', 'Application Support', 'AddressBook', 'Sources');
+  try {
+    for (const dir of readdirSync(root)) {
+      const file = join(root, dir, 'AddressBook-v22.abcddb');
+      if (!existsSync(file)) continue;
+      let db;
+      try {
+        db = new DatabaseSync(file, { readOnly: true });
+        const nameOf = (r) => [r.ZFIRSTNAME, r.ZLASTNAME].filter(Boolean).join(' ').trim() || r.ZORGANIZATION || null;
+        for (const r of db.prepare('SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, p.ZFULLNUMBER AS v FROM ZABCDPHONENUMBER p JOIN ZABCDRECORD r ON r.Z_PK = p.ZOWNER').all()) {
+          const key = String(r.v || '').replace(/\D/g, '').slice(-10); const name = nameOf(r);
+          if (key.length >= 7 && name && !byPhone.has(key)) byPhone.set(key, name);
+        }
+        for (const r of db.prepare('SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, e.ZADDRESS AS v FROM ZABCDEMAILADDRESS e JOIN ZABCDRECORD r ON r.Z_PK = e.ZOWNER').all()) {
+          const key = String(r.v || '').toLowerCase(); const name = nameOf(r);
+          if (key && name && !byMail.has(key)) byMail.set(key, name);
+        }
+      } catch { /* locked or unreadable card file: its people keep their raw handles */ } finally { try { db?.close(); } catch { /* already closed */ } }
+    }
+  } catch { /* no Contacts here */ }
+  return (handle) => {
+    const h = String(handle || '').trim();
+    if (!h) return null;
+    if (h.includes('@') && !h.startsWith('@')) return byMail.get(h.toLowerCase()) || null;
+    const digits = h.replace(/\D/g, '');
+    return /^\+?[\d\s().-]{7,}$/.test(h) && digits.length >= 7 ? byPhone.get(digits.slice(-10)) || null : null;
+  };
+}
+
+export function messagesText(result, env = process.env, nameOf = null) {
+  const nameFor = nameOf || contactNameLookup(env);
+  const labelled = (h) => { const n = h && h !== 'owner' && h !== 'unknown' ? nameFor(h) : null; return n ? `${n} (${h})` : h; };
   const stamp = (iso) => (iso ? localStamp(iso, env) || iso : null);
   const f = result.filters || {};
   const head = [`messages as of ${stamp(result.as_of) || result.as_of || 'now'}`, f.contact ? `contact ${f.contact}` : null,
@@ -254,7 +290,7 @@ export function messagesText(result, env = process.env) {
   const stores = Object.values(result.stores || {}).map((s) => `${s.label}: ${s.refused || s.error
     || (s.newest_message_at ? `newest message ${s.newest_message_at} = ${s.newest_message_at_local || stamp(s.newest_message_at)} (${s.age} ago), ${s.rows} rows` : 'empty')}${s.warning ? `\n  !! ${s.warning}` : ''}`);
   const rows = (result.messages || []).map((m) => {
-    const who = [m.author, m.chat && m.chat !== m.author ? `in ${m.chat}` : null].filter(Boolean).join(' ');
+    const who = [labelled(m.author), m.chat && m.chat !== m.author ? `in ${labelled(m.chat)}` : null].filter(Boolean).join(' ');
     const line = [`${m.source} ${m.native_id}`, m.at_local || stamp(m.at), who, m.network || m.service].filter(Boolean).join(' | ');
     const text = String(m.text ?? '');
     return `${line}\n${text ? text.split('\n').map((l) => (l ? `    ${l}` : '')).join('\n') : '    (no text: an attachment or a reaction)'}`;

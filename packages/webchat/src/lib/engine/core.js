@@ -25,9 +25,9 @@ import {
 import { DELIVERY_EFFECTS, deliveryStep, initialDelivery, pendingUploadsOf, unsentMessages, unsentByConversation, waitingUploadsByConversation } from '../core/delivery.js';
 import { fromApp, syncWindow } from '../client/week-sync.js';
 import { remoteImageUrl } from '../core/rich-content.js';
-import { connection } from '../../../../runner/tools/quicklook-kit/lib/components.js';
-import { createDeadlineFetch, DEADLINE_MS } from '../../../../runner/tools/quicklook-kit/lib/engine/deadline.js';
-import { ulid as defaultUlid } from '../../../../runner/tools/quicklook-kit/lib/engine/ulid.js';
+import { connection } from '../../../../runner/tools/docstore-kit/lib/components.js';
+import { createDeadlineFetch, DEADLINE_MS } from '../../../../runner/tools/docstore-kit/lib/engine/deadline.js';
+import { ulid as defaultUlid } from '../../../../runner/tools/docstore-kit/lib/engine/ulid.js';
 import { searchReplica } from './offline-search.js';
 import { BackpressureError, CHAT_POLICY } from './chat-store.js';
 

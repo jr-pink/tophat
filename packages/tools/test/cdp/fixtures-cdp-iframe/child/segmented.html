@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>segmented card</title>
+<style>
+ html,body{margin:0;font:14px -apple-system,sans-serif}
+ input{width:48px;height:28px;box-sizing:border-box;border:1px solid #ccc;margin:2px;text-align:center}
+</style>
+</head>
+<body>
+<div id="segments">
+  <input class="seg" id="s0" maxlength="4" inputmode="numeric" autocomplete="off">
+  <input class="seg" id="s1" maxlength="4" inputmode="numeric" autocomplete="off">
+  <input class="seg" id="s2" maxlength="4" inputmode="numeric" autocomplete="off">
+  <input class="seg" id="s3" maxlength="4" inputmode="numeric" autocomplete="off">
+</div>
+<script>
+  // Auto-advance on a full segment, and Backspace in an EMPTY segment walks
+  // focus backwards and eats a character from the previous one. That is the
+  // behaviour that made a 25-Backspace "clear the CVV" loop wipe the expiry and
+  // the card number as well.
+  const segs = [...document.querySelectorAll('.seg')];
+  const publish = () => parent.postMessage({
+    type: 'field', name: window.name || 'segmented',
+    value: segs.map(s => s.value).join(' '), valid: true
+  }, '*');
+
+  segs.forEach((seg, index) => {
+    seg.addEventListener('input', () => {
+      if (seg.value.length >= 4 && index < segs.length - 1) {
+        const next = segs[index + 1];
+        next.focus();
+        next.setSelectionRange(next.value.length, next.value.length);
+      }
+      publish();
+    });
+    seg.addEventListener('keydown', (event) => {
+      if (event.key !== 'Backspace') return;
+      if (seg.value.length === 0 && index > 0) {
+        event.preventDefault();
+        const prev = segs[index - 1];
+        prev.value = prev.value.slice(0, -1);
+        prev.focus();
+        prev.setSelectionRange(prev.value.length, prev.value.length);
+        publish();
+      }
+    });
+  });
+  window.__segments = () => segs.map(s => s.value);
+  publish();
+</script>
+</body>
+</html>

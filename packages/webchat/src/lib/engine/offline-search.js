@@ -1,8 +1,8 @@
 // Chat search over the replica, in the /api/search body shape. The search itself is the kit's
-// (tools/quicklook-kit/lib/engine/search.js: tokens, deadline, coverage); what is chat-specific is which event
+// (tools/docstore-kit/lib/engine/search.js: tokens, deadline, coverage); what is chat-specific is which event
 // fields are text, that streaming fragments are skipped, and the result row the search palette renders.
 
-import { searchStore } from '../../../../runner/tools/quicklook-kit/lib/engine/search.js';
+import { searchStore } from '../../../../runner/tools/docstore-kit/lib/engine/search.js';
 
 const TEXT_FIELDS = ['text', 'output', 'title', 'description', 'prompt', 'message'];
 export const chatTextOf = (event) => {

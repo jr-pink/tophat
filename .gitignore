@@ -7,3 +7,5 @@ packages/webchat/build/
 packages/webchat/.svelte-kit/
 packages/webchat/build.*.kit/
 packages/webchat/build.ship.lock
+__pycache__/
+*.pyc

@@ -31,16 +31,21 @@ export function parseSpec(spec, mac) {
   return { key, ...m }
 }
 
+// What Shift makes of a punctuation key: the browser reports the shifted character ("mod+shift+." arrives as key ">"), so a
+// spec naming shift and the unshifted character ("mod+shift+.") also matches the shifted one.
+export const SHIFTED = { '.': '>', ',': '<', '/': '?', ';': ':', "'": '"', '[': '{', ']': '}', '\\': '|', '-': '_', '=': '+', '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')' }
+
 export function matches(e, s) {
   const single = e.key.length === 1
   const letter = single && e.key.toLowerCase() !== e.key.toUpperCase()
-  const sameKey = single && s.key.length === 1 ? e.key.toLowerCase() === s.key.toLowerCase() : e.key === s.key
+  let sameKey = single && s.key.length === 1 ? e.key.toLowerCase() === s.key.toLowerCase() : e.key === s.key
+  if (!sameKey && s.shift && e.shiftKey && single && s.key.length === 1 && SHIFTED[s.key] === e.key) sameKey = true
   if (!sameKey) return false
   if (!!e.ctrlKey !== s.ctrl || !!e.metaKey !== s.meta || !!e.altKey !== s.alt) return false
   // shift is strict for letters and named keys (g is not shift+g, ArrowUp is not shift+ArrowUp);
   // for punctuation and digits the character already encodes it ("?" is shift+/), so it is ignored
   if (letter || !single) return !!e.shiftKey === s.shift
-  return true
+  return !s.shift || !!e.shiftKey // a spec that names shift needs it held, whichever character it makes
 }
 
 export function createKeys(target = globalThis.window, { mac = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || '') } = {}) {

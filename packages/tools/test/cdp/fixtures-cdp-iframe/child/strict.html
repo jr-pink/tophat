@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>strict expiry</title>
+<style>html,body{margin:0;font:14px -apple-system,sans-serif}input{width:98%;height:28px;box-sizing:border-box;border:0;outline:none}</style>
+</head>
+<body>
+<input id="field" type="text" inputmode="numeric" autocomplete="off" placeholder="MM / YY">
+<script>
+  // React-ish: the component's state is the truth, the DOM input is a render of
+  // it. Only a TRUSTED input event updates state; an untrusted one (el.value =
+  // x, dispatchEvent(new Event('input'))) is reverted on the next frame. The
+  // validation message is published to the PARENT page, exactly as Shopify's
+  // "Enter a valid expiration date" sits outside the card iframe.
+  const input = document.getElementById('field');
+  let state = '';
+  const digits = () => state.replace(/\D/g, '');
+  const valid = () => digits().length === 4;
+  const publish = () => parent.postMessage({
+    type: 'field', name: window.name || 'expiry', value: state,
+    valid: valid(), error: 'Enter a valid expiration date'
+  }, '*');
+
+  input.addEventListener('input', (event) => {
+    if (!event.isTrusted) { input.value = state; return; }
+    state = input.value;
+    publish();
+  });
+
+  // The render loop that eats DOM value assignment.
+  const render = () => {
+    if (input.value !== state) input.value = state;
+    requestAnimationFrame(render);
+  };
+  requestAnimationFrame(render);
+
+  window.__state = () => state;
+  Object.defineProperty(window, '__stateValue', { get: () => state });
+  publish();
+</script>
+</body>
+</html>

@@ -11,8 +11,8 @@
   --ink: #e8e6e3;
   --ink-dim: #a1a09c;
   --ink-faint: #6d6c69;
-  --accent: #d98a5c;
-  --accent-soft: #d98a5c22;
+  --accent: #e6a0a6;
+  --accent-soft: #e6a0a622;
   --live: #6fbf8b;
   --warn: #d9695c;
   --sans: ui-sans-serif, -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
@@ -50,8 +50,8 @@
     --ink: #1b1a18;
     --ink-dim: #56544f;
     --ink-faint: #8b8880;
-    --accent: #b4632f;
-    --accent-soft: #b4632f1a;
+    --accent: #b45c6e;
+    --accent-soft: #b45c6e1a;
     --live: #2f7d4f;
     --warn: #b03b2c;
     color-scheme: light;

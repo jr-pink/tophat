@@ -2,9 +2,9 @@
 // rules. Fetched once from /api/scopes and kept on the device so the dropdown renders offline.
 
 import { LEGACY_SCOPE } from './scopes.js';
-import { declare } from '../../../../runner/tools/quicklook-kit/lib/model.js';
-import { set } from '../../../../runner/tools/quicklook-kit/lib/schema.js';
-import { cache } from '../../../../runner/tools/quicklook-kit/lib/recipes.js';
+import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
+import { set } from '../../../../runner/tools/docstore-kit/lib/schema.js';
+import { cache } from '../../../../runner/tools/docstore-kit/lib/recipes.js';
 import { uiApp } from '../client/ui-app.js';
 
 // The last /api/scopes answer, kept on the device for the offline paint: kit state, hydrated synchronously. The old

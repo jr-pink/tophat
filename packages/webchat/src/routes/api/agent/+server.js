@@ -80,7 +80,7 @@ export async function POST({ request, getClientAddress }) {
     // filed by hand) and move or unfile them; dryRun writes nothing. unfileFolder: empty a folder
     // the router made, by auto events; force names chat ids an agent (not he) put there.
     if (body.refile === true) {
-      const moved = await app.folderRouter.refile({ archived: body.archived === true, since, dryRun: body.dryRun === true, ids: Array.isArray(body.ids) ? body.ids.map(String) : null, limit: Math.min(Number(body.limit) || 100, 500) });
+      const moved = await app.folderRouter.refile({ archived: body.archived === true, since, dryRun: body.dryRun === true, ids: Array.isArray(body.ids) ? body.ids.map(String) : null, limit: Math.min(Number(body.limit) || 100, 2000), all: body.all === true });
       return json({ ok: true, dryRun: body.dryRun === true, moved }, { headers: { 'cache-control': 'no-store' } });
     }
     if (typeof body.unfileFolder === 'string' && body.unfileFolder) {

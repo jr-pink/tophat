@@ -119,15 +119,22 @@ export function moveFolder(names, layout, drag, target, where) {
   const flat = [];
   const walk = (k) => { for (const c of tree.children(k)) { flat.push(c); walk(c); } };
   walk(ROOT);
-  const order = flat.filter((k) => k !== drag);
+  // The dragged folder moves with its whole subtree as one block, so the order stays depth first and a repeated move is
+  // the same order.
+  const block = flat.filter((k) => tree.isWithin(k, drag));
+  const order = flat.filter((k) => !tree.isWithin(k, drag));
+  let at;
   if (where === 'inside' || target === ROOT) {
-    const sibs = order.filter((k) => (k === drag ? false : (newParent === ROOT ? tree.parentOf(k) === ROOT : tree.parentOf(k) === newParent)));
-    const last = sibs.length ? order.indexOf(sibs[sibs.length - 1]) + 1 : (newParent === ROOT ? order.length : order.indexOf(newParent) + 1);
-    order.splice(last, 0, drag);
+    // Last among its new siblings: after the parent's whole subtree.
+    at = newParent === ROOT ? order.length : order.indexOf(newParent) + 1;
+    if (newParent !== ROOT) for (let i = 0; i < order.length; i += 1) if (tree.isWithin(order[i], newParent)) at = i + 1;
+  } else if (where === 'before') {
+    at = order.indexOf(target);
   } else {
-    const at = order.indexOf(target);
-    order.splice(where === 'before' ? at : at + 1, 0, drag);
+    at = order.indexOf(target) + 1;
+    while (at < order.length && tree.isWithin(order[at], target)) at += 1;
   }
+  order.splice(at, 0, ...block);
   const parent = { ...base.parent };
   if (newParent === ROOT) delete parent[drag]; else parent[drag] = newParent;
   return { order, parent };
@@ -205,4 +212,129 @@ export function renamedIn(names, from, to) {
   if (at < 0) return withName(names, clean);
   const next = names.filter((n, i) => i === at || !sameName(n, clean)).map((n) => (sameName(n, from) ? clean : n));
   return next.length === names.length && next.every((n, i) => n === names[i]) ? names : next;
+}
+
+// --------------------------------------------------------------------------------------------------------------- The
+// explorer. One flat list of visible rows, VS Code's tree model: each row a folder or a chat with its depth, so the
+// list renders as one {#each}, indents by depth, and the keyboard walks it in order.
+
+/**
+ * The parent map the tree is drawn with: the shared place of each folder (server folder metadata, `parent` + `parentAt`,
+ * the same tree the router reads) wins; a folder with no shared place yet keeps this device's old local parent.
+ */
+export function effectiveLayout(layout, descs = {}) {
+  const base = cleanLayout(layout);
+  const parent = { ...base.parent };
+  for (const [k, d] of Object.entries(descs || {})) {
+    if (typeof d?.parentAt !== 'string') continue;
+    if (d.parent) parent[k] = d.parent; else delete parent[k];
+  }
+  return { order: base.order, parent };
+}
+
+/** The chain of folder keys from the top down to `key` (inclusive); [] for the top level. */
+export function pathTo(tree, key) {
+  const out = [];
+  for (let cur = key; cur && cur !== ROOT; cur = tree.parentOf(cur)) out.unshift(cur);
+  return out;
+}
+
+// Misc. Misc is virtual, never stored: a folder that has subfolders draws a last child row 'Misc' that holds the chats filed
+// directly in that folder, so those chats sit apart from the subfolders; a folder with no subfolders shows its chats directly.
+// Its open state is the kit's `open` flag under miscKey(folder).
+export const MISC_LABEL = 'Misc';
+export const miscKey = (folder) => `misc:${folder}`;
+
+/** Visible rows, depth first. `focus` is the folder made primary (its subtree only, nothing else shown); null shows the whole
+ * tree with Inbox as one top-level node. `isOpen(key)` says which folders are expanded. A search lists every matching chat
+ * flat. Inside a folder: subfolders first (his order), then its chats (ranked), each followed by its forks; a folder with
+ * subfolders puts its own chats under a last 'misc' row instead. Folder archive: `isArchived(key)` is a folder's own flag;
+ * an archived folder and its subtree are not drawn unless `showArchived`, when they draw dimmed (`archived` on the row;
+ * `archivedOwn` when it is the flagged folder itself). Nothing about parent, order or membership changes, so clearing the
+ * flag restores exactly what was there.
+ */
+export function explorerRows(rows, { names = [], layout = emptyLayout(), focus = null, isOpen = () => false, searching = false, newIn = null, isArchived = () => false, showArchived = false } = {}) {
+  const out = [];
+  const pushChats = (list, depth, dim = false) => {
+    for (const row of list) {
+      out.push({ kind: 'chat', id: row.id, row, depth, fork: false, dim });
+      for (const fork of row.forks || []) out.push({ kind: 'chat', id: fork.id, row: fork, depth: depth + 1, fork: true, dim });
+    }
+  };
+  if (searching) { pushChats(rows, 0); return out; }
+  const tree = folderTree(names, layout);
+  const nameOf = new Map(names.map((n) => [folderKey(n), n]));
+  const members = new Map();
+  for (const row of rows) {
+    const own = canonicalWorkspace(row.workspace);
+    const k = own ? folderKey(own) : UNFILED;
+    const key = k === UNFILED || nameOf.has(k) ? k : UNFILED;
+    if (!members.has(key)) members.set(key, []);
+    members.get(key).push(row);
+  }
+  const live = (row) => row.indicator === 'live' || row.indicator === 'unread';
+  const shown = (k) => k === UNFILED || showArchived || !isArchived(k);
+  const subs = (k) => tree.children(k).filter(shown);
+  const subtreeLive = (k) => (members.get(k) || []).some(live) || subs(k).some(subtreeLive);
+  // A folder's own chats: directly under it, or, when it has subfolders, under its last 'misc' row.
+  const pushOwn = (k, depth, dim) => {
+    const own = members.get(k) || [];
+    if (k === UNFILED || !subs(k).length) { pushChats(own, depth, dim); return; }
+    const open = isOpen(miscKey(k));
+    out.push({ kind: 'misc', id: miscKey(k), key: miscKey(k), parent: k, name: MISC_LABEL, depth, count: own.length, open, hasChildren: own.length > 0, live: !open && own.some(live), archived: dim });
+    if (open) pushChats(own, depth + 1, dim);
+  };
+  // A folder being created is an editable row, first among the children of the folder it goes in.
+  const walk = (parentKey, depth, dim) => {
+    if (newIn !== null && newIn === parentKey) out.push({ kind: 'new', id: 'new', parent: parentKey, depth });
+    for (const k of tree.children(parentKey)) {
+      if (!shown(k)) continue;
+      const own = members.get(k) || [];
+      const open = isOpen(k);
+      const mine = k !== UNFILED && isArchived(k), gone = dim || mine;
+      out.push({ kind: 'folder', id: `f:${k}`, key: k, name: k === UNFILED ? null : nameOf.get(k) ?? null, depth, count: own.length, open,
+        hasChildren: own.length > 0 || subs(k).length > 0, live: !open && subtreeLive(k), archived: gone, archivedOwn: mine });
+      if (open || newIn === k) { walk(k, depth + 1, gone); pushOwn(k, depth + 1, gone); }
+    }
+  };
+  const root = focus ? folderKey(focus) : ROOT;
+  if (root !== ROOT && !tree.all.includes(root)) { pushChats(members.get(root) || [], 0); return out; }
+  walk(root, 0, false);
+  if (root !== ROOT) pushOwn(root, 0, false);
+  return out;
+}
+
+/** Whether a chat sits in the focused folder's subtree (null focus: everything). */
+export function inSubtree(row, focus, tree) {
+  if (!focus) return true;
+  const own = canonicalWorkspace(row?.workspace);
+  if (!own) return false;
+  return tree.isWithin(folderKey(own), folderKey(focus));
+}
+
+/**
+ * The keyboard over the explorer, VS Code's: up/down move, right opens a folder or steps to its first child, left closes
+ * an open folder or steps to the parent folder row. Returns { cursor, open?: {key, open} } or null when nothing moves.
+ */
+export function explorerKey(items, cursor, key) {
+  if (!items.length) return null;
+  const at = items.findIndex((it) => it.id === cursor);
+  const cur = at >= 0 ? items[at] : null;
+  if (key === 'down') return { cursor: items[Math.min(items.length - 1, at + 1)].id };
+  if (key === 'up') return { cursor: items[Math.max(0, at < 0 ? 0 : at - 1)].id };
+  if (key === 'home') return { cursor: items[0].id };
+  if (key === 'end') return { cursor: items[items.length - 1].id };
+  if (!cur) return { cursor: items[0].id };
+  if (key === 'right') {
+    if (cur.kind !== 'folder' && cur.kind !== 'misc') return null;
+    if (!cur.open) return cur.hasChildren ? { cursor: cur.id, open: { key: cur.key, open: true } } : null;
+    const next = items[at + 1];
+    return next && next.depth > cur.depth ? { cursor: next.id } : null;
+  }
+  if (key === 'left') {
+    if ((cur.kind === 'folder' || cur.kind === 'misc') && cur.open) return { cursor: cur.id, open: { key: cur.key, open: false } };
+    for (let i = at - 1; i >= 0; i -= 1) if ((items[i].kind === 'folder' || items[i].kind === 'misc') && items[i].depth < cur.depth) return { cursor: items[i].id };
+    return null;
+  }
+  return null;
 }

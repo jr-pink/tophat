@@ -19,14 +19,15 @@ def pct(r): return 100 * r["correct"] / r["n"]
 
 A = {r["system"]: r for r in data["setB_longmemeval_hard15"]["rows"]}
 B = {r["system"]: r for r in data["personal_flooded_with_services"]["rows"]}
-NAMES = {"Mem0 OSS (Opus 5.5)": "Mem0 OSS\nOpus 5.5", "Wiki notes (Opus 5.5)": "Wiki notes\nOpus 5.5", "all in context (baseline)": "all in context\n(oracle)", "tophat": "Tophat"}
+NAMES = {"Tophat core (Opus 5.5)": "Tophat\nOpus 5.5", "Mem0 OSS (Opus 5.5)": "Mem0 OSS\nOpus 5.5", "Wiki notes (Opus 5.5)": "Wiki notes\nOpus 5.5", "agentmemory (Opus 5.5)": "agentmemory\nOpus 5.5", "Zep/Graphiti (Opus 5.5)": "Zep/Graphiti\nOpus 5.5", "Supermemory (Opus 5.5)": "Supermemory\nOpus 5.5", "all in context (Opus 5.5)": "All in context (oracle)\nOpus 5.5", "tophat": "Tophat"}
 ORACLE = "all in context"  # the oracle row: every event in the prompt, an upper bound rather than a system; drawn grayed out
-SERVICES = {"Grok Bot", "Instinct", "Meta Muse"}
-# research memory systems: the Opus runs only (Haiku runs dropped), every one on both benchmarks; best first by the mean of the two scores
-research = [s for s in A if "Haiku" not in s and s in B]
-research.sort(key=lambda s: -(pct(A[s]) + pct(B[s])) / 2)
+SERVICES = {"Grok Bot", "Instinct", "Meta Muse", "ChatGPT dots", "Email agent"}
+# research memory systems: every 2a row is answered by Opus 5.5 and named "<system> (Opus 5.5)" (the answering model; the memory-building
+# model is in the caption), every one on both benchmarks; best first by the mean of the two scores
+research = [s for s in A if s.endswith("(Opus 5.5)") and s in B]
+research.sort(key=lambda s: (ORACLE not in s, -(pct(A[s]) + pct(B[s])) / 2))  # the oracle (upper bound) first, on the left; then systems best first
 # chat assistants: the services plus tophat, on the real personal traces; best first
-assist = sorted([s for s in B if s in SERVICES or B[s].get("ours")], key=lambda s: -pct(B[s]))
+assist = sorted([s for s in B if s in SERVICES or s == "tophat"], key=lambda s: -pct(B[s]))  # 2b's own Tophat row; the 2a row is "Tophat core (Opus 5.5)"
 
 def style(ax, title):
     ax.set_ylim(0, 116); ax.set_yticks(range(0, 101, 20)); ax.set_ylabel("correct (%)")
@@ -42,7 +43,7 @@ def ticks(ax, xs, names):
 def num(ax, x, r, ours, orc=False):
     ax.text(x, pct(r) + 1.2, f"{r['correct']}/{r['n']}", ha="center", va="bottom", fontsize=9.5, color=ACCENT if ours else (DIM if orc else INK), fontweight="bold" if ours else "normal")
 
-fig, (a, b) = plt.subplots(1, 2, figsize=(11, 4.9), gridspec_kw={"width_ratios": [1, 1], "wspace": 0.2})
+fig, (a, b) = plt.subplots(1, 2, figsize=(14.02, 4.9), gridspec_kw={"width_ratios": [1.6, 1], "wspace": 0.16})
 w = 0.36
 for i, n in enumerate(research):
     ours = bool(B[n].get("ours"))
@@ -64,8 +65,8 @@ for i, n in enumerate(assist):
 ticks(b, range(len(assist)), assist)
 # every chat assistant (Tophat included) carries its circular logo under the bar, above the name (icons from each product's site: widgets/logos/)
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
-LOGOS = {"Grok Bot": "grok-logo.png", "Instinct": "instinct-logo.png", "Meta Muse": "muse-logo.png", "tophat": "tophat-logo.png"}
-LOGO_PT = {"Grok Bot": 22, "Instinct": 27, "Meta Muse": 27, "tophat": 28}
+LOGOS = {"Grok Bot": "grok-logo.png", "ChatGPT dots": "chatgpt-logo.png", "Instinct": "instinct-logo.png", "Meta Muse": "muse-logo.png", "Email agent": "email-agent-logo.png", "tophat": "tophat-logo.png"}
+LOGO_PT = {"Grok Bot": 22, "ChatGPT dots": 27, "Instinct": 27, "Meta Muse": 27, "Email agent": 27, "tophat": 28}
 b.tick_params(axis="x", pad=36)
 for i, n in enumerate(assist):
     if n not in LOGOS: continue
@@ -82,15 +83,12 @@ for ax in (a, b):
         t.set_rotation(0); w = t.get_window_extent(rr).width / fig.dpi; t.set_rotation(22)
         t.set_transform(t.get_transform() + ScaledTranslation(0, -(w / 2) * math.sin(math.radians(22)), fig.dpi_scale_trans))
 out = HERE / "memory-bench.png"
-fig.savefig(out, dpi=300)
+fig.savefig(out, dpi=300, metadata={"Title": "Memory benchmarks: correct answers per system"}, pil_kwargs={"compress_level": 6})
 print(out)
 
 # the chat's figure: the plot in the widget frame with the shared caption underneath (the caption lives in HTML, never in the image)
 import base64
-CAPTION = ("<b>Fig. 2</b>Correct answers, best first. Left: research memory systems on the hardest 15 questions of LongMemEval-S "
-           "(about 115k tokens of chat history each) and on 99 questions over real personal traces (messages, workouts, sleep and code history; "
-           "about 300k tokens, 7,326 events), one answering model (Opus 5.5) and judge for all. Right: chat assistants on the same 99 questions, "
-           "each answering with its own model.")
+CAPTION = ("<b>Fig. 1</b>a. benchmarked on the hardest 15 questions in LongMemEval-S, b. benchmarked against real traces comprising 99 questions in a haystack of ~300k tokens.")
 head = (HERE / "memory-bench.html").read_text().split("/* this figure:")[0] if (HERE / "memory-bench.html").exists() else ""
 assert "figcaption{" in head, "memory-bench.html lost the shared caption style"
 b64 = base64.b64encode(out.read_bytes()).decode()

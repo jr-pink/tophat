@@ -2,7 +2,7 @@
 // `storage: 'tab'`, this window's sessionStorage), one save-on-the-way-out hook. Every piece of UI state that must
 // survive a reload is `uiApp().use(declaration)`; components never touch storage. Created lazily on first use (never at
 // import) so a test can give it a storage first and `resetUiApp()` after.
-import { createApp } from '../../../../runner/tools/quicklook-kit/lib/model.js';
+import { createApp } from '../../../../runner/tools/docstore-kit/lib/model.js';
 
 let app = null, detach = () => {};
 

@@ -475,6 +475,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   // are left as they are.
   async function archiveWakeChat(t, r) {
     if (!chat || !t.automated || t.ownerJoined || t.interrupted || r?.failure || t.archiveCall !== null) return;
+    if (goals && goals.read().items.some((i) => i.status === 'todo')) return;
     // A turn that ends by asking the owner something is not resolved: leave it in the sidebar. Question in the closing 600
     // characters.
     if (/\?/u.test(String(r?.finalText ?? '').slice(-600))) return;

@@ -17,9 +17,9 @@
 //      request; a server that restarted and forgot it is answered by joining again.
 
 import { createSession } from './session.js';
-import { createReplica } from '../../../../runner/tools/quicklook-kit/lib/model.js';
-import { field, set } from '../../../../runner/tools/quicklook-kit/lib/schema.js';
-import { keyed } from '../../../../runner/tools/quicklook-kit/lib/recipes.js';
+import { createReplica } from '../../../../runner/tools/docstore-kit/lib/model.js';
+import { field, set } from '../../../../runner/tools/docstore-kit/lib/schema.js';
+import { keyed } from '../../../../runner/tools/docstore-kit/lib/recipes.js';
 
 // The label this tab joins a room under ('owner' or 'anon'), per room, in the tab's storage: the kit's keyed `mp-as`
 // family, `durable` (read from and written to the storage on every use, as the old getItem/setItem were). The old

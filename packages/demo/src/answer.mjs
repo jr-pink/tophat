@@ -11,45 +11,46 @@ export const OPENER_TEXT = 'so, whats ur deal ?';
  */
 export const OPENER_GAPS_MS = [0, 68, 95, 380, 140, 91, 16, 92, 56, 15, 62, 91, 55, 122, 59, 31, 59, 60, 136]; // the comma, then a beat before 'whats'
 
-/** { lead, intro, features: [{ n, body }], install } from description.md. */
+/** { lead, intro, install, code } from description.md: the lead (before <!-- intro -->), the body (to <!-- install -->), the closing install section and its code block. */
 export function sections(file) {
   const raw = readFileSync(file, 'utf8');
-  const parts = raw.split(/^<!--\s*([\w:]+)\s*-->\s*$/m);
+  const parts = raw.split(/^<!--\s*(intro|install)\s*-->\s*$/m);
   const lead = parts[0].replace(/^#[^\n]*\n/, '').trim();
-  const out = { lead, intro: '', features: [], install: '' };
-  for (let i = 1; i < parts.length; i += 2) {
-    const key = parts[i], body = (parts[i + 1] || '').trim();
-    if (key === 'intro') out.intro = body;
-    else if (key === 'install') out.install = body;
-    else if (key.startsWith('feature:')) out.features.push({ n: key.slice(8), body });
-  }
+  const out = { lead, intro: '', install: '', code: '' };
+  for (let i = 1; i < parts.length; i += 2) out[parts[i]] = (parts[i + 1] || '').trim();
+  out.code = (out.install.match(/```[\s\S]*?```/) || [''])[0];
   return out;
 }
 
-/** The widget for each feature, by number: file name in the widgets directory and the label the chat shows above it. */
-export const WIDGETS = {
-  // the title is the label the chat shows above the figure; each widget carries its own figure caption underneath (widgets/*.html)
-  '01': ['memory-graph.html', 'Memory graph'],
-  '01b': ['memory-bench.html', 'Memory benchmarks'], // a 300 dpi matplotlib plot inside the shared caption frame: widgets/memory-bench-plot.py
-  '02': ['runner-qol.html', 'The chat interface, in detail'],
-  '03': ['mac-desktop.html', 'A Mac, driven'],
-  '03b': ['pushover.jpg', 'A notification'],
-  '04': ['connectors.html', 'Connectors'],
-  '05': ['sharing.html', 'Sharing'],
-  '06': ['local.html', 'What runs where']
+/**
+ * The figures the body places with <!-- figure:NAME -->: file name in the widgets directory and the label the chat shows above it.
+ * Each widget carries its own figure caption underneath (widgets/*.html).
+ */
+export const FIGURES = {
+  'memory-bench': ['memory-bench.html', 'Memory benchmarks'], // a 300 dpi matplotlib plot inside the shared caption frame: widgets/memory-bench-plot.py
+  'memory-graph': ['memory-graph.html', 'Memory graph'],
+  'runner-qol': ['runner-qol.html', 'The chat interface, in detail'],
+  'mac-desktop': ['mac-desktop.html', 'A Mac, driven'],
+  pushover: ['pushover.jpg', 'A notification'],
+  connectors: ['connectors.html', 'Connectors'],
+  sharing: ['sharing.html', 'Sharing'],
+  local: ['local.html', 'What runs where']
 };
 
-/** The scripted answer in markdown: the page's words, each feature followed by its widget (an image-style line the app renders in place). */
+/** The body with its markers filled: each figure as an image-style line the app renders in place (or dropped), the install block in place. */
+function fill(md, s, figure) {
+  return md
+    .replace(/^<!--\s*install-block\s*-->[ \t]*$/gm, s.code)
+    .replace(/^<!--\s*figure:([\w-]+)\s*-->[ \t]*$/gm, (_, name) => figure(name))
+    .replace(/^<!--[^>]*-->[ \t]*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+/** The scripted answer in markdown: the page's words, each figure in its place. */
 export function openerAnswer(file, widgetsDir) {
   const s = sections(file);
-  const blocks = [s.lead, s.intro];
-  for (const f of s.features) {
-    blocks.push(f.body);
-    const w = WIDGETS[f.n];
-    if (w) blocks.push(`![${w[1]}](${path.join(widgetsDir, w[0])})`);
-  }
-  blocks.push(s.install);
-  return blocks.filter(Boolean).join('\n\n');
+  const figure = (name) => { const w = FIGURES[name]; return w ? `![${w[1]}](${path.join(widgetsDir, w[0])})` : ''; };
+  return [s.lead, fill(s.intro, s, figure), s.install].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -100,14 +101,15 @@ export function metaTags(file) {
  * With JavaScript on and a session, a visible Turnstile widget returns them to the live chat once they pass it.
  */
 export function textPage({ file, contextFile, repo, markdown, why = 'check', siteKey = '', canVerify = false }) {
-  const md = (t) => markdown(t).map((b) => b.html).join('');
+  const html = (blocks) => blocks.map((b) => (b.details ? `<details><summary>${b.summary}</summary>${html(b.children)}</details>` : b.html || '')).join('');
+  const md = (t) => html(markdown(t));
   const seen = new Set(), toc = [], body = [];
   const s = sections(file);
   const lead = s.lead.replace(/\*\*/g, '').split(/\n\s*\n|(?<=\.)\s+/).map((x) => x.trim()).filter(Boolean);
   const add = (title, level, text, id) => { body.push((title ? `<h${level} id="${id}">${esc(title)}</h${level}>` : '') + md(text)); };
   // the description: its intro and features, then the install block
   body.push(`<h1>${esc(lead[0] || 'tophat')}</h1><p class="sub">${esc(lead.slice(1).join(' '))}</p>`);
-  const description = readFileSync(file, 'utf8').replace(/^#[^\n]*\n/, '').replace(/^<!--[^>]*-->\s*$/gm, '').replace(/^Your exobrain[^\n]*\n+/, '');
+  const description = fill(s.intro, s, () => '');
   const part = (heading, md0, level) => { for (const c of chunks(md0)) { const id = c.title ? slug(c.title, seen) : ''; if (c.title) toc.push({ level: c.level, title: c.title, id }); add(c.title, c.level === 3 ? 3 : 2, c.body, id); } };
   part('description', description);
   if (contextFile) {

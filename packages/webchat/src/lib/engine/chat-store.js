@@ -1,6 +1,6 @@
 // The chat replica schema on the kit engine: what is chat-specific about storing chats, and nothing else.
 // The generic parts (single writer, incremental accounting, declared budget and window, single-flight eviction,
-// durable outbox with typed backpressure) are tools/quicklook-kit/lib/engine/replica-store.js and outbox.js.
+// durable outbox with typed backpressure) are tools/docstore-kit/lib/engine/replica-store.js and outbox.js.
 //
 // Schema: records are server events keyed by `cursor`, partitioned by `conversation_id`, timed by `at`; metadata
 // is the header snapshot (`headers`, never evicted), `lastOpened`, and `synced` (how far each chat is held
@@ -9,9 +9,9 @@
 //
 // The adapter speaks the replica interface engine/core.js and client/week-sync.js already use.
 
-import { openReplicaStore, memoryReplicaStore, REPLICA_POLICY } from '../../../../runner/tools/quicklook-kit/lib/engine/replica-store.js';
-import { openOutbox, memoryOutbox, BackpressureError } from '../../../../runner/tools/quicklook-kit/lib/engine/outbox.js';
-import { approxSize } from '../../../../runner/tools/quicklook-kit/lib/engine/lane.js';
+import { openReplicaStore, memoryReplicaStore, REPLICA_POLICY } from '../../../../runner/tools/docstore-kit/lib/engine/replica-store.js';
+import { openOutbox, memoryOutbox, BackpressureError } from '../../../../runner/tools/docstore-kit/lib/engine/outbox.js';
+import { approxSize } from '../../../../runner/tools/docstore-kit/lib/engine/lane.js';
 
 export { BackpressureError };
 export const ENGINE_DB = 'tophat-engine';

@@ -63,6 +63,9 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
   let state = emptyState();
   let replica = null;
   let source = null;
+  // A cold boot opens the live stream from the server's head while the first snapshot loads, instead of after it; what the
+  // stream delivers meanwhile is held and folded once the snapshot has landed (events at or below its cursor are skipped by the reducer).
+  let streamHold = null, streamFromTail = false;
   
   
   
@@ -580,7 +583,11 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
     }
 
     
-    if (headers.length) { bootstrapDelta().then(connect); } else { await bootstrap(hydrateCount); connect(); }
+    if (headers.length) { bootstrapDelta().then(connect); } else {
+      streamHold = []; streamFromTail = true; connect(); streamFromTail = false;
+      try { await bootstrap(hydrateCount); } finally { const held = streamHold || []; streamHold = null; if (held.length) absorb(held); }
+      connect();
+    }
     scheduleHeal();
     scheduleWatchdog();
     flushOutbox();
@@ -804,7 +811,7 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
     if (source && !streamIsDead()) return;
     if (source) dropStream();
     try {
-      source = new EventSourceCtor(`/api/events?after=${state.cursor}`);
+      source = new EventSourceCtor(streamFromTail ? '/api/events?tail=1' : `/api/events?after=${state.cursor}`);
     } catch { return; }
     
     
@@ -862,6 +869,8 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
         });
         return;
       }
+      if (message.events && streamHold) { streamHold.push(...message.events); return; }
+      if (message.resync && streamHold) return;
       if (message.events) {
         if (message.events.length > CHUNK) absorbLarge(message.events);
         else absorb(message.events);

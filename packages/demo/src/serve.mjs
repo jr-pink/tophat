@@ -21,7 +21,7 @@ import { createFeed, pieceDelayMs, tokenPieces } from './stream.mjs';
 import { COOKIE_NAME, Guests, emailOf, scopeOf, scopeSettings, verifyTurnstile } from './guests.mjs';
 import { renderFallback } from '../fallback/render.mjs';
 import { pinAction } from './pin.mjs';
-import { OPENER_GEN_ID, OPENER_ID, SEED_RETIRED_SCOPE, forkIdOf, forkSeedChat, isSeedId, loadTemplates, openStore, openerGenOf, seedGuest, seedOpener, seedRowsOf } from './seed-chats.mjs';
+import { OPENER_GEN_ID, OPENER_ID, SEED_RETIRED_SCOPE, forkIdOf, forkSeedChat, isSeedId, retire, loadTemplates, openStore, openerGenOf, seedGuest, seedOpener, seedRowsOf } from './seed-chats.mjs';
 
 /** How long after the opener is sent the answer begins to stream. */
 const OPENER_ANSWER_DELAY_MS = 2000;
@@ -119,12 +119,12 @@ export async function serve(c) {
   const BIGSCREEN_CSS = "@media (min-width:1900px) and (min-height:950px){:root{--th-ww:min(108rem,calc(100vw - 160px));--th-wh:min(calc(var(--th-ww) * 0.62),calc(100vh - 140px));--th-tb:30px;--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}@media (prefers-color-scheme:dark){:root{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}}:root[data-theme=light]{--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}:root[data-theme=dark]{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}html,body{height:100%;background:var(--th-desk)!important}body{margin:0;display:grid;place-items:center;overflow:hidden}body>div[style*=\"contents\"]{display:block!important;width:var(--th-ww);height:calc(var(--th-wh) - var(--th-tb));margin-top:var(--th-tb);position:relative;overflow:hidden;transform:translateZ(0);border-radius:0 0 10px 10px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 30px 90px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.12);background:var(--bg,#fff)}body>div[style*=\"contents\"] .app{height:100%!important}body::before,body::after{position:fixed;left:calc(50vw - var(--th-ww) / 2);top:calc(50vh - var(--th-wh) / 2);width:var(--th-ww);height:var(--th-tb);z-index:1;pointer-events:none}body::before{content:\"\";border-radius:10px 10px 0 0;box-shadow:0 0 0 1px rgba(0,0,0,.14);background:radial-gradient(circle at 18px 50%,#ff5f57 5.5px,transparent 6px),radial-gradient(circle at 38px 50%,#febc2e 5.5px,transparent 6px),radial-gradient(circle at 58px 50%,#28c840 5.5px,transparent 6px),var(--th-chrome)}body::after{content:\"tophat\";text-align:center;line-height:var(--th-tb);font:12px/30px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink)}}";
   const pageCss = () => introCss() + '\n' + THEME_CSS + '\n' + BIGSCREEN_CSS;
   // the head's first script: the guest's local reset, the caret drawn at the first paint and the intro state request, then the figure prefetch
-  const CARET_JS = "(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&q.get('fresh')==='1')document.documentElement.classList.add('demo-intro','demo-bare');if(i&&q.get('fresh')!=='1'){var h=document.documentElement;h.classList.add('demo-intro','demo-bare');var k=document.createElement('div');k.id='demo-caret';k.className='idle';k.style.cssText='left:50%;top:50%;width:3px;height:56px;background:#f2f2f2';h.appendChild(k);window.__demoCaretAt=performance.now();setTimeout(function(){if(!window.__demoIntroOwned){h.classList.remove('demo-intro','demo-bare');k.remove()}},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();";
+  const CARET_JS = "(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&q.get('fresh')==='1')document.documentElement.classList.add('demo-intro');if(i&&q.get('fresh')!=='1'){var h=document.documentElement;h.classList.add('demo-intro');var k=document.createElement('div');k.id='demo-intro';k.innerHTML='<div class=\"bg\"></div><div class=\"stars\"></div><div class=\"line\"><span class=\"msg\"></span><i class=\"caret idle\"></i><b class=\"send\"></b></div>';h.appendChild(k);window.__demoCaretAt=performance.now();setTimeout(function(){if(!window.__demoIntroOwned){h.classList.remove('demo-intro');k.remove()}},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();";
   const earlyJs = () => `(function(){${guestReset()}})();\n${CARET_JS}\n${prefetchJs()}`;
 
   // ---- the intro chat ----
   // A guest's intro chat is the empty chat the scripted exchange plays in. Every plain page load
-  // plays it again from empty: a played one is archived and a fresh one (`<id>-<n>`) takes its place. The chat lists are the record.
+  // plays it again from empty: every earlier intro chat is retired out of the guest's scope and a fresh one (`<id>-<n>`) takes its place. The chat lists are the record.
   const hasUserMessage = (id) => Boolean(ro.prepare("SELECT 1 FROM events WHERE conversation_id=? AND kind='message.user' LIMIT 1").get(id));
   const openerOf = (session) => {
     const live = ro.prepare('SELECT id FROM conversations WHERE scope=? AND archived=0 AND id LIKE ?').all(scopeOf(session.id), `${OPENER_ID(session.id)}%`)
@@ -141,16 +141,16 @@ export async function serve(c) {
     const template = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots }).find((t) => t.opener);
     seedOpener(store, { id, template, scope: scopeOf(session.id), model: OPENER_MODEL, autoModel: true, cwd: expand(inst.paths.workspace || path.join(stateDir, 'workspace')) });
   };
-  /** Idempotent and uncounted: with zero visitor turns and a played intro, archive it and open a new empty one. Returns the live intro chat's id. */
+  /** Idempotent and uncounted: a played intro is replaced by a new empty one, and every other intro chat of the guest is retired from their list. Returns the live intro chat's id. */
   const replayIntro = (session) => {
     try { fresh(session.id); } catch (e) { console.error('[seed] reseed failed', e.message); } // a returning guest gets the current seed too: missing chats written, old versions retired
     const cur = openerOf(session);
-    if (!hasUserMessage(cur)) { ensureOpener(session, cur); return cur; }
-    const next = OPENER_GEN_ID(session.id, (openerGenOf(session.id, cur) || 0) + 1);
+    const next = hasUserMessage(cur) ? OPENER_GEN_ID(session.id, (openerGenOf(session.id, cur) || 0) + 1) : cur;
     ensureOpener(session, next);
-    // a played intro the visitor kept talking in stays in the list; an untouched one is archived
-    const userMsgs = ro.prepare("SELECT COUNT(*) n FROM events WHERE conversation_id=? AND kind='message.user'").get(cur).n;
-    if (userMsgs <= 1) store.append(cur, 'conversation.archived', { archived: true }, { at: new Date().toISOString() });
+    // every earlier intro chat leaves the guest's list (played, kept talking in, or archived): the sidebar holds one intro, the live one
+    const at = new Date().toISOString();
+    for (const r of ro.prepare('SELECT id FROM conversations WHERE scope=? AND id LIKE ?').all(scopeOf(session.id), `${OPENER_ID(session.id)}%`))
+      if (r.id !== next && openerGenOf(session.id, r.id) !== null) retire(store, r.id, at);
     return next;
   };
 
@@ -195,6 +195,29 @@ export async function serve(c) {
       store.append(id, 'assistant.message', { itemId, text: answer }, { at: at() });
       store.append(id, 'run.completed', { costUsd: 0 }, { at: at() });
     })().catch((e) => console.error('opener', e));
+    return { events, cursor: store.cursor() };
+  }
+
+  /** A fixed reply once the visitor's turns are used up: the visitor's message and the answer, written into the chat and streamed like the opener. */
+  const LIMIT_ANSWER = "Ok that's the demo. Give it a spin:\n\n```\nScan this repo for privacy, security, and malintent; then help me install it:\n" + repo + "\n```";
+  function playScripted(action, text, answer) {
+    const id = action.conversation_id;
+    const before = store.cursor();
+    const at = () => new Date().toISOString();
+    store.append(id, 'message.user', { itemId: action.action_id, text }, { at: at() });
+    store.append(id, 'run.status', { state: 'running' }, { at: at() });
+    const itemId = `${id}-limit-${action.action_id}`;
+    store.markApplied({ actionId: action.action_id, conversationId: id, op: action.op, cursorBefore: before, cursorAfter: store.cursor() });
+    const events = store.since(before);
+    (async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      for (const piece of tokenPieces(answer)) {
+        store.append(id, 'assistant.delta', { itemId, text: piece }, { at: at() });
+        await new Promise((r) => setTimeout(r, pieceDelayMs(piece)));
+      }
+      store.append(id, 'assistant.message', { itemId, text: answer }, { at: at() });
+      store.append(id, 'run.completed', { costUsd: 0 }, { at: at() });
+    })().catch((e) => console.error('limit reply', e));
     return { events, cursor: store.cursor() };
   }
 
@@ -334,7 +357,7 @@ export async function serve(c) {
       if (p === '/_demo/state') { if (!session) return json(res, 401, { error: 'no session' }); return json(res, 200, stateOf(session)); }
       if (p === '/_demo/fail' && req.method === 'POST') {
         const b = JSON.parse((await readBody(req, 2048)).toString('utf8') || '{}');
-        console.log(`[check] ${new Date().toISOString()} session=${session ? session.id.slice(0, 8) : 'none'} why=${String(b.why || '').slice(0, 80)} visible=${b.visible || ''} ua=${String(req.headers['user-agent'] || '').slice(0, 90)}`);
+        console.log(`[check] ${new Date().toISOString()} session=${session ? session.id.slice(0, 8) : 'none'} why=${String(b.why || '').slice(0, String(b.why || '').startsWith('diag:') ? 300 : 80)} visible=${b.visible || ''} ua=${String(req.headers['user-agent'] || '').slice(0, 90)}`);
         res.writeHead(204); return res.end();
       }
       if (p === '/_demo/verify' && req.method === 'POST') {
@@ -393,6 +416,12 @@ export async function serve(c) {
           }
           if (startsTurn(action)) {
             const claim = guests.claimTurn(session);
+            // out of turns (or the daily spend is used up): no end screen; the agent answers with a fixed reply and the page stays usable
+            if (!claim.ok && (claim.error === 'limit' || claim.error === 'resting') && action.op === 'message.send') {
+              const again = store.appliedAction(action.action_id);
+              if (again) return json(res, 200, { events: store.since(again.cursor_before).filter((e) => e.cursor <= again.cursor_after), cursor: store.cursor() }, { 'x-demo-turns': String(session.turns) });
+              return json(res, 200, playScripted(action, String(action.payload?.text || ''), LIMIT_ANSWER), { 'x-demo-turns': String(session.turns) });
+            }
             if (!claim.ok) return json(res, claim.status, { error: claim.error, turns: session.turns, cap: guests.cap });
             countedTurn = true;
           }

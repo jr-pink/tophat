@@ -26,5 +26,5 @@ export function listCall(store, payload, env = process.env) {
   const req = { ...payload };
   for (const k of Object.keys(req)) if (req[k] === undefined || req[k] === null || req[k] === '') delete req[k];
   req.tz ??= ownerZone(env); req.limit ??= 50; req.chars ??= 240;
-  return [bin, [join(store.cwd, 'rev6', 'push', 'cli.mjs'), '--db', store.db, '--read-only', 'list'], req];
+  return [bin, [join(store.cwd, 'store', 'cli.mjs'), '--db', store.db, '--read-only', 'list'], req];
 }

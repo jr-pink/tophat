@@ -11,8 +11,8 @@
 // Every action is absolute or guarded by the current step, so a repeat (a double dispatch, a redelivered entry) is a
 // no-op: `message.sent` carries n, the ordinal of the message in its chat, and `chat.created` / `chat.archived` name a
 // chat id. scope 'local': per browser, hydrated before the first render, offline first (localStorage, no server).
-import { declare } from '../../../../runner/tools/quicklook-kit/lib/model.js';
-import { field, bool, list, flags, scratch } from '../../../../runner/tools/quicklook-kit/lib/schema.js';
+import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
+import { field, bool, list, flags, scratch } from '../../../../runner/tools/docstore-kit/lib/schema.js';
 
 /** The teaching order. `workspaces` waits until he has messaged WORKSPACE_AFTER different chats. */
 export const STEPS = ['first', 'followup', 'newchat', 'split', 'archive', 'workspaces'];

@@ -9,9 +9,9 @@
 import { ACTIONS, makeAction, newId } from '../core/contract.js';
 import { applyOptimistic, emptyState, forgetConversation, mergeConversations, setConversationScope } from '../core/reducer.js';
 import { isIncognito } from '../core/incognito.js';
-import { connectEngine } from '../../../../runner/tools/quicklook-kit/lib/engine/host.js';
-import { ulid } from '../../../../runner/tools/quicklook-kit/lib/engine/ulid.js';
-import { openExisting, req } from '../../../../runner/tools/quicklook-kit/lib/engine/idb.js';
+import { connectEngine } from '../../../../runner/tools/docstore-kit/lib/engine/host.js';
+import { ulid } from '../../../../runner/tools/docstore-kit/lib/engine/ulid.js';
+import { openExisting, req } from '../../../../runner/tools/docstore-kit/lib/engine/idb.js';
 import { makeChatServer } from './chat-engine.js';
 import { ENGINE_DB } from './chat-store.js';
 import { readLegacyLocal } from './migrate.js';

@@ -88,7 +88,19 @@ The one service shipped is the hub (`tophat-linknotes hub serve`, service name `
 | component | status | notes |
 |---|---|---|
 | memory tools (search, entity, page, read, apply, share, scopes) | ships | a tool registry over any MemoryStore + an MCP stdio server (`tophat-mcp`) |
-| purchasing, banking, messaging, browser and desktop automation | out of scope | not memory |
+| `tophat-cdp` (Chrome over the DevTools Protocol: jobs that own one tab each, secret-safe fill, frames, shadow roots, protected targets, passkeys) | ships | Node tool + Python reference twin (`packages/tools/cdp`), README, differential tests; endpoint, state and chat-host lists are config/env (`TOPHAT_CDP_*`), the older prefix is read through `TOPHAT_LEGACY_ENV_PREFIX` |
+| `tophat-pass` (read verbs over a tophat credential vault: list, find, lookup, fields, get, totp, history) | ships | writes nothing; a vault sealed under an older record-binding prefix reads through `TOPHAT_VAULT_LEGACY_AAD_PREFIX` (read fallback only) |
+| `tophat-fanout` (one brief to many models in parallel, web search on, replies side by side) | ships | `packages/tools/fanout`; key from `TOPHAT_FANOUT_SECRETS_DIR` or `<config dir>/secrets`; offline tests |
+| `tophat-timer` (goal_wait retry timers seen from outside the server: list, check, fire, log, prune) | ships | `packages/tools/timer`, over the runner's waits |
+| `tophat-onboard` (mint, list, revoke one-time onboarding channel URLs) | ships | `packages/tools/onboard`, over the webchat's onboard store |
+| `tophat-transcribe` (handwritten notebook photos to text with a vision model) | ships | `packages/tools/transcribe`; owner name, key, glossary and uploads dir are env/config |
+| `tophat-vnc` (scripted RFB console into another Mac: capture, OCR, click, type, unlock) | ships | `packages/tools/vnc`; targets come from `vnc-hosts.json`, passwords from `tophat-pass` |
+| `tophat-mcp-client` (thin MCP client: HTTP or stdio servers, OAuth, watch and listen) | ships | `packages/tools/mcp`; named `-client` because `tophat-mcp` is the memory MCP server |
+| `tophat-multiplayer` (one chat room, many tabs, one agent, every sentence through a privacy gate) | ships | `packages/tools/multiplayer`; the gate harness calls a live model and is run by hand |
+| `tophat-commit-guard` (pre-commit hook refusing a byte-exact reversion of an earlier commit) | ships | `packages/tools/commit-guard`; offline tests |
+| `tophat-redeploy` (run an optional preparation hook, then `tophat instance ship`; status; any instance verb) | ships | `packages/tools/redeploy`; instance file, deploy tool and hook are env |
+| purchasing, banking, messaging, desktop automation | out of scope | not memory |
+| project tracking over a purchasing pipeline | out of scope | tied to one deployment's order tools |
 
 ## Pull (`packages/pull`), interface + reference runner
 

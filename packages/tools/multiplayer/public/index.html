@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>multiplayer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100dvh; display: flex; flex-direction: column;
+    background: #0d0f12; color: #e8e8ea; font: 15px/1.5 ui-sans-serif, -apple-system, system-ui, sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid #22262d; font-size: 13px; }
+  header .me { font-weight: 600; }
+  header .here { color: #8b93a1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .gate { margin-left: auto; color: #6fcf97; }
+  #log { flex: 1; overflow-y: auto; padding: 16px 14px 24px; display: flex; flex-direction: column; gap: 10px; }
+  .row { max-width: 760px; width: 100%; margin: 0 auto; }
+  .who { font-size: 12px; color: #8b93a1; margin-bottom: 2px; }
+  .bubble { padding: 8px 12px; border-radius: 12px; background: #171b21; white-space: pre-wrap; word-wrap: break-word; }
+  .me .bubble { background: #1d3356; }
+  .owner .who { color: #ffd479; }
+  .assistant .bubble { background: #14181e; border: 1px solid #242a33; }
+  .assistant .who { color: #7aa2f7; }
+  .sys { text-align: center; color: #5d6472; font-size: 12px; }
+  .action { border: 1px solid #2a3140; border-radius: 10px; background: #10141a; padding: 8px 10px; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .action .name { color: #c792ea; }
+  .action .in { color: #8b93a1; white-space: pre-wrap; word-break: break-all; }
+  .action .out { margin-top: 6px; color: #b6c2cf; white-space: pre-wrap; max-height: 9em; overflow: auto; }
+  .action.running .name::after { content: ' running'; color: #e5c07b; }
+  .redacted { color: #ff8f8f; }
+  .cursor::after { content: '▍'; opacity: .6; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  form { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid #22262d; }
+  input { flex: 1; padding: 10px 12px; border-radius: 10px; border: 1px solid #2a3140; background: #12161c; color: inherit; font: inherit; }
+  button { padding: 10px 16px; border-radius: 10px; border: 0; background: #2d6cdf; color: white; font: inherit; cursor: pointer; }
+  button.ghost { background: #222833; }
+</style>
+</head>
+<body>
+<header>
+  <span class="me" id="me">joining…</span>
+  <span class="here" id="here"></span>
+  <span class="gate">privacy gate on</span>
+</header>
+<div id="log"></div>
+<form id="form"><input id="text" placeholder="say something to the room" autocomplete="off"><button>send</button></form>
+
+<script type="module">
+const log = document.getElementById('log');
+const atBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+const stick = (was) => { if (was) log.scrollTop = log.scrollHeight; };
+
+let me = null, clientId = null, seq = 0;
+const turns = new Map();
+
+function row(cls, who) {
+  const was = atBottom();
+  const el = document.createElement('div');
+  el.className = 'row ' + cls;
+  el.innerHTML = `<div class="who"></div><div class="bubble"></div>`;
+  el.querySelector('.who').textContent = who;
+  log.appendChild(el);
+  stick(was);
+  return el;
+}
+
+function systemLine(text) {
+  const was = atBottom();
+  const el = document.createElement('div');
+  el.className = 'row sys';
+  el.textContent = text;
+  log.appendChild(el);
+  stick(was);
+}
+
+function turnBody(id) {
+  if (!turns.has(id)) {
+    const el = row('assistant', 'assistant');
+    el.querySelector('.bubble').classList.add('cursor');
+    turns.set(id, { el, bubble: el.querySelector('.bubble'), actions: new Map() });
+  }
+  return turns.get(id);
+}
+
+function handle(event) {
+  seq = Math.max(seq, event.seq);
+  const was = atBottom();
+  if (event.type === 'msg') {
+    const mine = event.author === me;
+    const el = row((mine ? 'me ' : '') + (event.author === 'owner' ? 'owner' : 'other'), event.author + (mine ? ' (you)' : ''));
+    el.querySelector('.bubble').textContent = event.text;
+  } else if (event.type === 'text') {
+    const turn = turnBody(event.turn);
+    const span = document.createElement('span');
+    if (event.redacted) span.className = 'redacted';
+    span.textContent = event.chunk;
+    turn.bubble.appendChild(span);
+  } else if (event.type === 'action.start') {
+    const turn = turnBody(event.turn);
+    const card = document.createElement('div');
+    card.className = 'action running';
+    card.innerHTML = `<div><span class="name"></span></div><div class="in"></div><div class="out"></div>`;
+    card.querySelector('.name').textContent = event.tool;
+    turn.el.appendChild(card);
+    turn.actions.set(event.call, card);
+  } else if (event.type === 'action.input') {
+    const card = turnBody(event.turn).actions.get(event.call);
+    if (card) card.querySelector('.in').textContent += event.chunk;
+  } else if (event.type === 'action.end') {
+    const card = turnBody(event.turn).actions.get(event.call);
+    if (card) {
+      card.classList.remove('running');
+      card.querySelector('.name').textContent = `${event.tool} · ${event.ms} ms`;
+      const out = card.querySelector('.out');
+      out.textContent = event.result;
+      if (event.redacted) out.classList.add('redacted');
+    }
+  } else if (event.type === 'turn.end') {
+    turns.get(event.turn)?.bubble.classList.remove('cursor');
+  } else if (event.type === 'error') {
+    systemLine('error: ' + event.message);
+  } else if (event.type === 'joined') {
+    systemLine(event.identity + ' joined');
+  } else if (event.type === 'presence') {
+    document.getElementById('here').textContent = event.here.length ? 'here: ' + event.here.join(', ') : '';
+  }
+  stick(was);
+}
+
+async function join() {
+  const saved = sessionStorage.getItem('mp');
+  const wanted = saved ? JSON.parse(saved).as : (new URLSearchParams(location.search).get('as') || 'owner');
+  const res = await fetch('/api/join', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ as: wanted }) });
+  const data = await res.json();
+  me = data.identity; clientId = data.clientId;
+  sessionStorage.setItem('mp', JSON.stringify({ as: wanted }));
+  document.getElementById('me').textContent = 'you are ' + me;
+  if (data.loopback) {
+    const swap = document.createElement('button');
+    swap.className = 'ghost'; swap.type = 'button';
+    swap.textContent = me === 'owner' ? 'rejoin anonymous' : 'rejoin as owner';
+    swap.onclick = () => {
+      sessionStorage.setItem('mp', JSON.stringify({ as: me === 'owner' ? 'anon' : 'owner' }));
+      location.reload();
+    };
+    document.getElementById('form').appendChild(swap);
+  }
+  const source = new EventSource(`/api/stream?after=0&client=${clientId}`);
+  source.onmessage = (e) => handle(JSON.parse(e.data));
+}
+
+document.getElementById('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('text');
+  const text = input.value.trim();
+  if (!text || !clientId) return;
+  input.value = '';
+  await fetch('/api/say', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ clientId, text }) });
+});
+
+join();
+</script>
+</body>
+</html>

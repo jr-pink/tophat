@@ -1,36 +1,27 @@
-/* The opening motion of the demo (driven by shim.js; the class names and variables are its). The real webchat is never edited: on a first
-   visit the page starts as black with only the composer, scaled up so the typing caret sits at the middle of the screen and the bar slides
-   left under it. On send, one motion and one easing bring the whole app back: the app scales and slides to its real place, the black fades,
-   the bar widens to its real width.
-   html.demo-intro      the opening (set by the page's first script, before the app paints)
-   html.demo-ready      the opening's geometry is measured and set: the bar may show
-   html.demo-intro-out  the flight after the send: the message flies up, the bar fades and drifts down, the world stays black (stars)
-   html.demo-intro-in   the message has landed: the interface comes in (black, bar and frame fade away)
-   html.demo-measure    a synchronous measuring pass: the app untransformed
-   --di-ox --di-oy --di-dx --di-dy --di-s --di-pl --di-ms --di-delay --di-flight --di-in --di-ease   set by shim.js */
+/* The opening motion of the demo (driven by shim.js). It is one self-contained animation on its own overlay, #demo-intro, drawn by the page's
+   first script: black, a centred line of typed text with a caret and a send button. The app boots underneath, untouched; the overlay never
+   measures or restyles it. On send the message flies to its place, the black fades, the overlay is removed.
+   html.demo-intro      the opening is owed (set by the page's first script, before the app paints)
+   html.demo-intro-out  the flight has started */
 
-html.demo-measure .app { transform: none !important; }
-
-html.demo-intro, html.demo-intro body { background: #000 !important; }
-/* no scrollbars while the motion runs (the zoomed app is wider than the screen) */
-html.demo-intro, html.demo-intro body, html.demo-intro-out, html.demo-intro-out body { overflow: hidden !important; }
-html.demo-intro .app textarea, html.demo-intro-out .app textarea { scrollbar-width: none; overflow: hidden !important; }
-html.demo-intro .app textarea::-webkit-scrollbar, html.demo-intro-out .app textarea::-webkit-scrollbar { display: none; }
-
-/* after the send the world stays black until the message has landed; then the interface comes in (demo-intro-in) */
-html.demo-intro-out:not(.demo-intro-in), html.demo-intro-out:not(.demo-intro-in) body { background: #000 !important; }
-html.demo-intro-in, html.demo-intro-in body { transition: background-color var(--di-in) ease-out; }
-
-html.demo-intro .app, html.demo-intro-out .app { transform-origin: var(--di-ox) var(--di-oy); }
-html.demo-intro .app { transform: translate(var(--di-dx), var(--di-dy)) scale(var(--di-s)); }
-html.demo-intro-out .app { transition: transform var(--di-ms) var(--di-ease) var(--di-delay, 0ms); }
-
-/* the black: a layer over the whole app, under the composer; in the flight a few stars drift down past it (the message is flying up) */
-html.demo-intro .app::after, html.demo-intro-out .app::after { content: ""; position: absolute; inset: 0; z-index: 1000; background: #000; pointer-events: none; }
-html.demo-intro-in .app::after { opacity: 0; transition: opacity var(--di-in) ease-out; }
-html.demo-intro-out .app::before {
-  content: ""; position: absolute; left: 0; right: 0; top: -420px; bottom: 0; z-index: 1001; pointer-events: none; opacity: 0; will-change: transform, opacity; /* taller than the screen and moved by transform only: the compositor slides it, nothing repaints per frame */
-  background-repeat: repeat; background-color: transparent;
+html.demo-intro, html.demo-intro body { background: #000 !important; overflow: hidden !important; }
+#demo-intro { position: fixed; inset: 0; z-index: 2147482000; pointer-events: auto; contain: strict; }
+#demo-intro .bg { position: absolute; inset: 0; background: #000; will-change: opacity; }
+#demo-intro .line { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); display: flex; justify-content: center; align-items: center; will-change: transform, opacity;
+  font: 500 clamp(24px, 4.2vw, 48px)/1.3 var(--sans, system-ui, -apple-system, sans-serif); color: #f2f2f2; white-space: pre; letter-spacing: -0.01em; }
+#demo-intro .msg { display: inline-block; white-space: pre; padding: 0.2em 0; border: 1px solid transparent; border-radius: 0.95em 0.95em 0.28em 0.95em; }
+/* in the flight the typed words are the message bubble: the user bubble's colours (Message.svelte), opaque over the page colour */
+#demo-intro .msg.bubble { white-space: pre; will-change: transform, opacity; color: var(--ink, #eee);
+  background: linear-gradient(var(--accent-soft, #e6a0a622), var(--accent-soft, #e6a0a622)), var(--bg, #111); border-color: color-mix(in srgb, var(--accent, #e6a0a6) 30%, transparent);
+  transition: background-color 120ms linear, color 120ms linear; }
+#demo-intro .caret { display: inline-block; width: 0.07em; min-width: 2px; height: 1.1em; margin-left: 0.04em; background: #f2f2f2; }
+#demo-intro .caret.idle { animation: demo-caret-blink 700ms steps(1, end) infinite; }
+@keyframes demo-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+/* the send button always holds its place (so the line never jumps when it appears) and fades in over the last word */
+#demo-intro .send { display: inline-block; width: 0.8em; height: 0.8em; margin-left: 0.55em; border-radius: 50%; opacity: 0; transition: opacity 320ms ease-out;
+  background: var(--accent, #e6a0a6) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 19V5M5 12l7-7 7 7'/%3E%3C/svg%3E") center / 55% no-repeat; }
+#demo-intro .send.on { opacity: 1; }
+#demo-intro .stars { position: absolute; left: 0; right: 0; top: -420px; bottom: 0; opacity: 0; pointer-events: none; will-change: transform, opacity;
   background-image:
     radial-gradient(1px 1px at 37px 61px, rgba(255,255,255,.7), transparent), radial-gradient(1px 1px at 151px 17px, rgba(255,255,255,.6), transparent),
     radial-gradient(1px 1px at 233px 143px, rgba(255,255,255,.55), transparent), radial-gradient(1px 1px at 91px 211px, rgba(255,255,255,.4), transparent),
@@ -38,61 +29,12 @@ html.demo-intro-out .app::before {
     radial-gradient(1.2px 1.2px at 27px 157px, rgba(255,255,255,.65), transparent),
     radial-gradient(1.4px 6px at 111px 83px, rgba(255,255,255,.85), transparent), radial-gradient(1.4px 8px at 307px 251px, rgba(255,255,255,.8), transparent),
     radial-gradient(1.4px 6px at 211px 331px, rgba(255,255,255,.75), transparent);
-  background-size: 260px 260px, 260px 260px, 260px 260px, 260px 260px, 200px 200px, 200px 200px, 200px 200px, 400px 400px, 400px 400px, 400px 400px;
-  animation: demo-stars var(--di-flight, 1000ms) cubic-bezier(.45,.05,.55,.95) both;
-}
-@keyframes demo-stars {
-  0% { opacity: 0; transform: translate3d(0, 0, 0); }
-  18% { opacity: 1; }
-  100% { opacity: 1; transform: translate3d(0, 400px, 0); }
-}
-html.demo-intro-in .app::before { opacity: 0; transition: opacity var(--di-in) ease-out; animation: none; }
-
-/* the composer: above the black, no strip behind it, narrower, no attach button, no native caret (shim.js draws the fixed one);
-   in the flight it is a little faded and slides down to its place and width; when the message has landed it is whole again */
-html.demo-intro .app .composer, html.demo-intro-out .app .composer { z-index: 1002; }
-html.demo-intro .app .composer { padding-left: var(--di-pl, var(--column-pad)); padding-right: var(--di-pl, var(--column-pad)); background: transparent; border-top-color: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
-html.demo-intro .app .composer .attach { opacity: 0; }
-html.demo-intro:not(.demo-ready) .app .composer { opacity: 0; }
-html.demo-intro.demo-ready .app .composer { transition: opacity 400ms ease; }
-html.demo-intro .app [data-testid="composer"] { caret-color: transparent; }
-html.demo-intro-out .app .composer { opacity: .5; background: transparent; border-top-color: transparent; -webkit-backdrop-filter: none; backdrop-filter: none;
-  transition: padding-left var(--di-ms) var(--di-ease) var(--di-delay, 0ms), padding-right var(--di-ms) var(--di-ease) var(--di-delay, 0ms), opacity 220ms ease-out; }
-html.demo-intro-out .app .composer .attach { transition: opacity var(--di-ms) var(--di-ease) var(--di-delay, 0ms); }
-/* the composer's own text: the typed line has become the message, so its placeholder waits for the interface */
-html.demo-intro-out:not(.demo-intro-in) .app textarea::placeholder { color: transparent !important; }
-html.demo-intro-in .app textarea::placeholder { transition: color var(--di-in) ease-out; }
-html.demo-intro-in .app .composer { opacity: 1; background: color-mix(in srgb, var(--bg) 88%, transparent); border-top-color: var(--line-soft);
-  transition: opacity var(--di-in) ease-out, background-color var(--di-in) ease-out, border-top-color var(--di-in) ease-out; }
-
-/* the desktop frame of very large screens (serve.mjs's #demo-bigscreen): no window around the bar, then the window comes back with the interface */
-html.demo-intro body::before, html.demo-intro body::after, html.demo-intro-out:not(.demo-intro-in) body::before, html.demo-intro-out:not(.demo-intro-in) body::after { opacity: 0; }
-html.demo-intro-in body::before, html.demo-intro-in body::after { transition: opacity var(--di-in) ease-out; }
-html.demo-intro body > div[style*="contents"], html.demo-intro-out:not(.demo-intro-in) body > div[style*="contents"] { background: transparent !important; box-shadow: none !important; }
-html.demo-intro-in body > div[style*="contents"] { transition: background-color var(--di-in) ease-out, box-shadow var(--di-in) ease-out; }
+  background-size: 260px 260px, 260px 260px, 260px 260px, 260px 260px, 200px 200px, 200px 200px, 200px 200px, 400px 400px, 400px 400px, 400px 400px; }
 
 /* the opener never shows a pending state: no "sending" or "starting up" while the scripted message goes in, and its bubble is never drawn as a queued one */
 html.demo-opener [data-testid="activity"][data-phase="queued"], html.demo-opener [data-testid="activity"][data-phase="starting"] { visibility: hidden; }
 html.demo-opener [data-testid="user-text"].queued { opacity: 1 !important; border-style: solid !important; }
 html.demo-opener [data-testid="queued"] { display: none; }
-
-/* the typing caret: fixed at the middle of the screen, steady while typing, blinking after */
-#demo-caret { position: fixed; z-index: 2147482000; pointer-events: none; transform: translate(-50%, -50%); opacity: 1; transition: opacity 120ms linear; }
-#demo-caret.idle { animation: demo-caret-blink 700ms steps(1, end) infinite; }
-#demo-caret.gone { opacity: 0; animation: none; }
-@keyframes demo-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
-/* bare typing: before the bar comes in, only the typed text and the caret are on the black (shim.js adds demo-bare at the start of typing and drops it once the line is typed) */
-html.demo-intro .app .composer *, html.demo-intro #demo-caret { transition: background-color 360ms ease, border-color 360ms ease, box-shadow 360ms ease, color 360ms ease, opacity 360ms ease; }
-html.demo-bare .app .composer *:not([data-testid="send"]) { background-color: transparent !important; border-color: transparent !important; box-shadow: none !important; }
-html.demo-bare .app [data-testid="composer"] { color: #f2f2f2 !important; }
-html.demo-bare .app [data-testid="send"] { opacity: 0 !important; }
-html.demo-bare #demo-caret { background: #f2f2f2 !important; }
-
-/* the bare opening has no box at all; only the send button fades in over the last word (demo-send), and on the send it falls and fades with the field */
-html.demo-bare.demo-send .app [data-testid="send"] { opacity: 1 !important; transition: opacity 320ms ease-out; }
-html.demo-bare .app textarea::placeholder { color: transparent !important; } /* no "Message..." beside the blinking caret */
-html.demo-bare .app .composer .attach { opacity: 0 !important; } /* no paperclip on the way down either */
-html.demo-intro-out .app { will-change: transform; } /* the fall and the zoom-back run on the compositor */
 
 /* the opener never shows the connection coming up (a stream that opens a second late, or drops for a moment): no "reconnecting" or "offline" line and no dot; a backstop,
    the opener's answer does not depend on the stream (the server holds it and the page's own sync fetches it) */

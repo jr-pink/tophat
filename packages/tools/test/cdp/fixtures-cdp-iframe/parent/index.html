@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cdp-iframe fixture checkout</title>
+<style>
+  /* The window itself never scrolls: this is what the Shopify checkout does,
+     and it is why window.scrollY stayed 0 while the pay button sat at y=1277. */
+  html, body { height: 100%; margin: 0; overflow: hidden; font: 14px/1.4 -apple-system, sans-serif; }
+  /* smooth scrolling is why a rect measured straight after scrollIntoView
+     was still 700px away: the scroll had not finished. */
+  #scrollbox { height: 100%; overflow-y: auto; scroll-behavior: smooth; padding: 16px; box-sizing: border-box; }
+  .field { margin: 10px 0; }
+  .field label { display: block; font-size: 12px; color: #555; }
+  .field iframe { width: 320px; height: 36px; border: 1px solid #bbb; padding: 2px; }
+  .field-error { color: #b00; font-size: 12px; min-height: 14px; }
+  .spacer { height: 900px; background: repeating-linear-gradient(#fafafa 0 40px, #f0f0f0 40px 80px); }
+  #pay-button { font-size: 16px; padding: 12px 24px; }
+  #status { font-weight: bold; }
+</style>
+</head>
+<body>
+<div id="scrollbox">
+  <h1>Fixture checkout</h1>
+
+  <div class="field">
+    <label for="card-fields-number">Card number</label>
+    <!-- identical src to verification_value and name: URL identity collides -->
+    <iframe id="card-fields-number" name="number" src="http://localhost:8911/field.html"></iframe>
+    <div class="field-error" id="card-fields-number-error"></div>
+  </div>
+
+  <div class="field">
+    <label for="card-fields-expiry">Expiration date</label>
+    <iframe id="card-fields-expiry" name="expiry" src="http://localhost:8911/strict.html"></iframe>
+    <div class="field-error" id="card-fields-expiry-error"></div>
+  </div>
+
+  <div class="field">
+    <label for="card-fields-verification_value">Security code</label>
+    <iframe id="card-fields-verification_value" name="verification_value" src="http://localhost:8911/field.html"></iframe>
+    <div class="field-error" id="card-fields-verification_value-error"></div>
+  </div>
+
+  <div class="field">
+    <label for="card-fields-name">Name on card</label>
+    <iframe id="card-fields-name" name="name" src="http://localhost:8911/field.html"></iframe>
+    <div class="field-error" id="card-fields-name-error"></div>
+  </div>
+
+  <div class="field">
+    <label for="card-fields-segmented">Segmented card input</label>
+    <iframe id="card-fields-segmented" name="segmented" src="http://localhost:8911/segmented.html" style="height:60px"></iframe>
+    <div class="field-error" id="card-fields-segmented-error"></div>
+  </div>
+
+  <div class="field">
+    <label for="card-fields-issue_number">Issue number (the substring alias)</label>
+    <iframe id="card-fields-issue_number" name="issue_number" src="http://localhost:8911/issue_number-ltr.html"></iframe>
+  </div>
+
+  <div class="field">
+    <label for="card-fields-issue">Issue date (aliased by "number-ltr")</label>
+    <iframe id="card-fields-issue" name="issue" src="http://localhost:8911/number-ltr.html"></iframe>
+  </div>
+
+  <div class="field">
+    <label for="outer-frame">Nested frame (page -&gt; frame -&gt; frame)</label>
+    <iframe id="outer-frame" name="outer" src="http://localhost:8911/nested-outer.html" style="height:90px"></iframe>
+  </div>
+
+  <div class="field">
+    <label for="plain-input">Plain same-document input</label>
+    <input id="plain-input" type="text">
+  </div>
+
+  <div class="spacer">(filler: the pay button is below the fold of this inner scroll container)</div>
+
+  <form id="pay-form">
+    <button id="pay-button" type="submit">Pay now</button>
+  </form>
+  <div id="status"></div>
+  <div class="spacer" style="height:200px"></div>
+</div>
+
+<script>
+  // Values the child frames report, so a test can read the real state from the page.
+  window.__fields = {};
+  window.__domClickIgnored = 0;
+  window.__submitted = 0;
+
+  addEventListener('message', (event) => {
+    const data = event.data || {};
+    if (data.type !== 'field') return;
+    window.__fields[data.name] = data.value;
+    const box = document.getElementById('card-fields-' + data.name + '-error');
+    if (box) box.textContent = data.valid === false ? data.error || 'Enter a valid value' : '';
+  });
+
+  const payForm = document.getElementById('pay-form');
+  const payButton = document.getElementById('pay-button');
+
+  // Observation 7: a synthetic click does nothing. Only a real (trusted) one submits.
+  payButton.addEventListener('click', (event) => {
+    if (!event.isTrusted) {
+      window.__domClickIgnored += 1;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+  }, true);
+
+  payForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!event.submitter || !window.__lastTrustedPress) {
+      window.__domClickIgnored += 1;
+      return;
+    }
+    window.__submitted += 1;
+    document.getElementById('status').textContent = 'Order placed';
+  });
+
+  payButton.addEventListener('pointerdown', (event) => {
+    window.__lastTrustedPress = !!event.isTrusted;
+  });
+</script>
+</body>
+</html>

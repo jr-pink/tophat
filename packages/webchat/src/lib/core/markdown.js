@@ -282,8 +282,37 @@ function softBreaks(html) {
   return html.replace(/\n/gu, '<br />');
 }
 
-export function compileMarkdown(text, cache = new Map()) {
-  const blocks = splitBlocks(text);
+// <details> / <summary> blocks: a collapsible section whose body is ordinary markdown (widgets and
+// figures included), written flush-left on lines of their own:
+//   <details>            (or <details open>)
+//   <summary>**1. Memory**</summary>
+//   ...any blocks...
+//   </details>
+// They nest, and an unclosed one (a reply still streaming) shows what has arrived. The summary is
+// inline markdown; the body is compiled like a message, so a widget inside stays a live widget.
+const DETAILS_OPEN = /^<details(\s+open)?\s*>\s*$/iu;
+const DETAILS_SUMMARY = /^<summary>(.*)<\/summary>\s*$/iu;
+const DETAILS_CLOSE = /^<\/details>\s*$/iu;
+
+function detailsTokens(blocks) {
+  const tokens = [];
+  for (const block of blocks) {
+    if (/^\s*(?:```|~~~|\$\$|\\\[)/u.test(block) || !/^<\/?(?:details|summary)\b/imu.test(block)) { tokens.push({ text: block }); continue; }
+    let run = [];
+    const flush = () => { if (run.length) tokens.push({ text: run.join('\n') }); run = []; };
+    for (const line of block.split('\n')) {
+      let m;
+      if ((m = line.match(DETAILS_OPEN))) { flush(); tokens.push({ open: Boolean(m[1]) }); }
+      else if ((m = line.match(DETAILS_SUMMARY))) { flush(); tokens.push({ summary: m[1] }); }
+      else if (DETAILS_CLOSE.test(line)) { flush(); tokens.push({ close: true }); }
+      else run.push(line);
+    }
+    flush();
+  }
+  return tokens;
+}
+
+function compileLeaves(blocks, cache, prefix) {
   // Adjacent video embeds become one gallery player; its key stays the first block's so the player
   // (and what is playing) survives the next embed streaming in.
   return foldVideoRuns(blocks.map((block, index) => {
@@ -292,8 +321,36 @@ export function compileMarkdown(text, cache = new Map()) {
       html = renderBlock(block);
       cache.set(block, html);
     }
-    return { key: `${index}:${block.length}`, html, rich: richBlock(block) };
+    return { key: `${prefix}${index}:${block.length}`, html, rich: richBlock(block) };
   }));
+}
+
+export function compileMarkdown(text, cache = new Map()) {
+  const blocks = splitBlocks(text);
+  if (!blocks.some((b) => /^<details\b/imu.test(b))) return compileLeaves(blocks, cache, '');
+  const root = { items: [], pending: [], prefix: '' };
+  const stack = [root];
+  const settle = (node) => { if (node.pending.length) { node.items.push(...compileLeaves(node.pending, cache, `${node.prefix}${node.items.length}.`)); node.pending = []; } };
+  for (const token of detailsTokens(blocks)) {
+    const top = stack.at(-1);
+    if ('text' in token) { top.pending.push(token.text); continue; }
+    if ('open' in token) {
+      settle(top);
+      const node = { key: `${top.prefix}d${top.items.length}`, details: true, open: token.open, summary: '', items: [], pending: [] };
+      node.prefix = node.key + '/';
+      top.items.push(node); stack.push(node); continue;
+    }
+    if ('summary' in token) { if (stack.length > 1 && !top.summary && !top.items.length && !top.pending.length) top.summary = renderInline(token.summary); else top.pending.push(`<summary>${token.summary}</summary>`); continue; }
+    if (stack.length > 1) { settle(top); stack.pop(); } // a stray </details> outside any section is dropped
+  }
+  for (const node of stack) settle(node);
+  const finish = (items) => items.map((it) => (it.details ? { key: it.key, details: true, open: it.open, summary: it.summary || 'Details', children: finish(it.items) } : it));
+  return finish(root.items);
+}
+
+/** Every leaf block of a compiled message, details bodies included, in reading order. */
+export function flatBlocks(blocks) {
+  return blocks.flatMap((b) => (b.details ? flatBlocks(b.children) : [b]));
 }
 
 export function createMarkdownCache() {

@@ -68,7 +68,7 @@ export function declare(spec) {
   registerDeclaration(d);
   return d;
 }
-const DECLARED = Symbol('quicklook-kit.declared');
+const DECLARED = Symbol('docstore-kit.declared');
 
 // The undo axis (lib/undo.js): 'compensating' records the inverse of every dispatch by value and applies it as a new
 // action (UNDO_ACTION) through compare-and-set; it is refused with a lifecycle (an inverse would walk an edge backwards).

@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cdp-iframe fixture: same-process outer frame</title>
+<style>html,body{margin:0;font:14px/1.4 -apple-system,sans-serif}main{padding:16px}iframe{width:320px;height:140px;border:1px solid #ccc}</style>
+</head>
+<body>
+<!--
+  Reproduces the Home Depot checkout CVV (2026-10-22):
+  #iframe-credit-card-payment-field >>> iframe >>> #securityCode. The outer frame is
+  http://127.0.0.1:8913, which is cross-origin to this page (127.0.0.1:8910) but the SAME SITE, so
+  Chrome keeps it in this page's renderer: no CDP target of its own, contentDocument is null. The
+  frame inside it is http://localhost:8911, a different site, so that one IS an out-of-process
+  iframe. A chain through a frame that is not a target is what tophat-cdp used to refuse.
+-->
+<main>
+  <h1>Same-process outer frame</h1>
+  <iframe id="pay-outer" name="payouter" src="http://127.0.0.1:8913/samesite-outer.html"></iframe>
+  <p id="status">idle</p>
+</main>
+<script>
+  window.__fields = {};
+  addEventListener('message', (e) => { const d = e.data || {}; if (d.type === 'field') window.__fields[d.name] = d.value; });
+</script>
+</body>
+</html>

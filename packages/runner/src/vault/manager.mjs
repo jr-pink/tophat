@@ -11,7 +11,12 @@ export {TYPES, originOf, normalizeValue, totp, generatePassword} from './values.
 const ID = /^[a-z0-9][a-z0-9-]{1,100}$/;
 const VALUE_FILE = /^value-[0-9a-f]{32}\.enc$/;
 const RECORD_HEADER = Buffer.from('AV01'), KEY_HEADER = Buffer.from('AK01');
-const KEY_AAD = Buffer.from('tophat:master-key:v1');
+const AAD_PREFIX = 'tophat';
+// A store written under an older AAD prefix stays readable: the prefix named in TOPHAT_VAULT_LEGACY_AAD_PREFIX is tried
+// when the current one does not authenticate. Reads only; every write uses the current prefix.
+const aadPrefixes = () => (process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX && process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX !== AAD_PREFIX
+  ? [AAD_PREFIX, process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX] : [AAD_PREFIX]);
+const KEY_AAD = Buffer.from(`${AAD_PREFIX}:master-key:v1`);
 export const SCRYPT = {N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024};
 const check = (ok, message) => {if (!ok) throw invalid(message);};
 const ownedByUs = stat => !(stat.mode & 0o077) && stat.uid === os.userInfo().uid;
@@ -44,7 +49,7 @@ export function secureRead(file) {
 export function sealRecord(key, name, text) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
-  cipher.setAAD(Buffer.from(`tophat:${name}`));
+  cipher.setAAD(Buffer.from(`${AAD_PREFIX}:${name}`));
   const ciphertext = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
   return Buffer.concat([RECORD_HEADER, nonce, cipher.getAuthTag(), ciphertext]);
 }
@@ -53,10 +58,16 @@ export function sealRecord(key, name, text) {
 export function openRecord(key, name, bytes) {
   try {
     check(bytes.length >= 32 && bytes.subarray(0, 4).equals(RECORD_HEADER), 'Invalid vault record');
-    const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(4, 16));
-    decipher.setAAD(Buffer.from(`tophat:${name}`));
-    decipher.setAuthTag(bytes.subarray(16, 32));
-    return Buffer.concat([decipher.update(bytes.subarray(32)), decipher.final()]);
+    for (const prefix of aadPrefixes()) {
+      try {
+        const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(4, 16));
+        decipher.setAAD(Buffer.from(`${prefix}:${name}`));
+        decipher.setAuthTag(bytes.subarray(16, 32));
+        return Buffer.concat([decipher.update(bytes.subarray(32)), decipher.final()]);
+      } catch (error) {
+        if (prefix === aadPrefixes().at(-1)) throw error;
+      }
+    }
   } catch {
     throw new Error('Vault integrity check failed');
   }
@@ -192,10 +203,18 @@ export class PasswordManager {
     check(bytes.length === 80 && bytes.subarray(0, 4).equals(KEY_HEADER), 'Vault has no wrapped master key');
     const derived = scryptSync(passphrase, bytes.subarray(4, 20), 32, SCRYPT);
     try {
-      const decipher = createDecipheriv('aes-256-gcm', derived, bytes.subarray(20, 32));
-      decipher.setAAD(KEY_AAD);
-      decipher.setAuthTag(bytes.subarray(32, 48));
-      this.unlockedKey = Buffer.concat([decipher.update(bytes.subarray(48)), decipher.final()]);
+      const prefixes = aadPrefixes();
+      for (const prefix of prefixes) {
+        try {
+          const decipher = createDecipheriv('aes-256-gcm', derived, bytes.subarray(20, 32));
+          decipher.setAAD(Buffer.from(`${prefix}:master-key:v1`));
+          decipher.setAuthTag(bytes.subarray(32, 48));
+          this.unlockedKey = Buffer.concat([decipher.update(bytes.subarray(48)), decipher.final()]);
+          break;
+        } catch (error) {
+          if (prefix === prefixes.at(-1)) throw error;
+        }
+      }
       this.unlockExpires = Date.now() + ttlMs;
       // Expiring lazily leaves the key in memory until something next asks for
       // it, which on an idle machine is until the process exits. The timer is

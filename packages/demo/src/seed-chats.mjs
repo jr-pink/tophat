@@ -72,7 +72,7 @@ export function plannedSeed(templates, guest) {
 export const seedRowsOf = (store, { scope, guest }) => store.conversationIdsInScope(scope).filter((id) => isSeedId(id, guest));
 
 /** Retire one seed row: out of every guest's scope, then the marker that tells a page holding it to drop it. */
-function retire(store, id, at) {
+export function retire(store, id, at) {
   store.append(id, 'conversation.meta', { scope: SEED_RETIRED_SCOPE, scopeMove: { id: `retire:${id}`, from: 'guest', to: SEED_RETIRED_SCOPE, actor: 'seed' } }, { at });
 }
 

@@ -7,8 +7,8 @@
 //                       'cloud': every action is a Stream entry (entry_id device:seq), replayed through the same
 //                       reducers on any device; idempotent by comment id and by resolve time.
 // `overlayThreads` is the pure view: the server's threads plus the actions not yet delivered.
-import { declare } from '../../../../runner/tools/quicklook-kit/lib/model.js';
-import { field, on, set } from '../../../../runner/tools/quicklook-kit/lib/schema.js';
+import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
+import { field, on, set } from '../../../../runner/tools/docstore-kit/lib/schema.js';
 
 const plain = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const str = (v) => (typeof v === 'string' ? v : '');

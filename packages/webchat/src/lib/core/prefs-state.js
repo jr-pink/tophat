@@ -2,8 +2,8 @@
 // hands-free. The old ChatPane read `tophat.voice` in an $effect after first render, so the orb mounted with the
 // defaults and was corrected a tick later; declared here it is hydrated before the first render.
 // scope 'local' now; a preference he wants on every device is `scope: 'cloud'`, one word.
-import { declare } from '../../../../runner/tools/quicklook-kit/lib/model.js';
-import { bool, num, shape, merge } from '../../../../runner/tools/quicklook-kit/lib/schema.js';
+import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
+import { bool, num, shape, merge } from '../../../../runner/tools/docstore-kit/lib/schema.js';
 
 export const VOICE_DEFAULTS = { speed: 1.1, handsFree: true };
 

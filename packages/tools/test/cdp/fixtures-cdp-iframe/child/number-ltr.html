@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>number-ltr</title>
+<style>html,body{margin:0;font:14px -apple-system,sans-serif}input{width:98%;height:28px;box-sizing:border-box;border:0;outline:none}</style></head>
+<body>
+<input id="field" type="text" autocomplete="off" data-which="number-ltr">
+<script>
+  // Its URL is a strict substring of issue_number-ltr.html's: the alias that
+  // filled a hidden field and reported success.
+  const input = document.getElementById('field');
+  const who = window.name || 'issue';
+  document.title = 'number-ltr:' + who;
+  input.addEventListener('input', () => parent.postMessage({type:'field',name:who,value:input.value,valid:true}, '*'));
+  window.__who = 'number-ltr';
+</script>
+</body></html>

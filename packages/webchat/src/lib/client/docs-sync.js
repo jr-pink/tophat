@@ -7,7 +7,7 @@
 // An offline failure (5xx, a Cloudflare page, no answer, a timeout) rejects the push and the entries stay pending; a
 // refusal for good (too long, thread gone) is reported through `refuse` and the entry is acknowledged, never retried
 // for ever. pull: the docs server has no entry feed (threads are read whole by `refresh`), so there is nothing to pull.
-import { fromStreamEntry } from '../../../../runner/tools/quicklook-kit/lib/model.js';
+import { fromStreamEntry } from '../../../../runner/tools/docstore-kit/lib/model.js';
 
 export const isOffline = (cause) => Boolean(cause?.offline) || cause?.name === 'TimeoutError' || cause instanceof TypeError;
 

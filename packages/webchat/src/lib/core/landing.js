@@ -1,4 +1,4 @@
-import { marker } from '../../../../runner/tools/quicklook-kit/lib/recipes.js';
+import { marker } from '../../../../runner/tools/docstore-kit/lib/recipes.js';
 
 
 export const NIGHT_FROM = 23;

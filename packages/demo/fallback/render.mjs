@@ -1,12 +1,12 @@
 // The server-down page: fallback.html's markers filled from the site's one copy file, content/description.md (the same words the live
 // demo's first answer streams), each feature a closed one-line box (its bold heading) with the rest of its copy and its figures below.
-// Figures are the live answer's own widgets (src/answer.mjs WIDGETS), framed from /_fallback/w/<name>, which the edge Worker serves;
+// Figures are the live answer's own widgets (src/answer.mjs FIGURES, placed by <!-- figure:NAME --> in the copy), framed from /_fallback/w/<name>, which the edge Worker serves;
 // a plain image is inlined. Shipped with the release (unlike edge/, the maintainers' own deployment): the edge build inlines this page
 // into its Worker, and the demo origin serves it at /_fallback.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sections, WIDGETS } from '../src/answer.mjs';
+import { sections, FIGURES } from '../src/answer.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEMO = path.join(HERE, '..');
 export const DESCRIPTION = path.join(DEMO, 'content', 'description.md');
@@ -20,10 +20,10 @@ export const inline = (s) => esc(s)
 const paras = (md) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => `<p>${inline(p.replace(/\s*\n\s*/g, ' '))}</p>`).join('\n');
 
 /** The widget names the page frames (served by the edge at /_fallback/w/<name>), in page order; images are inlined instead. */
-export const FRAMED = Object.values(WIDGETS).map((w) => w[0]).filter((f) => f.endsWith('.html')).map((f) => f.replace(/\.html$/, ''));
+export const FRAMED = [...sections(DESCRIPTION).intro.matchAll(/^<!--\s*figure:([\w-]+)\s*-->/gm)].map((m) => FIGURES[m[1]]?.[0]).filter((f) => f && f.endsWith('.html')).map((f) => f.replace(/\.html$/, ''));
 
 function figure(n) {
-  const w = WIDGETS[n];
+  const w = FIGURES[n];
   if (!w) return '';
   const [file, title] = w, name = file.replace(/\.[a-z]+$/, '');
   if (file.endsWith('.html')) return `<iframe class="w w-${name}" loading="lazy" sandbox="allow-scripts" title="${esc(title)}" src="/_fallback/w/${name}"></iframe>`;
@@ -32,17 +32,16 @@ function figure(n) {
   return `<img class="shot" loading="lazy" alt="${esc(title)}" src="data:${type};base64,${b64}">`;
 }
 
-/** The boxes: a feature with a bold heading opens one; a feature without (01b, 03b) continues the box before it. */
+/** The boxes: one per <details> section of the copy, its summary the bold numbered line, its body the copy and figures in order. */
+const DETAILS = /^<details(?:\s+open)?>\s*\n<summary>\*\*(\d+)\.\s+(.+?)\*\*<\/summary>\s*\n([\s\S]*?)^<\/details>\s*$/gm;
 export function boxes(s = sections(DESCRIPTION)) {
-  const out = [];
-  for (const f of s.features) {
-    const h = /^\*\*(\d+)\.\s+([^*]+)\*\*\s*\n?([\s\S]*)$/.exec(f.body);
-    if (h) out.push({ n: h[1], line: h[2].trim(), parts: [paras(h[3]), figure(f.n)] });
-    else if (out.length) out.at(-1).parts.push(paras(f.body), figure(f.n));
-    else throw new Error(`feature ${f.n} has no heading and no box before it`);
-  }
-  return out;
+  return [...s.intro.matchAll(DETAILS)].map((m) => {
+    const bits = m[3].split(/^<!--\s*figure:([\w-]+)\s*-->\s*$/m);
+    return { n: m[1], line: m[2].trim(), parts: bits.map((b, i) => (i % 2 ? figure(b) : paras(b))) };
+  });
 }
+/** The copy before the first section, without the top install block (the page has its own). */
+const preface = (s) => s.intro.split(/^<details/m)[0].replace(/^<!--[^>]*-->\s*$/gm, '').replace(/^Install:\s*$/m, '');
 
 export function renderFallback() {
   const s = sections(DESCRIPTION);
@@ -51,7 +50,7 @@ export function renderFallback() {
   if (!title || !install) throw new Error('content/description.md lacks its lead or its install block');
   const fill = {
     lead: `<h1>${inline(title)}</h1>\n${sub.map((p) => `<p class="sub">${inline(p)}</p>`).join('\n')}`,
-    intro: paras(s.intro),
+    intro: paras(preface(s)),
     boxes: boxes(s).map((b) => `<details class="box" id="f${b.n}">
 <summary><span class="n">${b.n}.</span><span class="line">${inline(b.line)}</span><span class="tog" aria-hidden="true"></span></summary>
 <div class="more">

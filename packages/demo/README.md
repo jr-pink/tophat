@@ -29,7 +29,7 @@ the thin layer that makes that safe and gives it a first impression. It renders 
    (`TOPHAT_RUNNER_TOOLS_ALLOW`; `TOPHAT_RUNNER_PROMPT_MODE=public` makes its system prompt name just those tools and show no path), no subagents or chat tools, the cheap model, the direct provider, no auto routing and the instance workspace forced on every chat action that carries settings or a directory (`src/pin.mjs`, including a message that creates its chat), and the agent's standing context
    generated from `seed/agent-policy.md`, `content/agent-context.md` and `content/description.md` (`tophat-demo instructions`).
 6. After `visitors.turnsPerSession` real turns across all of a visitor's chats (demo.json, the one place the number lives) the server refuses
-   more and the page grays out with the download block. Turn caps per address, a daily spend cap (then "resting") and a per-address session cap
+   more and the agent answers with a fixed reply carrying the install block. Turn caps per address, a daily spend cap (then "resting") and a per-address session cap
    sit in the same file.
 7. No JavaScript, a failed or timed-out check (60 s), or a blocked check script: the page is replaced by `/_demo/text`, the description as
    plain text. An app that never boots lands on `/_fallback`.

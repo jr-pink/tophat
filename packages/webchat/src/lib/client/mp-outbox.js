@@ -6,7 +6,7 @@
 // The old key `tophat-mp-unsent-<namespace>` is imported once and kept: an entry leaves it only when it leaves the
 // outbox, so a rolled-back build finds exactly the entries still owed (a replay of one is idempotent at the server
 // anyway). Pinned old module: ui/__oracle__/mp/mp-outbox.v1.js; differential: ui/MpOutbox.diff.test.js.
-import { localOutbox } from '../../../../runner/tools/quicklook-kit/lib/engine/outbox-local.js';
+import { localOutbox } from '../../../../runner/tools/docstore-kit/lib/engine/outbox-local.js';
 
 const prefix = (namespace) => `tophat-mp-unsent-${namespace}`;
 const valid = (e) => e && typeof e.id === 'string' && typeof e.text === 'string';

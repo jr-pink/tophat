@@ -2,7 +2,7 @@
 // assembled runner and webchat reach the store only through this module and ./cli.mjs.
 //
 // One request shape for every caller: answer(command, request, { db, env, readOnly }) -> { result, code }, where
-// command is tasks | ingest | search | read | apply | status | push and code is 0 (ok), 2 (refused) or 1 (internal).
+// command is tasks | ingest | search | read | list | apply | status | push and code is 0 (ok), 2 (refused) or 1 (internal).
 // `tasks` takes { op: list | get | apply | chat, ... }. A refusal is a value ({ ok: false, reason, detail }); a stale
 // task write answers { ok: false, reason: 'conflict', current, expected_version } so the caller can retry on the
 // current state.
@@ -33,13 +33,14 @@ import { createHash } from 'node:crypto';
 import { SqliteBackend } from '@tophat-md/linknotes';
 import { hybridSearch } from '@tophat-md/linknotes/hybrid';
 import { withDatedPass } from '@tophat-md/linknotes/recency';
+import { listItems } from '@tophat-md/linknotes/list';
 import { ensureSupportSchema, reinforceNote, withPriors } from '@tophat-md/linknotes/support';
 import { runnerDbFor, syncUsage } from '@tophat-md/linknotes/usage';
 import { ownerZone } from '../rev6/base/clock.mjs';
 
 const SCOPE_RE = /^[a-z][a-z0-9-]{1,47}$/;
 export const DEFAULT_SCOPE = 'local';
-export const COMMANDS = ['tasks', 'ingest', 'search', 'read', 'apply', 'status', 'push', 'sync', 'usage'];
+export const COMMANDS = ['tasks', 'ingest', 'search', 'read', 'list', 'apply', 'status', 'push', 'sync', 'usage'];
 const WRITES = new Set(['ingest', 'apply', 'push', 'usage']);
 
 /** The scope, created groups and joined groups an environment names; an invalid name is an error, never silently replaced. */
@@ -218,6 +219,9 @@ function dispatch(s, command, req, readOnly, env) {
     const widened = (w) => hybridSearch(s, req.query, { kind: req.kind, limit: limit * w, asOf: req.as_of, allTerms: Boolean(req.all_terms), derived: set ? Number(derived) * w : derived });
     return withDatedPass(s, withPriors(s, widened, { limit, derived, asOf: req.as_of }), req, { tz: ownerZone(env) });
   }
+  // `list` (linknotes list.mjs): every note, work item and raw row matching a filter, in time order with no relevance cut, for counts,
+  // totals and latest-or-max questions; the memory_list tool's command (rev6/base/memory-list.mjs). Read-only.
+  if (command === 'list') return listItems(s, req);
   if (command === 'read') return s.read(req.kind, String(req.id ?? ''), { nodes: req.nodes, budget: req.budget, asOf: req.as_of, history: Boolean(req.history) });
   if (command === 'apply') {
     // The evidence row cite() writes and the notes citing it land together or not at all: a refused batch leaves no

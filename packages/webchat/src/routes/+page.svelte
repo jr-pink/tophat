@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, setContext } from 'svelte';
   import { afterNavigate, replaceState as navReplaceState } from '$app/navigation';
   import Nav from '$lib/ui/Nav.svelte';
   import BackgroundChat from '$lib/ui/BackgroundChat.svelte';
@@ -17,7 +17,9 @@
   import { newChatSettings } from '$lib/client/agent-preference.js';
   import { scopeForNewChat } from '$lib/core/scopes.svelte.js';
   import { pruneFolds } from '$lib/client/fold-store.js';
-  import { documentTitle } from '$lib/core/title.js';
+  import { documentTitle, automatedTitle } from '$lib/core/title.js';
+  import TabStrip from '$lib/ui/TabStrip.svelte';
+  import { dropTarget, landingIndex } from '$lib/core/tab-drag.js';
   import { languageOf, warmTokens } from '$lib/core/highlight.js';
   import { groupForks, rankConversations } from '$lib/core/recency.js';
   import { nextAfterArchive } from '$lib/core/archive-select.js';
@@ -30,6 +32,7 @@
     MAX_PANELS, RAIL_PX, neighbour as paneNeighbour, willSplit
   } from '$lib/core/panels.js';
   import { panesDecl, paneGesture } from '$lib/core/panes-state.js';
+  import { listenDesktop, tabForDigit } from '$lib/client/desktop-commands.js';
   import { createIncognitoSession } from '$lib/client/incognito.js';
   import { isIncognito } from '$lib/core/incognito.js';
   import { sidebarDecl } from '$lib/core/sidebar-state.js';
@@ -63,6 +66,9 @@
   if (bootParams.has('new') || bootParams.has('incognito')) pane('pane.reset');
   const layout = $derived($paneStore.layout);
   const transientId = $derived($paneStore.transient);
+  const dragState = $derived($paneStore.drag);
+  // Every chat that is a tab of some group (the sidebar marks these as open); `layout.panels` is the active one of each group.
+  const openChatIds = $derived(layout.tabs.flat());
   const restored = layout.panels.length > 0;
   let activeId = $state(layout.panels[layout.focused] ?? null);
   let viewportPx = $state(1400);
@@ -262,7 +268,7 @@
         // A pane whose chat no longer exists is dropped. An empty list is a cold cache with no network, which
         // says nothing about any chat, so nothing is dropped on it.
         if (Object.keys(state.conversations || {}).length) {
-          if (pane('pane.drop', { ids: layout.panels.filter((id) => !state.conversations[id]) })) settlePanes();
+          if (pane('pane.drop', { ids: layout.tabs.flat().filter((id) => !state.conversations[id]) })) settlePanes();
         }
         for (const panel of layout.panels) session.hydrate(panel);
       }
@@ -277,6 +283,7 @@
     window.addEventListener('blur', clearArchivePointer);
     window.addEventListener('keydown', archiveShortcut, true);
     window.addEventListener('keydown', paneNavShortcut, true);
+    window.addEventListener('keydown', tabShortcut, true);
     window.addEventListener('keydown', shortcuts);
     window.addEventListener('keyup', keyup);
     window.addEventListener('blur', releaseHold);
@@ -288,7 +295,10 @@
     // The composer he has typed into keeps its own Cmd-Z, even after he clears it; one that
     // merely autofocused does not. See core/undo.js.
     const unwatchFields = watchEditedFields(document);
+    // The tophat-desktop shell's menu chords (Cmd-1..9, Cmd-W, Ctrl-Tab, Cmd-Opt-Arrow, Cmd-T, Cmd-\); nothing in a browser.
+    const offDesktop = listenDesktop(window, desktopCommands);
     return () => {
+      offDesktop();
       unwatchFields();
       unsubscribe();
       unsubscribeIncognito();
@@ -300,6 +310,7 @@
       window.removeEventListener('blur', clearArchivePointer);
       window.removeEventListener('keydown', archiveShortcut, true);
       window.removeEventListener('keydown', paneNavShortcut, true);
+      window.removeEventListener('keydown', tabShortcut, true);
       window.removeEventListener('keydown', shortcuts);
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', releaseHold);
@@ -403,7 +414,7 @@
   // moves on by itself: to the row his mouse was just over, else to the next chat down the
   // sidebar. The order is read BEFORE the archive lands, while the row is still in place.
   function archiveChat(id, archived) {
-    const open = layout.panels.includes(id);
+    const open = openChatIds.includes(id);
     const next = archived && open
       ? nextAfterArchive(sidebarOrder(), id, { hovered: lastHoveredChat, hoveredAt: lastHoveredAt })
       : null;
@@ -411,17 +422,20 @@
     session.archive(id, archived);
     if (archived) onboard('chat.archived', { chat: id });
     // Undoing a Done on the chat he was reading puts the chat back AND puts him back in it,
-    // because the archive moved the pane off it.
+    // because the archive moved the tab off it.
     rememberUndo(id, archived ? 'Done:' : 'Put back:', () => {
       session.archive(id, was);
       if (archived && open) select(id);
     }, { silent: archived });
     lastHoveredChat = null;
     if (!archived || !open) return;
-    // In multi-pane mode archiving a chat on screen closes its pane rather than refilling it.
-    if (layout.panels.length > 1) return closePane(layout.panels.indexOf(id));
+    // With other tabs open, archiving a chat on screen closes its tab. Alone, the chat is replaced by the next one down
+    // the sidebar, else the blank chat.
+    if (openChatIds.length > 1) { pane('pane.drop', { ids: [id] }); return settlePanes(); }
     if (next) select(next);
     else if (!transientId) openTransient();
+    pane('pane.drop', { ids: [id] });
+    settlePanes();
   }
 
   function sidebarOrder() {
@@ -518,7 +532,6 @@
   }
 
   function select(id, { touch = true } = {}) {
-    if (!leaveIncognito(id)) return;
     releaseTransient(id);
     const before = layout.panels[layout.focused];
     pane('pane.activate', { id });
@@ -531,7 +544,6 @@
   }
 
   function openFork(id, { split = true } = {}) {
-    if (!willSplit(layout, split, viewportPx) && !leaveIncognito(id)) return;
     if (releasesTransient(split)) releaseTransient(id);   // a split adds a pane beside the blank one, it never drops it
     sidebarOpen = false;
     // An explicit split is always a new pane, even when the chat is already open in another one.
@@ -548,13 +560,189 @@
     if (activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
 
+  // Closing a group, or one tab, ends any incognito chat it held: nothing from it is saved, so with something in it he is asked.
+  function confirmLoss(ids) {
+    return !ids.some((id) => isIncognito(id) && incognito.hasContent(id))
+      || confirm('Close this incognito chat? Nothing from it is saved anywhere.');
+  }
+
   function closePane(index) {
-    const closing = layout.panels[index];
-    if (isIncognito(closing) && incognito.hasContent(closing)
-        && !confirm('Close this incognito chat? Nothing from it is saved anywhere.')) return;
+    if (!confirmLoss(layout.tabs[index] ?? [])) return;
     paneGesture(paneStore, 'close', { index });
     activeId = layout.panels[layout.focused] ?? null;
     if (activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
+  }
+
+  // One tab closed (its x, a middle click, Cmd-W). The group's last tab takes the group with it; the last tab of the
+  // only group leaves the blank new chat, never an empty window.
+  function closeTab(group, chat) {
+    if (!layout.keys.includes(group) || !confirmLoss([chat])) return;
+    const only = layout.panels.length === 1 && layout.tabs[0].length === 1;
+    if (only && chat === transientId) return;
+    if (only) openTransient();
+    else if (chat === transientId) releaseTransient(null);
+    pane('tab.close', { group, chat });
+    settlePanes();
+  }
+
+  // Close several tabs of a group at once (the tab menu: close others, close to the right, close all). `kept` are the chats the
+  // group holds afterwards. A blank chat nobody typed in is discarded as it is when he leaves it; a window left with nothing
+  // opens the blank chat again, as closing the last tab does.
+  function keepTabsOf(group, kept) {
+    const at = layout.keys.indexOf(group);
+    if (at < 0) return;
+    const gone = layout.tabs[at].filter((id) => !kept.includes(id));
+    if (!gone.length || !confirmLoss(gone)) return;
+    if (transientId && gone.includes(transientId)) releaseTransient(null);
+    pane('tab.keep', { group, keep: kept });
+    if (!layout.panels.length) openTransient();
+    settlePanes();
+  }
+  // The commands the shared context menu runs on a tab (setContext 'tab-commands'; data-ctx="tab" carries group and chat).
+  const tabsOfGroup = (group) => layout.tabs[layout.keys.indexOf(group)] ?? [];
+  const tabCommands = {
+    closeTab,
+    closeOthers: (group, chat) => { if (tabsOfGroup(group).includes(chat)) keepTabsOf(group, [chat]); },
+    closeToRight: (group, chat) => { const tabs = tabsOfGroup(group); if (tabs.includes(chat)) keepTabsOf(group, tabs.slice(0, tabs.indexOf(chat) + 1)); },
+    closeAll: (group) => keepTabsOf(group, []),
+    // the tab shown again in a new group on the right of its group
+    splitRight: (group, chat) => { if (paneGesture(paneStore, 'splitTab', { group, chat })) activateAfter(); },
+    // the tab moved out of its group into a new one on the right (a group's only tab has nowhere to move from)
+    moveToNewGroup: (group, chat) => {
+      if (tabsOfGroup(group).length < 2 || !tabsOfGroup(group).includes(chat)) return;
+      if (paneGesture(paneStore, 'dropEdge', { chat, from: group, group, side: 'right' })) { pane('tab.close', { group, chat }); activateAfter(); }
+    }
+  };
+  setContext('tab-commands', tabCommands);
+
+  function activateTab(group, chat) {
+    const before = layout.panels[layout.focused];
+    if (!pane('tab.activate', { group, chat })) return;
+    settlePanes();
+    const now = layout.panels[layout.focused];
+    if (now && now !== before) session.touch(now);
+    if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
+  }
+
+  // Split the active tab into a group on its right (Cmd-\).
+  function activateAfter() {
+    settlePanes();
+    if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
+  }
+  function splitActiveTab() {
+    if (paneGesture(paneStore, 'splitActive')) activateAfter();
+  }
+
+  // The desktop shell's commands (client/desktop-commands.js): the same kit actions the tab strip runs. The page itself
+  // never binds these chords; only the native menu of tophat-desktop sends them, so a browser keeps its own.
+  const desktopCommands = {
+    tab: (n) => {
+      const group = layout.keys[layout.focused];
+      const chat = tabForDigit(layout.tabs[layout.focused], n);
+      if (group && chat) activateTab(group, chat);
+    },
+    close: () => {
+      const group = layout.keys[layout.focused];
+      const chat = layout.panels[layout.focused];
+      if (group && chat) closeTab(group, chat);
+    },
+    next: () => { if (paneGesture(paneStore, 'nextTab')) activateAfter(); },
+    prev: () => { if (paneGesture(paneStore, 'prevTab')) activateAfter(); },
+    new: () => newChat(),
+    split: () => splitActiveTab()
+  };
+
+  // The chord handler for splitting, in the capture phase so a composer or an editor under the pointer does not keep it.
+  // Matched on event.key.
+  function tabShortcut(event) {
+    if (event.isComposing || searching || quicklook || insideModal(event.target)) return;
+    const key = String(event.key || '');
+    const mod = isMod(event);
+    let handled = true;
+    if (mod && !event.altKey && !event.shiftKey && key === '\\') splitActiveTab();
+    else handled = false;
+    if (!handled) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  // What a tab shows: the chat's title, with the automated tag the sidebar uses.
+  function tabsOf(index) {
+    return layout.tabs[index].map((id) => {
+      const row = stateFor(id).conversations[id];
+      const title = row?.title || 'New chat';
+      return { id, title: automatedTitle(title).text || title, automated: Boolean(row?.automated) || automatedTitle(title).automated };
+    });
+  }
+
+  // Dragging a tab. The pointer moves it; where it would land (core/tab-drag.js, measured from the groups on screen) is
+  // kit state (`drag.set`), so the indicator and the edge overlays are projections of it and a drop is one absolute
+  // action. A press without a 4 px move is a click: it only activated the tab.
+  const DRAG_SLOP = 4;
+  let tabPress = null;
+  function tabDown(group, chat, event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (layout.panels[layout.keys.indexOf(group)] !== chat || layout.focused !== layout.keys.indexOf(group)) activateTab(group, chat);
+    tabPress = { group, chat, x: event.clientX, y: event.clientY, live: false };
+    window.addEventListener('pointermove', tabMove);
+    window.addEventListener('pointerup', tabUp);
+    window.addEventListener('pointercancel', tabCancel);
+  }
+  function measureGroups() {
+    const rect = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; };
+    return [...document.querySelectorAll('main [data-testid="pane"][data-group]')].map((el) => {
+      const strip = el.querySelector('[data-testid="tabstrip"]');
+      return { key: el.dataset.group, rect: rect(el), strip: strip ? rect(strip) : null, tabs: [...el.querySelectorAll('[data-testid="tab"]')].map(rect) };
+    });
+  }
+  function tabMove(event) {
+    if (!tabPress) return;
+    if (!tabPress.live) {
+      if (Math.hypot(event.clientX - tabPress.x, event.clientY - tabPress.y) < DRAG_SLOP) return;
+      tabPress.live = true;
+      pane('drag.set', { drag: { chat: tabPress.chat, from: tabPress.group, over: null } });
+      document.body.style.userSelect = 'none';
+    }
+    const from = layout.keys.indexOf(tabPress.group);
+    const only = from >= 0 && layout.tabs[from].length === 1;
+    const over = dropTarget({ x: event.clientX, y: event.clientY, from: tabPress.group, groups: measureGroups(), only });
+    pane('drag.set', { drag: { chat: tabPress.chat, from: tabPress.group, over } });
+  }
+  function tabEnd() {
+    window.removeEventListener('pointermove', tabMove);
+    window.removeEventListener('pointerup', tabUp);
+    window.removeEventListener('pointercancel', tabCancel);
+    document.body.style.userSelect = '';
+    const press = tabPress;
+    tabPress = null;
+    return press;
+  }
+  function tabCancel() {
+    const press = tabEnd();
+    if (press?.live) pane('drag.set', { drag: null });
+  }
+  function tabUp() {
+    const press = tabEnd();
+    const drag = paneStore.get().drag;
+    if (!press?.live) return;
+    pane('drag.set', { drag: null });
+    const over = drag?.over;
+    if (!over) return;
+    dropTab(press.chat, press.group, over);
+  }
+
+  // A drop: one absolute action (two for a split: the new group, then the tab leaving its old one). Each is the same on a repeat.
+  function dropTab(chat, from, over) {
+    const strip = layout.tabs[layout.keys.indexOf(over.group)] ?? [];
+    if (over.kind === 'strip') {
+      const index = over.group === from ? landingIndex(strip, chat, over.index) : over.index;
+      pane('tab.move', { chat, from, to: over.group, index });
+    } else if (over.kind === 'body') {
+      pane('tab.move', { chat, from, to: over.group, index: strip.length });
+    } else if (over.kind === 'edge') {
+      if (paneGesture(paneStore, 'dropEdge', { chat, from, group: over.group, side: over.side })) pane('tab.close', { group: from, chat });
+    }
+    settlePanes();
   }
 
   // After a pane action changed the layout: follow the focus, load every open chat, point the address at it.
@@ -721,19 +909,9 @@
     if (activeId === id) replaceState(`?chat=${encodeURIComponent(id)}`, {});
   });
 
-  // Whether the focused pane may be replaced by `nextId`. An incognito chat with something in it is asked about
-  // first, because replacing it ends it: there is nowhere it could be reopened from.
-  function leaveIncognito(nextId = null) {
-    const leaving = layout.panels[layout.focused];
-    if (!isIncognito(leaving) || leaving === nextId || layout.panels.includes(nextId)) return true;
-    if (!incognito.hasContent(leaving)) return true;
-    return confirm('Leave this incognito chat? Nothing from it is saved anywhere.');
-  }
-
-  // A new incognito chat in place of the focused pane, or beside it. The id is placed in the layout before the chat
-  // exists, so the sweep below never sees it outside every pane.
+  // A new incognito chat as a tab of the focused group, or in a group beside it. The id is placed in the layout before the chat
+  // exists, so the sweep below never sees it outside every tab.
   async function newIncognitoChat({ split = false } = {}) {
-    if (!split && !leaveIncognito(null)) return;
     if (transientId) releaseTransient(null);
     await incognito.start();
     const id = incognito.session.newConversationId();
@@ -749,7 +927,7 @@
   // An incognito chat that is in no pane, nor under a chat that is (a fork or side thread of one), is over: the
   // server forgets it and so does this tab.
   $effect(() => {
-    const open = new Set(layout.panels);
+    const open = new Set(layout.tabs.flat());
     const conversations = incognitoState.conversations || {};
     const rootOf = (id) => {
       let at = conversations[id];
@@ -764,8 +942,6 @@
   });
 
   async function newChat({ split = false } = {}) {
-    const beside = willSplit(layout, split, viewportPx);
-    if (!beside && !leaveIncognito(null)) return;
     const focusedId = layout.panels[layout.focused] ?? activeId;
     // Pressing new chat while sitting in the untouched transient chat is the same intent twice: reusableBlankChat focuses this
     // one instead of stacking another (core/newchat.js). An explicit split never drops the blank transient chat sitting in
@@ -891,7 +1067,7 @@
     chatState={state}
     {session}
     {activeId}
-    openIds={layout.panels}
+    openIds={openChatIds}
     {status}
     open={sidebarShown || (sidebarPeek && sidebarHidden)}
     shownav={navInSidebar}
@@ -964,8 +1140,22 @@
           class="pane-slot"
           style:flex="{layout.widths[index]} 1 0%"
           data-testid="pane"
+          data-group={layout.keys[index]}
           data-focused={index === layout.focused ? 'true' : 'false'}
         >
+          {#if wide}
+            <TabStrip
+              group={layout.keys[index]}
+              tabs={tabsOf(index)}
+              active={panelId}
+              focused={index === layout.focused}
+              drag={dragState}
+              ondown={(chat, event) => tabDown(layout.keys[index], chat, event)}
+              onclose={(chat) => closeTab(layout.keys[index], chat)}
+              onnew={() => { focusPane(index); newChat(); }}
+            />
+          {/if}
+          <div class="group-body">
           <ChatPane
             bind:this={paneRefs[index]}
             session={sessionFor(panelId)}
@@ -984,6 +1174,10 @@
             onclosepane={layout.panels.length > 1 ? () => closePane(index) : null}
             jump={jump && jump.conversationId === panelId ? jump : null}
           />
+          {#if dragState?.over?.group === layout.keys[index] && dragState.over.kind !== 'strip'}
+            <div class="drop-zone {dragState.over.kind === 'edge' ? dragState.over.side : 'whole'}" data-testid="drop-zone" data-kind={dragState.over.kind} aria-hidden="true"></div>
+          {/if}
+          </div>
         </div>
         {/if}
       {/each}
@@ -1082,7 +1276,16 @@
   }
   .start:hover { border-color: var(--accent); color: var(--accent); }
 
-  .pane-slot { display: flex; min-width: 0; height: 100%; }
+  .pane-slot { display: flex; flex-direction: column; min-width: 0; height: 100%; }
+  .group-body { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; }
+  /* Where a dragged tab would land: the half of the group a split would take, or all of it for a move into it. */
+  .drop-zone {
+    position: absolute; top: 0; bottom: 0; z-index: 5; pointer-events: none;
+    background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid var(--accent);
+  }
+  .drop-zone.left { left: 0; width: 50%; }
+  .drop-zone.right { right: 0; width: 50%; }
+  .drop-zone.whole { left: 0; right: 0; }
   main:global(.resizing) .pane-slot { overflow: hidden; }
   
   .rail {

@@ -17,6 +17,11 @@ const run = promisify(execFile);
 // character range, ActionOutput referring to an earlier action's UUID) are how Shortcuts stores a
 // variable inside a text field. The object replacement character is the variable's placeholder,
 // and the range in attachmentsByRange is its offset in the string.
+//
+// This module has ONE export, shortcutFile. The plist builder below was exported too and nothing
+// in the repository ever named it: a public name no caller uses is a second supported entry point
+// to keep working for nobody, and the builder's output is only a Shortcut once it has been through
+// the signing step. Anything that wants the file wants shortcutFile.
 const OBJECT_REPLACEMENT = '\uFFFC';
 
 const xml = (value) => {
@@ -33,7 +38,7 @@ const esc = (s) => s.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/g
 
 const text = (string) => ({ Value: { string }, WFSerializationType: 'WFTextTokenString' });
 
-export function shortcutPlist({ endpoint, token }) {
+function shortcutPlist({ endpoint, token }) {
   const fetchId = randomUUID().toUpperCase();
   const titleId = randomUUID().toUpperCase();
   const url = `${endpoint}?token=${encodeURIComponent(token)}`;

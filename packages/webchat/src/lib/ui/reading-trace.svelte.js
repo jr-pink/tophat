@@ -8,7 +8,7 @@
 
 import { readingBand, visibleLines, wordsPerLine, accumulate } from '$lib/core/reading-trace.js';
 import { uiApp } from '$lib/client/ui-app.js';
-import { onceId, idOf } from '../../../../runner/tools/quicklook-kit/lib/recipes.js';
+import { onceId, idOf } from '../../../../runner/tools/docstore-kit/lib/recipes.js';
 
 const SAMPLE_MS = 400;        // how often the band is re-read while he sits still
 const FLUSH_MS = 6000;        // how often rows go to the server

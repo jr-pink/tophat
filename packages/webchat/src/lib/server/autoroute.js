@@ -65,7 +65,11 @@ message, a purchase, some code) does not belong in a specific folder because it 
 with it; it belongs in a general folder that his definitions say covers that kind of thing, else none.
 Operating a organisation the user runs (its shop, suppliers, orders, equipment, labs) is that organisation's
 folder, not a general errands or upkeep folder, when his definitions say so.
-Pick the folder whose definition the chat is about; being merely technical, or similar in kind, is not enough.`;
+Pick the folder whose definition the chat is about; being merely technical, or similar in kind, is not enough.
+Folders nest: a folder listed as "A > B" is B inside A. Go down the tree: pick the most specific folder whose definition
+covers the chat. Every folder that has subfolders also has an implicit Misc: a chat that fits folder A but none of A's
+subfolders goes to A itself (it shows under A's Misc); never leave it unfiled for that reason. Answer none (his Inbox) only
+when no top-level folder fits. Answer with the folder's own name (B), never the path.`;
 
 /**
  * Folder descriptions keyed by lowercase name: { name, text, source } (folder-descriptions.js).
@@ -96,17 +100,38 @@ export function foldersOf(conversations, descriptions = readDescriptions()) {
   for (const [key, value] of Object.entries(descriptions || {})) {
     const d = descriptionOf(value);
     const name = canonicalWorkspace(d.name || key);
-    if (!name || !d.text || d.source !== 'manual' || folders.has(name.toLowerCase())) continue;
-    folders.set(name.toLowerCase(), { name, titles: [], description: String(d.text), source: 'manual' });
+    // A folder he described, or placed in the tree (a subfolder he made before any chat landed in it), is a folder.
+    if (!name || folders.has(name.toLowerCase())) continue;
+    const placed = typeof d.parentAt === 'string';
+    if (!placed && !(d.text && d.source === 'manual')) continue;
+    folders.set(name.toLowerCase(), { name, titles: [], description: String(d.text || ''), source: d.text ? d.source || 'auto' : '' });
   }
-  return [...folders.values()];
+  // The tree: each folder's parent from the shared folder metadata, its path from the top, listed depth first.
+  const parentOf = (k) => { const d = descriptionOf(descriptions?.[k]); const p = typeof d.parentAt === 'string' ? d.parent || '' : ''; return p && folders.has(p) ? p : ''; };
+  for (const [k, f] of folders) {
+    const chain = [];
+    for (let cur = k, n = 0; cur && n < 32; cur = parentOf(cur), n += 1) { if (chain.includes(cur)) break; chain.unshift(cur); }
+    f.parent = parentOf(k) || null;
+    f.path = chain.map((c) => folders.get(c).name);
+  }
+  // Depth first, siblings in the order they were found, so a subfolder is listed right under its parent.
+  const out = [];
+  const walk = (p) => { for (const [k, f] of folders) if ((f.parent || '') === p && !out.includes(f)) { out.push(f); walk(k); } };
+  walk('');
+  for (const f of folders.values()) if (!out.includes(f)) out.push(f); // a cycle in hand-edited metadata: listed anyway
+  // An archived folder and everything inside it is not offered: the router never files into it. Nothing moves; unarchiving
+  // offers it again.
+  const isArchived = (k) => { const d = descriptionOf(descriptions?.[k]); return d.archived === true && typeof d.archivedAt === 'string'; };
+  return out.filter((f) => !f.path.some((n) => isArchived(n.toLowerCase())));
 }
 
 /** The folder name the reply names, matched against the real folders; anything else (none, prose, a new name) is null. */
 export function matchFolder(reply, folders) {
   const text = String(reply || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
-  const cleaned = text.replace(/^(?:folder|answer)\s*[:-]\s*/iu, '').replace(/^["'`*]+|["'`.*]+$/gu, '').trim().toLowerCase();
+  let cleaned = text.replace(/^(?:folder|answer)\s*[:-]\s*/iu, '').replace(/^["'`*]+|["'`.*]+$/gu, '').trim().toLowerCase();
   if (!cleaned || cleaned === 'none') return null;
+  // A path answer ("a > b") names its last folder.
+  if (!folders.some((f) => f.name.toLowerCase() === cleaned) && cleaned.includes(' > ')) cleaned = cleaned.split(' > ').pop().replace(/^["'`*]+|["'`.*]+$/gu, '').trim();
   return folders.find((f) => f.name.toLowerCase() === cleaned)?.name || null;
 }
 
@@ -117,7 +142,7 @@ export async function askForFolder({ title, transcript, folders }, { fetchImpl =
   if (!folders.length) return null;
   // A missing key or a failed call is an error the router logs, never a silent "none".
   if (!apiKey) throw new Error('no fast-model-api-key in the vault or TOPHAT_FAST_MODEL_API_KEY');
-  const listing = folders.map((f) => `Folder "${f.name}"${describe(f)}:\n${f.titles.map((t) => `  - ${t}`).join('\n') || '  (no titled chats yet)'}`).join('\n\n');
+  const listing = folders.map((f) => `Folder "${(f.path || [f.name]).join(' > ')}"${describe(f)}:\n${f.titles.map((t) => `  - ${t}`).join('\n') || '  (no titled chats yet)'}`).join('\n\n');
   const response = await fetchImpl(ENDPOINT, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
@@ -369,13 +394,15 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
    * answer, or unfiles it on "none". Returns [{ id, title, from, to }] for every chat asked, and
    * writes nothing with {dryRun: true}.
    */
-  async function refile({ since = null, archived = false, dryRun = false, ids = null, limit = 100 } = {}) {
+  // `all`: his explicit ask covers chats he filed by hand and unfiled ones too, not only the router's; each move is still
+  // an auto event, so a later hand move of his wins again.
+  async function refile({ since = null, archived = false, dryRun = false, ids = null, limit = 100, all: everyChat = false } = {}) {
     if (refiling) return [];
     refiling = true;
     const out = [];
     try {
       const all = store.conversations();
-      const candidates = all.filter((c) => !c.sidechat && (archived || !c.archived) && (!ids || ids.includes(c.id)) && routerFiled(store, c.id)
+      const candidates = all.filter((c) => !c.sidechat && (archived || !c.archived) && (!ids || ids.includes(c.id)) && (everyChat || routerFiled(store, c.id))
         && (!since || lastRouterMove(c.id) >= since)).slice(0, limit);
       for (const c of candidates) {
         const folders = foldersOf(all.filter((x) => x.id !== c.id), descriptions());
@@ -384,7 +411,7 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
         let to;
         try { to = await ask({ title: c.title, transcript, folders }); } catch (cause) { console.error(`[autoroute] refile ${c.id}: failed:`, cause?.message || cause); continue; }
         // He may have touched it while the model answered.
-        if (ownerDecided(store, c.id) || !routerFiled(store, c.id)) continue;
+        if (!everyChat && (ownerDecided(store, c.id) || !routerFiled(store, c.id))) continue;
         const from = canonicalWorkspace(store.conversation(c.id)?.workspace);
         const entry = { id: c.id, title: c.title, from, to: to || null };
         out.push(entry);

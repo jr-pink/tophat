@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>cdp-iframe fixture: shadow DOM</title>
+<style>
+  html, body { margin: 0; font: 14px/1.4 -apple-system, sans-serif; }
+  main { padding: 16px; }
+</style>
+</head>
+<body>
+<!--
+  Reproduces myaccount.pge.com (Salesforce Lightning / LWC), 2026-10-21: the cross-origin
+  payment iframe (secure8.i-doxs.net there, localhost:8911 here) sits two open shadow roots
+  deep, so a light-DOM querySelectorAll never sees it. Also: a field and a trusted-only button
+  inside shadow roots, and two unnamed iframes whose only distinguishing feature is which
+  shadow host holds them (frame-map must spell out `host >>> iframe`).
+-->
+<main>
+  <h1>Shadow DOM payment</h1>
+  <x-outer id="outer"></x-outer>
+  <p>Two cards, each an unnamed iframe in its own shadow root:</p>
+  <x-card></x-card>
+  <x-card></x-card>
+  <p id="status">idle</p>
+</main>
+<script>
+  window.__fields = {};
+  window.__continued = 0;
+  window.__domClickIgnored = 0;
+  window.__toggled = 0;
+  addEventListener('message', (event) => {
+    const data = event.data || {};
+    if (data.type === 'field') window.__fields[data.name] = data.value;
+  });
+
+  customElements.define('x-pay', class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = `
+        <style>iframe{width:320px;height:36px;border:1px solid #bbb;padding:2px} div{margin:8px 0}</style>
+        <div><label>Account number</label>
+          <iframe id="pay-frame" name="shadowacct" title="payment frame" src="http://localhost:8911/field.html"></iframe></div>
+        <div><label>Memo</label> <input id="memo" type="text" autocomplete="off"></div>
+        <div><button id="continue" type="button">Continue to payment</button>
+             <button id="cancel" type="button">Cancel</button>
+             <button id="toggle" type="button">Toggle details</button></div>`;
+      root.getElementById('memo').addEventListener('input', (e) => { window.__fields.memo = e.target.value; });
+      root.getElementById('continue').addEventListener('click', (e) => {
+        if (!e.isTrusted) { window.__domClickIgnored += 1; return; }
+        window.__continued += 1; document.getElementById('status').textContent = 'continued';
+      });
+      root.getElementById('toggle').addEventListener('click', () => { window.__toggled += 1; });
+    }
+  });
+  customElements.define('x-outer', class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = '<section><x-pay id="pay"></x-pay></section>';
+    }
+  });
+  customElements.define('x-card', class extends HTMLElement {
+    connectedCallback() {
+      const root = this.attachShadow({ mode: 'open' });
+      root.innerHTML = '<style>iframe{width:320px;height:36px;border:1px solid #bbb}</style><div><iframe src="http://localhost:8911/field.html"></iframe></div>';
+    }
+  });
+</script>
+</body>
+</html>

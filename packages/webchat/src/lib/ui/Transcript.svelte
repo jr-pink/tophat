@@ -273,7 +273,9 @@
     const signature = `${shown.length}:${shown.at(-1)?.text?.length ?? 0}`;
     if (signature === lastSignature) return;
     lastSignature = signature;
-    if (following && scroller) {
+    // a page may hold the view where it is while an answer streams (the tophat.md intro: html[data-hold-scroll]); growth is then the reader's to catch up with
+    const held = typeof document !== 'undefined' && document.documentElement.hasAttribute('data-hold-scroll');
+    if (following && scroller && !held) {
       requestAnimationFrame(() => {
         if (!scroller || !following) return;
         // The view is above where we put it: he moved it himself between the last

@@ -12,12 +12,15 @@
   import { listedConversations, stableListing } from '$lib/core/transient.js';
   // what the host page keeps out of the lists (core/transient.js unlistedByHost); none on the owner's own app
   const hostUnlisted = () => (typeof window === 'undefined' ? null : window.__tophatUnlisted || null);
-  import { queueEdit as queueDescription, readCached as readCachedDescs, sync as syncDescriptions } from '$lib/core/folder-descs.js';
-  import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, folderKey, folderTree, listWorkspaces, moveFolder, normalizeWorkspace, partitionByWorkspace } from '$lib/core/workspaces.js';
+  import { queueArchive, queueEdit as queueDescription, queueParent, readCached as readCachedDescs, sync as syncDescriptions } from '$lib/core/folder-descs.js';
+  import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, effectiveLayout, explorerKey, explorerRows, folderKey, folderTree, inSubtree, listWorkspaces, moveFolder, normalizeWorkspace, pathTo } from '$lib/core/workspaces.js';
   import { sidebarDecl, openKey } from '$lib/core/sidebar-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
   import HostMenu from './HostMenu.svelte';
   import { hostState, refreshHosts } from '$lib/core/hosts.svelte.js';
+  import { provideMenu, SEP } from '$lib/client/context-menu.js';
+  import { createDeadlineFetch } from '../../../../runner/tools/docstore-kit/lib/engine/deadline.js';
+  const net = createDeadlineFetch();
 
   let {
     conversations = {},
@@ -50,16 +53,29 @@
   // hydrated synchronously here, so the first paint is already right; saved by the kit, not by this component.
   // Membership rides on each chat (conversation.workspace).
   const sb = uiApp().use(sidebarDecl);
+  let descs = $state(readCachedDescs());
   if (enterAtStart && !sb.get().current) sb.dispatch('workspace.enter', { name: enterAtStart });
   const workspace = $derived($sb.current);
-  const wsLayout = $derived($sb.layout);
-  const isOpen = (key) => Boolean($sb.open[key]);
+  // The tree is drawn from the shared folder places (server folder metadata, the tree the router files into), with this
+  // device's old local parents only for folders that have none yet (core/workspaces.js effectiveLayout).
+  const wsLayout = $derived(effectiveLayout($sb.layout, descs));
+  // Inbox's open state is the old main-fold flag, so what he had folded stays folded.
+  const isOpen = (key) => (key === UNFILED ? !$sb.mainFolded : Boolean($sb.open[key]));
+  const setOpen = (key, open) => (key === UNFILED ? sb.dispatch('main.fold', { folded: !open }) : sb.dispatch('folder.open', { key, open }));
+  // ⌥-click on a folder's arrow, VS Code's: the folder and every folder under it open or close together.
+  function setOpenDeep(key, open) {
+    const t = folderTree(allWorkspaces, wsLayout);
+    const walk = (k) => { setOpen(k, open); for (const c of t.children(k)) walk(c); };
+    walk(key);
+  }
+  function collapseAll() {
+    for (const k of Object.keys($sb.open)) if ($sb.open[k]) sb.dispatch('folder.open', { key: k, open: false });
+  }
   const enter = (name) => sb.dispatch('workspace.enter', { name });
   // The catch-all (Inbox, once called Everything else) folds too at the top level. Per device, beside the rest of the folder
   // state. Folder descriptions (his edits are source "manual", authoritative for the router and never regenerated; the rest are
   // rewritten daily). Offline first: core/folder-descs.js keeps a device cache and a persisted outbox, so an edit shows at once
   // and is sent when the server is reachable.
-  let descs = $state(readCachedDescs());
   const descOf = (name) => (name ? descs[String(name).toLowerCase()]?.text || '' : '');
   const descSource = (name) => (name ? descs[String(name).toLowerCase()]?.source || '' : '');
   async function syncDescs() { descs = await syncDescriptions(); }
@@ -68,6 +84,21 @@
     const again = () => syncDescs();
     globalThis.addEventListener?.('online', again);
     return () => globalThis.removeEventListener?.('online', again);
+  });
+  // One-time upload of this device's old local nesting into the shared folder places, so the router files into those
+  // subfolders too: every local parent the server has no place for is sent once, as his edit. Re-runs are no-ops (the
+  // place then exists).
+  $effect(() => {
+    const local = $sb.layout?.parent || {};
+    let sent = false;
+    for (const [k, p] of Object.entries(local)) {
+      if (!p || typeof descs[k]?.parentAt === 'string') continue;
+      const name = allWorkspaces.find((n) => folderKey(n) === k);
+      if (!name) continue;
+      queueParent(name, p);
+      sent = true;
+    }
+    if (sent) { descs = readCachedDescs(); syncDescs(); }
   });
   // The host menu (HostMenu.svelte): the peers a chat can run on, whether the router may pick each, and what to send there.
   $effect(() => {
@@ -89,13 +120,12 @@
     descs = queueDescription(name, text);
     syncDescs();
   }
-  const mainFolded = $derived($sb.mainFolded);
   // Folder drag: which folder is moving and where it would land ({ key, where }).
   let folderDrag = $state(null);
   let folderDrop = $state(null);
-  let wsCreating = $state(false);
-  let wsDraft = $state('');
-  let wsRenaming = $state(null);
+  // The folder being renamed in place, as a name (kit state `renaming` holds its key).
+  const wsRenaming = $derived($sb.renaming ? nameForKey($sb.renaming) : null);
+  const startRename = (name) => { if (name) sb.dispatch('rename.at', { key: folderKey(name) }); };
   let moveFor = $state(null);
   let movePos = $state({ x: 0, y: 0 });
   let dropTarget = $state(undefined);
@@ -112,27 +142,33 @@
     if (enterNow) enter(clean);
     return clean;
   }
-  function commitCreate() {
-    const name = wsDraft;
-    wsDraft = '';
-    wsCreating = false;
-    createWorkspace(name, { enter: true, file: moveFor });
-    moveFor = null;
-  }
   function renameWorkspace(from, to) {
     const clean = normalizeWorkspace(to);
-    wsRenaming = null;
+    sb.dispatch('rename.at', { key: null });
+    listEl?.focus();
     if (!clean || clean === from) return;
     for (const c of Object.values(conversations)) if (c.workspace && c.workspace.toLowerCase() === from.toLowerCase()) onworkspace(c.id, clean);
+    // The shared tree follows the name: the folder keeps its place and description, its subfolders stay inside it.
+    const tree = folderTree(allWorkspaces, wsLayout), k = folderKey(from);
+    const parent = tree.parentOf(k);
+    queueParent(clean, parent === ROOT ? '' : parent);
+    if (descSource(from) === 'manual') queueDescription(clean, descOf(from));
+    for (const child of tree.children(k)) queueParent(nameForKey(child) ?? child, clean);
+    descs = readCachedDescs();
     sb.dispatch('folder.rename', { from, to: clean });
+    syncDescs();
   }
   function deleteWorkspace(name) {
     const members = Object.values(conversations).filter((c) => c.workspace && c.workspace.toLowerCase() === name.toLowerCase());
     if (members.length && !confirm(`Remove the workspace "${name}"? Its ${members.length} chat${members.length === 1 ? '' : 's'} go back to the main list; nothing is deleted.`)) return;
     for (const c of members) onworkspace(c.id, null);
+    // Its subfolders move up to its parent, in the shared tree too.
+    const tree = folderTree(allWorkspaces, wsLayout), k = folderKey(name), up = tree.parentOf(k);
+    for (const child of tree.children(k)) queueParent(nameForKey(child) ?? child, up === ROOT ? '' : up);
+    descs = readCachedDescs();
     sb.dispatch('folder.remove', { name });
+    syncDescs();
   }
-  const toggleWs = (key) => sb.dispatch('folder.open', { key, open: !isOpen(key) });
   function openMove(event, id) {
     const box = event.currentTarget.getBoundingClientRect();
     const root = rootEl.getBoundingClientRect();
@@ -158,8 +194,16 @@
     if (folderDrag) return;
     if (!event.dataTransfer?.types?.includes('application/x-tophat-chat')) return;
     event.preventDefault();
+    if (dropTarget !== key) springOpen(key);
     dropTarget = key;
   };
+  // VS Code's spring-loaded folders: hovering a drag over a closed folder for 600 ms opens it.
+  let springTimer = null;
+  function springOpen(key) {
+    clearTimeout(springTimer);
+    if (!key || isOpen(key)) return;
+    springTimer = setTimeout(() => { if (dropTarget === key || folderDrop?.key === key) setOpen(key, true); }, 600);
+  }
   // Folders move by dragging their header: the top third of another header drops before it, the
   // bottom third after it, the middle inside it. Inbox moves but never nests.
   function folderDragStart(event, key) {
@@ -177,13 +221,14 @@
     const next = moveFolder(allWorkspaces, wsLayout, folderDrag, key, where);
     if (next === wsLayout) { folderDrop = null; return; }
     event.preventDefault();
+    if (where === 'inside' && folderDrop?.key !== key) springOpen(key);
     folderDrop = { key, where };
   }
   function folderDropOn(event, key) {
     if (!folderDrag || !folderDrop || folderDrop.key !== key) return;
     event.preventDefault();
-    sb.dispatch('folder.move', { all: allWorkspaces, drag: folderDrag, target: key, where: folderDrop.where });
-    if (folderDrop.where === 'inside') sb.dispatch('folder.open', { key: openKey(nameForKey(key)), open: true });
+    moveShared(folderDrag, key, folderDrop.where);
+    if (folderDrop.where === 'inside') setOpen(key, true);
     folderDragEnd();
   }
   // The same moves from a menu, for touch screens where a header cannot be dragged.
@@ -199,7 +244,41 @@
   function folderMenuMove(target, where) {
     const key = folderMenu;
     folderMenu = null;
-    if (key) sb.dispatch('folder.move', { all: allWorkspaces, drag: key, target, where });
+    if (key) moveShared(key, target, where);
+  }
+  // New Folder, VS Code's: one editable row in the tree, first inside the target folder, its name selected for typing.
+  // The target is the folder given (a row's + or its menu), else the selected folder, else the selected chat's folder,
+  // else the folder in focus, else the top level. Kit state `newIn` holds where it goes; Enter makes it, Esc drops it.
+  function newFolder(parentKey) {
+    let k = parentKey;
+    if (k === undefined) {
+      const it = navItems2.find((x) => x.id === cursor);
+      if (it?.kind === 'folder' && it.key !== UNFILED) k = it.key;
+      else if (it?.kind === 'misc') k = it.parent;
+      else if (it?.kind === 'chat' && canonicalWorkspace(it.row.workspace)) k = folderKey(canonicalWorkspace(it.row.workspace));
+      else k = focusKey ?? ROOT;
+    }
+    if (k === UNFILED) k = ROOT;
+    if (k !== ROOT) setOpen(k, true);
+    sb.dispatch('newfolder.at', { parent: k });
+  }
+  function commitNewFolder(text) {
+    const parentKey = $sb.newIn, name = canonicalWorkspace(text);
+    sb.dispatch('newfolder.at', { parent: null });
+    if (!name || parentKey === null) return;
+    sb.dispatch('folder.create', { name });
+    if (parentKey) { descs = queueParent(name, parentKey); syncDescs(); }
+    sb.dispatch('cursor.set', { addr: `f:${folderKey(name)}` });
+    listEl?.focus();
+  }
+  const selectAll = (node) => { node.focus(); node.select(); };
+  // A folder move: the order is this device's (the kit's layout), the place is shared (folder metadata, read by the router).
+  function moveShared(drag, target, where) {
+    const next = moveFolder(allWorkspaces, wsLayout, drag, target, where);
+    if (next === wsLayout) return;
+    sb.dispatch('folder.move', { all: allWorkspaces, drag, target, where });
+    const before = wsLayout.parent[drag] || '', after = next.parent[drag] || '';
+    if (drag !== UNFILED && before !== after) { descs = queueParent(nameForKey(drag) ?? drag, after); syncDescs(); }
   }
   function folderDragEnd() { folderDrag = null; folderDrop = null; }
   const nameForKey = (key) => (key === UNFILED ? null : allWorkspaces.find((n) => folderKey(n) === key) ?? null);
@@ -208,7 +287,7 @@
     if (!folderDrag) return;
     const here = workspace ? folderKey(workspace) : UNFILED;
     const next = moveFolder(allWorkspaces, wsLayout, folderDrag, here, 'inside');
-    if (next !== wsLayout) { event.preventDefault(); sb.dispatch('folder.move', { all: allWorkspaces, drag: folderDrag, target: here, where: 'inside' }); }
+    if (next !== wsLayout) { event.preventDefault(); moveShared(folderDrag, here, 'inside'); }
     folderDragEnd();
   }
 
@@ -286,29 +365,28 @@
 
   const marksRead = (row) => Boolean(row.unread) || row.indicator === 'live';
 
-  const parts = $derived(partitionByWorkspace(rows, { current: workspace, names: allWorkspaces, searching: Boolean(filter.trim()), layout: wsLayout }));
-  const mainRows = $derived(parts.main);
-  const wsGroups = $derived(parts.groups);
-  const wsInner = $derived(parts.inner || []);
   const wsKey = openKey;
-  // The header shows when there is something to focus on instead: at the top level with folders.
-  const mainFoldable = $derived(!workspace && !filter.trim() && (wsGroups.length > 0));
-  const mainHidden = $derived(mainFoldable && mainFolded);
-  // Keyboard order follows what is on screen: open folders depth first, subfolders before rows.
-  const openRows = (groups) => groups.filter((g) => isOpen(wsKey(g.name))).flatMap((g) => [...openRows(g.children || []), ...g.rows.flatMap((row) => [row, ...row.forks])]);
-  const flat = $derived([
-    ...openRows(wsGroups),
-    ...openRows(wsInner),
-    ...(mainHidden ? [] : mainRows.flatMap((row) => [row, ...row.forks])),
-    ...(deferredOpen ? deferredRows : []),
-    ...(asideOpen ? asideRows : []),
-    ...(archivedOpen ? archivedRows : [])
-  ]);
-  let selected = $state(-1);
+  const searching = $derived(Boolean(filter.trim()));
+  const tree = $derived(folderTree(allWorkspaces, wsLayout));
+  // Folder archive (a flag in the shared folder metadata, orthogonal to place): an archived folder and its subtree are hidden
+  // unless the kit's `showArchived` is on. `hiddenFolder` is what a menu should not offer as a destination.
+  const isArchivedFolder = (k) => k !== UNFILED && descs[k]?.archived === true;
+  const hiddenFolder = (k) => !$sb.showArchived && pathTo(tree, k).some(isArchivedFolder);
+  // The folder made primary (double-click, or its focus button): only its subtree shows, trays included; the breadcrumbs
+  // above the list lead back up. A focus naming a folder that no longer exists shows everything.
+  const focusKey = $derived(workspace && tree.all.includes(folderKey(workspace)) ? folderKey(workspace) : null);
+  const crumbs = $derived(focusKey ? pathTo(tree, focusKey).filter((k) => k !== UNFILED) : []);
+  const inFocus = (row) => !focusKey || inSubtree(row, workspace, tree);
+  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived }));
+  const focusCount = $derived(focusKey ? rows.filter((row) => canonicalWorkspace(row.workspace) && folderKey(canonicalWorkspace(row.workspace)) === focusKey).length : 0);
+  // Keyboard order follows what is on screen: the tree, then the open trays.
+  const trayItems = $derived([...(deferredOpen ? deferredRows : []), ...(asideOpen ? asideRows : []), ...(archivedOpen ? archivedRows : [])]
+    .filter((row) => searching || inFocus(row)).map((row) => ({ kind: 'chat', id: `c:${row.id}`, row, depth: 0, fork: false })));
+  const navItems2 = $derived([...items.map((it) => (it.kind === 'chat' ? { ...it, id: `c:${it.id}` } : it)), ...trayItems]);
+  const cursor = $derived($sb.cursor);
   let listEl = $state(null);
   let rootEl = $state(null);
 
-  $effect(() => { filter; selected = -1; });
   let lastFilter = '';
   $effect(() => {
     const value = filter.trim();
@@ -319,28 +397,250 @@
     if (value && deferredRows.length) deferredOpen = true;
   });
   $effect(() => {
-    if (selected < 0 || !rootEl) return;
-    // The archived rows sit outside the list's scroller now, so keyboard selection looks for the
-    // row anywhere in the sidebar.
-    rootEl?.querySelector('.chat.sel')?.scrollIntoView({ block: 'nearest' });
+    if (!cursor || !rootEl) return;
+    // The cursor row anywhere in the sidebar (the trays sit outside the list's scroller) is kept in view.
+    rootEl?.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
   });
 
+  // The explorer keys, VS Code's tree: arrows walk the visible rows, right/left open/close or step into/out of a folder,
+  // Enter opens a chat or toggles a folder, Space toggles. Every move is one kit action (cursor.set, folder.open).
+  function treeStep(name) {
+    const r = explorerKey(navItems2, cursor, name);
+    if (!r) return false;
+    if (r.open) setOpen(r.open.key, r.open.open);
+    if (r.cursor !== cursor) sb.dispatch('cursor.set', { addr: r.cursor });
+    return true;
+  }
+  function activate() {
+    const it = navItems2.find((x) => x.id === cursor) || navItems2.find((x) => x.kind === 'chat');
+    if (!it) return false;
+    if (it.kind === 'chat') onselect(it.row.id); else setOpen(it.key, !it.open);
+    return true;
+  }
+  const NAV = { ArrowDown: 'down', ArrowUp: 'up', ArrowRight: 'right', ArrowLeft: 'left', Home: 'home', End: 'end' };
+  // ---- selection (VS Code's): a plain click selects one row, ⌘-click toggles one, ⇧-click selects the range from the
+  // cursor. Kit state `selection`; the cursor row always counts as selected.
+  const selected = $derived(new Set([...$sb.selection, ...(cursor ? [cursor] : [])]));
+  const isSel = (addr) => selected.has(addr);
+  function pick(addr, event) {
+    if (event?.metaKey || event?.ctrlKey) {
+      const set = new Set(selected);
+      if (set.has(addr)) set.delete(addr); else set.add(addr);
+      sb.dispatch('selection.set', { addrs: [...set] });
+      sb.dispatch('cursor.set', { addr: set.has(addr) ? addr : [...set].pop() ?? null });
+      return 'multi';
+    }
+    if (event?.shiftKey && cursor) {
+      const ids = navItems2.map((x) => x.id), a = ids.indexOf(cursor), b = ids.indexOf(addr);
+      if (a >= 0 && b >= 0) { sb.dispatch('selection.set', { addrs: ids.slice(Math.min(a, b), Math.max(a, b) + 1) }); return 'multi'; }
+    }
+    sb.dispatch('selection.set', { addrs: [] });
+    sb.dispatch('cursor.set', { addr });
+    return 'one';
+  }
+  const chatOfAddr = (addr) => (addr?.startsWith('c:') ? conversations[addr.slice(2)] : null);
+  const keyOfAddr = (addr) => (addr?.startsWith('f:') ? addr.slice(2) : null);
+  // What an action applies to: the whole selection when the row is in it, else that row alone.
+  const targetsOf = (addr) => (selected.has(addr) && selected.size > 1 ? [...selected] : [addr]);
+
+  // ---- commands, shared by keys and menus
+  function archiveChats(addrs) { for (const a of addrs) { const c = chatOfAddr(a); if (c) onarchive(c.id, !c.archived); } }
+  function moveItems(addrs, folderKeyOrNull) {
+    const name = folderKeyOrNull ? nameForKey(folderKeyOrNull) : null;
+    for (const a of addrs) {
+      const c = chatOfAddr(a);
+      if (c) onworkspace(c.id, name);
+      const k = keyOfAddr(a);
+      if (k && k !== UNFILED && k !== folderKeyOrNull) moveShared(k, folderKeyOrNull ?? ROOT, 'inside');
+    }
+  }
+  function paste(intoKey) {
+    const clip = $sb.clip;
+    if (!clip) return;
+    moveItems([clip], intoKey === UNFILED ? null : intoKey);
+    sb.dispatch('clip.set', { addr: null });
+  }
+  async function resort(addrs, { label = '' } = {}) {
+    const ids = [], folders = [];
+    for (const a of addrs || []) { const c = chatOfAddr(a); if (c) ids.push(c.id); const k = keyOfAddr(a); if (k && k !== UNFILED) folders.push(nameForKey(k) ?? k); if (k === UNFILED) ids.push(...rows.filter((r) => !canonicalWorkspace(r.workspace)).map((r) => r.id)); }
+    sb.dispatch('notice.set', { text: `Re-sorting ${label || 'with the folder descriptions'}…` });
+    try {
+      const body = addrs ? { ids, folders } : {};
+      const r = await net.fetchWithin('send', '/api/refile', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out?.error || `HTTP ${r.status}`);
+      sb.dispatch('notice.set', { text: `Re-sorted ${out.asked} chat${out.asked === 1 ? '' : 's'}: ${out.moved.length} moved${out.moved.length ? ` (${out.moved.slice(0, 4).map((m) => `${m.title || m.id} → ${m.to ?? CATCHALL_LABEL}`).join('; ')}${out.moved.length > 4 ? '; …' : ''})` : ''}` });
+    } catch (cause) {
+      sb.dispatch('notice.set', { text: `Re-sort failed: ${cause?.message || cause}` });
+    }
+  }
+  // Archive or restore folders: one shared flag per folder, nothing moves (parent, order and chats stay), so the reverse is exact.
+  function archiveFolders(addrs, archived) {
+    for (const a of addrs) {
+      const k = keyOfAddr(a);
+      if (!k || k === UNFILED) continue;
+      const name = nameForKey(k);
+      if (!name) continue;
+      descs = queueArchive(name, archived);
+      // Focus on a folder that is about to disappear steps up to the archived folder's parent.
+      if (archived && !$sb.showArchived && focusKey && tree.isWithin(focusKey, k)) enter(tree.parentOf(k) === ROOT ? null : nameForKey(tree.parentOf(k)));
+    }
+    syncDescs();
+  }
+  function removeFolders(addrs) { for (const a of addrs) { const k = keyOfAddr(a); if (k && k !== UNFILED) deleteWorkspace(nameForKey(k)); } }
+  function expandAllUnder(key, open) { setOpenDeep(key, open); }
+
+  // ---- the right-click menus (kit ContextMenu via client/context-menu.js)
+  const moveMenu = (addrs) => {
+    const movingFolders = addrs.map(keyOfAddr).filter(Boolean);
+    const ok = (k) => !movingFolders.some((m) => tree.isWithin(k, m)) && !hiddenFolder(k);
+    return [
+      { id: 'mv-inbox', label: movingFolders.length ? 'Top Level' : CATCHALL_LABEL, run: () => moveItems(addrs, null) },
+      SEP,
+      ...tree.all.filter((k) => k !== UNFILED && ok(k)).map((k) => ({ id: `mv-${k}`, label: `${'  '.repeat(pathTo(tree, k).length - 1)}${nameForKey(k)}`, run: () => moveItems(addrs, k) })),
+      SEP,
+      { id: 'mv-new', label: 'New Folder…', run: () => newFolder() }
+    ];
+  };
+  function bulkMenu(addrs) {
+    const chats = addrs.filter((a) => chatOfAddr(a)).length, folders = addrs.filter((a) => keyOfAddr(a) && keyOfAddr(a) !== UNFILED).length;
+    const what = [chats && `${chats} chat${chats === 1 ? '' : 's'}`, folders && `${folders} folder${folders === 1 ? '' : 's'}`].filter(Boolean).join(', ');
+    return [
+      { id: 'resort', label: `Re-sort ${what} with Descriptions`, run: () => resort(addrs, { label: what }) },
+      { id: 'move', label: `Move ${what} to`, children: moveMenu(addrs) },
+      SEP,
+      chats && { id: 'aside', label: `Set Aside ${chats} chat${chats === 1 ? '' : 's'}`, run: () => { for (const a of addrs) { const c = chatOfAddr(a); if (c) onaside(c.id, true); } } },
+      chats && { id: 'archive', label: `Archive ${chats} chat${chats === 1 ? '' : 's'}`, keys: '⌘⌫', run: () => archiveChats(addrs) },
+      folders && { id: 'archive-folders', label: `Archive ${folders} folder${folders === 1 ? '' : 's'}`, run: () => archiveFolders(addrs, true) },
+      folders && { id: 'remove', label: `Remove ${folders} folder${folders === 1 ? '' : 's'}`, danger: true, run: () => removeFolders(addrs) },
+      SEP,
+      { id: 'clear', label: 'Clear Selection', keys: 'Esc', run: () => sb.dispatch('selection.set', { addrs: [] }) }
+    ];
+  }
+  function folderMenuItems(key) {
+    const addr = `f:${key}`;
+    if (selected.has(addr) && selected.size > 1) return bulkMenu([...selected]);
+    pick(addr);
+    const name = nameForKey(key), named = key !== UNFILED && name;
+    const sibs = folderSiblings(key), at = sibs.indexOf(key), open = isOpen(key);
+    return [
+      named && { id: 'new-chat', label: 'New Chat in Folder', run: () => { enter(name); onnew(); } },
+      { id: 'new-folder', label: 'New Folder…', run: () => newFolder(named ? key : ROOT) },
+      SEP,
+      named && { id: 'focus', label: 'Focus Folder', keys: 'Double-click', run: () => enter(name) },
+      workspace && focusKey === key && { id: 'up', label: 'Show Parent', keys: 'Esc', run: () => enter(tree.parentOf(key) === ROOT ? null : nameForKey(tree.parentOf(key))) },
+      { id: 'toggle', label: open ? 'Collapse' : 'Expand', keys: open ? '←' : '→', run: () => setOpen(key, !open) },
+      named && tree.children(key).length && { id: 'expand-all', label: 'Expand All Inside', keys: '⌥-click', run: () => expandAllUnder(key, true) },
+      named && tree.children(key).length && { id: 'collapse-all', label: 'Collapse All Inside', run: () => expandAllUnder(key, false) },
+      SEP,
+      named && { id: 'rename', label: 'Rename…', keys: '↩', run: () => startRename(name) },
+      named && { id: 'desc', label: 'Edit Description…', run: () => editDesc(name) },
+      named && { id: 'move', label: 'Move to', children: moveMenu([addr]) },
+      at > 0 && { id: 'move-up', label: 'Move Up', run: () => moveShared(key, sibs[at - 1], 'before') },
+      at >= 0 && at < sibs.length - 1 && { id: 'move-down', label: 'Move Down', run: () => moveShared(key, sibs[at + 1], 'after') },
+      SEP,
+      { id: 'resort', label: 'Re-sort Chats with Descriptions', run: () => resort([addr], { label: `${name ?? CATCHALL_LABEL}` }) },
+      named && { id: 'cut', label: 'Cut', keys: '⌘X', run: () => sb.dispatch('clip.set', { addr }) },
+      $sb.clip && $sb.clip !== addr && { id: 'paste', label: 'Paste', keys: '⌘V', run: () => paste(key) },
+      named && { id: 'copy-name', label: 'Copy Name', run: () => navigator.clipboard?.writeText(name) },
+      named && SEP,
+      named && { id: 'archive-folder', label: isArchivedFolder(key) ? 'Unarchive Folder' : 'Archive Folder', run: () => archiveFolders([addr], !isArchivedFolder(key)) },
+      named && { id: 'remove', label: 'Remove Folder', keys: '⌘⌫', danger: true, run: () => deleteWorkspace(name) }
+    ];
+  }
+  function chatMenuItems(id) {
+    const addr = `c:${id}`, c = conversations[id];
+    if (!c) return [];
+    if (selected.has(addr) && selected.size > 1) return bulkMenu([...selected]);
+    pick(addr);
+    return [
+      { id: 'open', label: 'Open', keys: '↩', run: () => onselect(id) },
+      { id: 'open-side', label: 'Open to the Side', run: () => onopenbeside(id) },
+      SEP,
+      { id: 'move', label: 'Move to Folder', children: moveMenu([addr]) },
+      { id: 'resort', label: 'Re-sort with Descriptions', run: () => resort([addr], { label: c.title || 'this chat' }) },
+      SEP,
+      { id: 'pin', label: c.pinned ? 'Unpin' : 'Pin', run: () => onpin(id, !c.pinned) },
+      !marksRead(c) && { id: 'unread', label: 'Mark Unread', run: () => onread(id, false) },
+      { id: 'aside', label: c.aside ? 'Put Back' : 'Set Aside', keys: '⌘U', run: () => onaside(id, !c.aside) },
+      { id: 'defer', label: 'Defer…', run: () => openDefer(id) },
+      { id: 'archive', label: c.archived ? 'Unarchive' : 'Archive', keys: '⌘⌫', run: () => onarchive(id, !c.archived) },
+      SEP,
+      { id: 'cut', label: 'Cut', keys: '⌘X', run: () => sb.dispatch('clip.set', { addr }) },
+      { id: 'copy-link', label: 'Copy Link', run: () => navigator.clipboard?.writeText(`${location.origin}/?chat=${encodeURIComponent(id)}`) },
+      { id: 'copy-title', label: 'Copy Title', run: () => navigator.clipboard?.writeText(automatedTitle(c.title).text || c.title || '') }
+    ];
+  }
+  function explorerMenuItems() {
+    return [
+      { id: 'new-folder', label: 'New Folder…', run: () => newFolder(focusKey ?? ROOT) },
+      { id: 'new-chat', label: 'New Chat', run: () => onnew() },
+      SEP,
+      workspace && { id: 'show-all', label: 'Show All Folders', run: () => enter(null) },
+      { id: 'collapse-all', label: 'Collapse All Folders', keys: '⌘←', run: collapseAll },
+      { id: 'show-archived', label: $sb.showArchived ? 'Hide Archived Folders' : 'Show Archived Folders', run: () => sb.dispatch('archived.show', { show: !$sb.showArchived }) },
+      $sb.clip && { id: 'paste', label: 'Paste', keys: '⌘V', run: () => paste(focusKey ?? UNFILED) },
+      SEP,
+      { id: 'resort-all', label: workspace ? `Re-sort Everything in ${workspace}` : 'Re-sort All Chats with Descriptions', run: () => (workspace ? resort([`f:${focusKey}`], { label: workspace }) : resort(null, { label: 'every chat' })) }
+    ];
+  }
+  $effect(() => {
+    const off = [
+      provideMenu('folder', (ctx) => (ctx.key ? folderMenuItems(ctx.key) : explorerMenuItems())),
+      provideMenu('chat', (ctx) => chatMenuItems(ctx.id)),
+      provideMenu('explorer', () => explorerMenuItems())
+    ];
+    return () => off.forEach((f) => f());
+  });
+
+  // ---- keys (VS Code's explorer on a Mac): arrows walk, ⇧-arrows extend the selection, ↩ / F2 renames a folder and opens
+  // a chat, Space toggles a folder or opens a chat, ⌘↓ opens, ⌘⌫ removes the folder or archives the chat (all selected),
+  // ⌘X / ⌘V cut and paste into the folder under the cursor, ⌘A selects every visible row, ⌘← collapses all, Esc clears
+  // the selection or the cut, then leaves the focused folder; a letter jumps to the next row starting with it.
+  const labelOf = (it) => (it.kind === 'misc' ? it.name : it.kind === 'folder' ? nameForKey(it.key) ?? CATCHALL_LABEL : automatedTitle(it.row?.title).text || it.row?.title || '');
+  function treeKeydown(event) {
+    if (event.target !== listEl) return;
+    const mod = event.metaKey || event.ctrlKey;
+    const it = navItems2.find((x) => x.id === cursor);
+    const name = NAV[event.key];
+    if (name && !mod && !event.altKey) {
+      event.preventDefault();
+      const from = cursor;
+      treeStep(name);
+      if (event.shiftKey && (name === 'up' || name === 'down') && from) sb.dispatch('selection.set', { addrs: [...new Set([...selected, from])] });
+      else if (!event.shiftKey) sb.dispatch('selection.set', { addrs: [] });
+      return;
+    }
+    const hit = (fn) => { event.preventDefault(); event.stopPropagation(); fn(); };
+    if (mod && event.key === 'ArrowDown') return hit(activate);
+    if (mod && event.key === 'ArrowLeft') return hit(collapseAll);
+    if (mod && (event.key === 'Backspace' || event.key === 'Delete')) return hit(() => { const t = targetsOf(cursor); archiveChats(t); removeFolders(t); });
+    if (mod && event.key.toLowerCase() === 'x' && cursor) return hit(() => sb.dispatch('clip.set', { addr: cursor }));
+    if (mod && event.key.toLowerCase() === 'v' && $sb.clip) return hit(() => paste(it?.kind === 'misc' ? it.parent : it?.kind === 'folder' ? it.key : (it?.kind === 'chat' && canonicalWorkspace(it.row.workspace) ? folderKey(canonicalWorkspace(it.row.workspace)) : focusKey ?? UNFILED)));
+    if (mod && event.key.toLowerCase() === 'a') return hit(() => sb.dispatch('selection.set', { addrs: navItems2.map((x) => x.id) }));
+    if (mod || event.altKey) return;
+    if (event.key === 'Enter' || event.key === 'F2') {
+      if (it?.kind === 'folder' && it.key !== UNFILED) return hit(() => startRename(nameForKey(it.key)));
+      if (event.key === 'Enter') return hit(activate);
+      return;
+    }
+    if (event.key === ' ') return hit(() => { if (it?.kind === 'folder' || it?.kind === 'misc') setOpen(it.key, !it.open); else activate(); });
+    if (event.key === 'Escape') {
+      if ($sb.selection.length) return hit(() => sb.dispatch('selection.set', { addrs: [] }));
+      if ($sb.clip) return hit(() => sb.dispatch('clip.set', { addr: null }));
+      if (workspace) return hit(() => enter(tree.parentOf(focusKey) === ROOT ? null : nameForKey(tree.parentOf(focusKey))));
+      return;
+    }
+    if (event.key.length === 1 && /\S/u.test(event.key)) {
+      const k = event.key.toLowerCase(), n = navItems2.length, at = navItems2.findIndex((x) => x.id === cursor);
+      for (let s = 1; s <= n; s += 1) { const x = navItems2[(at + s + n) % n]; if (labelOf(x).toLowerCase().startsWith(k)) return hit(() => sb.dispatch('cursor.set', { addr: x.id })); }
+    }
+  }
+
   function filterKeydown(event) {
-    if (isListDown(event)) {
-      event.preventDefault();
-      selected = Math.min(selected + 1, flat.length - 1);
-      return;
-    }
-    if (isListUp(event)) {
-      event.preventDefault();
-      selected = Math.max(selected - 1, 0);
-      return;
-    }
-    if (event.key === 'Enter') {
-      const row = flat[selected] || flat[0];
-      if (row) { event.preventDefault(); onselect(row.id); }
-      return;
-    }
+    if (isListDown(event)) { event.preventDefault(); treeStep('down'); return; }
+    if (isListUp(event)) { event.preventDefault(); treeStep('up'); return; }
+    if (event.key === 'Enter') { if (activate()) event.preventDefault(); return; }
     if (event.key === 'Escape') {
       event.stopPropagation();
       if (filter) filter = '';
@@ -349,7 +649,10 @@
   }
 
   function rowClick(event, id) {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if (event.button !== 0) return;
+    // ⌘-click and ⇧-click select (VS Code); a middle-click still opens the link in a browser tab.
+    if (pick(`c:${id}`, event) === 'multi') { event.preventDefault(); return; }
+    if (event.altKey) return;
     event.preventDefault();
     onselect(id);
   }
@@ -408,96 +711,60 @@
       data-testid="sidebar-filter"
       aria-label="Search chats"
     />
-    <button class="search press focus-ring" onclick={() => { wsCreating = !wsCreating; moveFor = null; }} data-testid="new-workspace" title="New workspace" aria-label="New workspace"><Icon name="folder" /></button>
+    <button class="search press focus-ring" onclick={() => { moveFor = null; newFolder(); }} data-testid="new-workspace" title="New folder (inside the selected folder)" aria-label="New folder"><Icon name="folder" /></button>
     {#if hostState.list.length > 1}<button class="search press focus-ring" class:on={hostMenuY !== null} onclick={openHostMenu} data-testid="host-menu-button" title="Hosts: which machines chats run on" aria-label="Hosts" aria-haspopup="menu" aria-expanded={hostMenuY !== null}><Icon name="server" /></button>{/if}
   </div>
 
-  {#if wsCreating}
-    <form class="wsnew" onsubmit={(event) => { event.preventDefault(); commitCreate(); }}>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input class="filter focus-ring" bind:value={wsDraft} placeholder="Workspace name" aria-label="Workspace name" data-testid="workspace-name" autofocus
-        onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); wsCreating = false; wsDraft = ''; } }} />
-    </form>
-  {/if}
 
+  {#if $sb.notice}
+    <div class="sbnotice" data-testid="sidebar-notice" role="status"><span>{$sb.notice}</span><button class="icon-btn press" onclick={() => sb.dispatch('notice.set', { text: null })} aria-label="Dismiss"><Icon name="close" size={11} /></button></div>
+  {/if}
   {#if workspace}
-    <div class="wscur" data-testid="current-workspace" ondragover={(e) => { if (folderDrag) e.preventDefault(); else dragOver(e, wsKey(workspace)); }} ondragleave={() => (dropTarget = undefined)} ondrop={(e) => { if (folderDrag) stripFolderDrop(e); else dropOn(e, workspace); }} class:drop={dropTarget === wsKey(workspace)} role="group">
-      <Icon name="folder" size={12} />
-      <span class="wsname">{workspace}</span>
-      <span class="count">{mainRows.length}</span>
-      <button class="leave press focus-ring" onclick={() => enter(null)} data-testid="leave-workspace" title="Leave this workspace" aria-label="Leave workspace"><Icon name="close" size={11} /></button>
-    </div>
+    <!-- Breadcrumbs: the folder he made primary (double-click a folder, or its focus button) is the root of the list and
+         everything outside it is hidden; each crumb above it makes that folder the root, the first shows everything. -->
+    <nav class="crumbs" data-ctx="folder" data-ctx-key={focusKey ?? ''} data-testid="current-workspace" aria-label="Folder path"
+      ondragover={(e) => { if (!folderDrag) dragOver(e, wsKey(workspace)); }} ondragleave={() => (dropTarget = undefined)}
+      ondrop={(e) => { if (!folderDrag) dropOn(e, workspace); }} class:drop={dropTarget === wsKey(workspace)}>
+      <button class="crumb press focus-ring" onclick={() => enter(null)} data-testid="leave-workspace" title="Show every folder">All</button>
+      {#each crumbs as k, i (k)}
+        <span class="crumbsep" aria-hidden="true">›</span>
+        {#if i === crumbs.length - 1}
+          <span class="crumb here" title={descOf(nameForKey(k)) || nameForKey(k)}>{nameForKey(k)}</span>
+          <span class="count">{focusCount}</span>
+        {:else}
+          <button class="crumb press focus-ring" onclick={() => enter(nameForKey(k))} title={descOf(nameForKey(k)) || nameForKey(k)}>{nameForKey(k)}</button>
+        {/if}
+      {/each}
+      <span class="crumbacts">
+        <button class="icon-btn press" onclick={() => editDesc(workspace)} title="Edit description" aria-label="Edit description"><Icon name="note" size={12} /></button>
+        <button class="icon-btn press" onclick={() => newFolder(focusKey)} title="New subfolder" aria-label="New subfolder" data-testid="new-subfolder-here"><Icon name="plus" size={12} /></button>
+      </span>
+    </nav>
+    {#if descEditing === workspace}{@render descEditor(workspace)}{/if}
   {/if}
 
-  <div class="scroller list" data-testid="chat-list" bind:this={listEl}>
-    {#if wsGroups.length}
-      <div class="wsgroups" data-testid="workspace-groups">
-        {#each wsGroups as group (wsKey(group.name))}{@render folderNode(group)}
-        {/each}
-      </div>
-    {/if}
-    {#if mainFoldable}
-      <!-- Inbox: unfiled chats and chats stored under the name Inbox are one set (core/workspaces.js),
-           and they sit inside this fold like every other folder's chats, never loose in the list. -->
-      <div class="wsgroup" data-testid="everything-else" data-catchall="true">
-        <div class="wshead" role="group"
-          class:drop={dropTarget === wsKey(null) || (folderDrop?.key === UNFILED && folderDrop.where === 'inside')}
-          class:dropbefore={folderDrop?.key === UNFILED && folderDrop.where === 'before'}
-          class:dropafter={folderDrop?.key === UNFILED && folderDrop.where === 'after'}
-          class:dragging={folderDrag === UNFILED}
-          draggable="true"
-          ondragstart={(e) => folderDragStart(e, UNFILED)}
-          ondragend={folderDragEnd}
-          ondragover={(e) => { if (folderDrag) folderDragOver(e, UNFILED); else dragOver(e, wsKey(null)); }}
-          ondragleave={() => { dropTarget = undefined; if (folderDrop?.key === UNFILED) folderDrop = null; }}
-          ondrop={(e) => { if (folderDrag) folderDropOn(e, UNFILED); else dropOn(e, null); }}
-          title="Chats that are in no folder. Drop a folder on the middle to put it inside Inbox">
-          <button class="wstoggle press focus-ring" onclick={() => sb.dispatch('main.fold', { folded: !mainFolded })} aria-expanded={!mainFolded} data-testid="toggle-everything-else">
-            <span class="caret" class:down={!mainFolded}><Icon name="chevron" size={11} /></span>
-            <Icon name="tray" size={12} />
-            <span class="wsname">{CATCHALL_LABEL}</span>
-            <span class="count">{mainRows.length}</span>
-            {#if mainHidden && mainRows.some((row) => row.indicator === 'live' || row.indicator === 'unread')}<span class="dot unread-dot" title="live or unread inside"></span>{/if}
-          </button>
-        </div>
-        {#if !mainHidden}
-          <div class="wsbody" data-testid="inbox-body">
-            {#if wsInner.length}
-              <div class="wsinner" data-testid="workspace-inner">
-                {#each wsInner as group (wsKey(group.name))}{@render folderNode(group)}{/each}
-              </div>
-            {/if}
-            {#each mainRows as row (row.id)}
-              <div class="group">
-                {@render chatRow(row, false)}
-                {#each row.forks as fork (fork.id)}
-                  {@render chatRow(fork, true)}
-                {/each}
-              </div>
-            {/each}
-            {#if !mainRows.length && !wsInner.length}<p class="empty">Nothing here: every chat is in a folder.</p>{/if}
-          </div>
-        {/if}
-      </div>
-    {:else}
-      {#if wsInner.length}
-        <div class="wsinner" data-testid="workspace-inner">
-          {#each wsInner as group (wsKey(group.name))}{@render folderNode(group)}{/each}
-        </div>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <div class="scroller list" data-testid="chat-list" bind:this={listEl} tabindex="0" data-ctx="explorer" role="tree" aria-label="Chats" onkeydown={treeKeydown}>
+    {#each items as item (item.id)}
+      {#if item.kind === 'folder'}
+        {@render folderRow(item)}
+      {:else if item.kind === 'misc'}
+        {@render miscRow(item)}
+      {:else if item.kind === 'new'}
+        <form class="wsnew sub" style="--depth:{item.depth}" data-testid="new-folder-row" onsubmit={(event) => { event.preventDefault(); commitNewFolder(event.currentTarget.elements[0].value); }}>
+          <span class="caret none"><Icon name="chevron" size={11} /></span>
+          <Icon name="folder" size={12} />
+          <input class="filter focus-ring" value="New folder" use:selectAll aria-label="New folder name" data-testid="workspace-name"
+            onblur={(event) => commitNewFolder(event.currentTarget.value === 'New folder' ? '' : event.currentTarget.value)}
+            onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); sb.dispatch('newfolder.at', { parent: null }); listEl?.focus(); } }} />
+        </form>
+      {:else}
+        <div class="group" class:dim={item.dim} style="--depth:{item.depth}">{@render chatRow(item.row, item.fork)}</div>
       {/if}
-      {#each mainRows as row (row.id)}
-        <div class="group">
-          {@render chatRow(row, false)}
-          {#each row.forks as fork (fork.id)}
-            {@render chatRow(fork, true)}
-          {/each}
-        </div>
-      {/each}
+    {/each}
+    {#if !items.length}
+      <p class="empty">{filter ? 'No chat matches that.' : workspace ? 'Nothing in this folder yet. New chats you start here land in it.' : 'No chats yet.'}</p>
     {/if}
-    {#if !mainRows.length && !mainFoldable}
-      <p class="empty">{filter ? 'No chat matches that.' : workspace ? 'Nothing in this workspace yet. New chats you start here land in it.' : 'No chats yet.'}</p>
-    {/if}
-
   </div>
 
   <!-- The three folded trays, deferred on top and archived at the foot, each one the shared
@@ -603,80 +870,103 @@
     />
   {/if}
 
-  {#snippet folderNode(group)}
-    {@const key = wsKey(group.name)}
-    {@const live = group.rows.filter((row) => row.indicator === 'live' || row.indicator === 'unread').length}
-    <div class="wsgroup" data-testid="workspace-group" data-workspace={group.name ?? ''}>
-      <div class="wshead" class:drop={dropTarget === key || (folderDrop?.key === group.key && folderDrop.where === 'inside')}
-        class:dropbefore={folderDrop?.key === group.key && folderDrop.where === 'before'}
-        class:dropafter={folderDrop?.key === group.key && folderDrop.where === 'after'}
-        class:dragging={folderDrag === group.key}
-        draggable={wsRenaming !== group.name}
-        ondragstart={(e) => folderDragStart(e, group.key)}
+  {#snippet descEditor(name)}
+    {@const key = folderKey(name)}
+    <form class="wsdescedit" data-testid="description-editor" onsubmit={(event) => { event.preventDefault(); saveDesc(name, descDraft); }}>
+      <label for="desc-{key.replace(/[^a-z0-9]+/g, '-')}">What belongs in {name} <span class="wsdescsrc">{descSource(name) === 'manual' ? '(your words; the router treats this as the definition)' : descSource(name) === 'auto' ? '(auto-written; saving makes it yours)' : '(none yet)'}</span></label>
+      <!-- svelte-ignore a11y_autofocus -->
+      <textarea id="desc-{key.replace(/[^a-z0-9]+/g, '-')}" class="filter focus-ring" rows="4" maxlength="300" bind:value={descDraft} autofocus data-testid="description-text"
+        onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); descEditing = null; } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); saveDesc(name, descDraft); } }}></textarea>
+      <div class="wsdescbtns">
+        <button type="submit" class="press" data-testid="description-save">Save</button>
+        <button type="button" class="press" onclick={() => (descEditing = null)}>Cancel</button>
+        {#if descSource(name) === 'manual'}<button type="button" class="press" onclick={() => saveDesc(name, '')} title="Hand the folder back to the daily generator" data-testid="description-reset">Back to auto</button>{/if}
+      </div>
+    </form>
+  {/snippet}
+
+
+  <!-- Misc: virtual (never stored), the last child of a folder that has subfolders; it holds the chats filed directly in that
+       folder. Not renamable, removable, draggable or describable; a chat dropped on it is filed into the parent folder. -->
+  {#snippet miscRow(item)}
+    {@const parentName = nameForKey(item.parent)}
+    <div class="wsgroup misc" class:dim={item.archived} data-testid="misc-group" data-workspace={parentName ?? ''} style="--depth:{item.depth}">
+      <div class="wshead" role="treeitem" aria-expanded={item.open} aria-selected={$sb.cursor === item.id} aria-level={item.depth + 1}
+        class:sel={$sb.cursor === item.id} class:picked={isSel(item.id) && selected.size > 1}
+        class:drop={dropTarget === item.key}
+        ondragover={(e) => dragOver(e, item.key)}
+        ondragleave={() => { dropTarget = undefined; }}
+        ondrop={(e) => dropOn(e, parentName)}
+        title="Chats filed in {parentName} that fit none of its subfolders">
+        <button class="wstoggle press" tabindex="-1" onclick={(e) => { if (pick(item.id, e) === 'multi') return; setOpen(item.key, !item.open); }}
+          aria-expanded={item.open} data-testid="toggle-misc">
+          <span class="caret" class:down={item.open} class:none={!item.hasChildren}><Icon name="chevron" size={11} /></span>
+          <Icon name={item.open ? 'folder-open' : 'folder'} size={12} />
+          <span class="wsname">{item.name}</span>
+          {#if item.count}<span class="count">{item.count}</span>{/if}
+          {#if item.live}<span class="dot unread-dot" title="live or unread inside"></span>{/if}
+        </button>
+      </div>
+    </div>
+  {/snippet}
+
+  {#snippet folderRow(item)}
+    {@const key = item.key}
+    {@const name = item.name}
+    <div class="wsgroup" class:dim={item.archived} data-archived={item.archived ? 'true' : null} data-testid={key === UNFILED ? 'everything-else' : 'workspace-group'} data-catchall={key === UNFILED ? 'true' : null} data-workspace={name ?? ''} style="--depth:{item.depth}">
+      <div class="wshead" data-ctx="folder" data-ctx-key={key} role="treeitem" aria-expanded={item.open} aria-selected={$sb.cursor === item.id} aria-level={item.depth + 1}
+        class:sel={$sb.cursor === item.id} class:picked={isSel(item.id) && selected.size > 1}
+        class:cut={$sb.clip === item.id}
+        class:drop={dropTarget === key || (folderDrop?.key === key && folderDrop.where === 'inside')}
+        class:dropbefore={folderDrop?.key === key && folderDrop.where === 'before'}
+        class:dropafter={folderDrop?.key === key && folderDrop.where === 'after'}
+        class:dragging={folderDrag === key}
+        draggable={wsRenaming !== name}
+        ondragstart={(e) => folderDragStart(e, key)}
         ondragend={folderDragEnd}
-        ondragover={(e) => { if (folderDrag) folderDragOver(e, group.key); else dragOver(e, key); }}
-        ondragleave={() => { dropTarget = undefined; if (folderDrop?.key === group.key) folderDrop = null; }}
-        ondrop={(e) => { if (folderDrag) folderDropOn(e, group.key); else dropOn(e, group.name); }}
-        title={descOf(group.name) || "Drag to reorder, or onto the middle of another folder to put it inside"}
-        role="group">
-        {#if wsRenaming === group.name && group.name}
-          <form class="wsrename" onsubmit={(event) => { event.preventDefault(); renameWorkspace(group.name, event.currentTarget.elements[0].value); }}>
+        ondragover={(e) => { if (folderDrag) folderDragOver(e, key); else dragOver(e, key); }}
+        ondragleave={() => { dropTarget = undefined; if (folderDrop?.key === key) folderDrop = null; }}
+        ondrop={(e) => { if (folderDrag) folderDropOn(e, key); else dropOn(e, name); }}
+        title={(name ? descOf(name) : 'Chats that are in no folder') || 'Double-click to make this folder the root. Drag to reorder, or onto the middle of another folder to put it inside'}>
+        {#if wsRenaming === name && name}
+          <form class="wsrename" onsubmit={(event) => { event.preventDefault(); renameWorkspace(name, event.currentTarget.elements[0].value); }}>
             <!-- svelte-ignore a11y_autofocus -->
-            <input class="filter focus-ring" value={group.name} autofocus aria-label="Rename workspace"
-              onblur={(event) => renameWorkspace(group.name, event.currentTarget.value)}
-              onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); wsRenaming = null; } }} />
+            <input class="filter focus-ring" value={name} aria-label="Rename workspace"
+              onblur={(event) => renameWorkspace(name, event.currentTarget.value)}
+              use:selectAll onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); sb.dispatch('rename.at', { key: null }); listEl?.focus(); } }} />
           </form>
         {:else}
-          <button class="wstoggle press focus-ring" onclick={() => toggleWs(key)} aria-expanded={isOpen(key)} data-testid="toggle-workspace">
-            <span class="caret" class:down={isOpen(key)}><Icon name="chevron" size={11} /></span>
-            <Icon name={group.name ? 'folder' : 'tray'} size={12} />
-            <span class="wsname">{group.name ?? CATCHALL_LABEL}</span>
-            <span class="count">{group.rows.length}</span>
-            {#if live}<span class="dot unread-dot" title="{live} live or unread"></span>{/if}
+          <button class="wstoggle press" tabindex="-1" onclick={(e) => { if (pick(item.id, e) === 'multi') return; if (e.altKey) setOpenDeep(key, !item.open); else setOpen(key, !item.open); }}
+            ondblclick={() => { if (name) enter(name); }}
+            aria-expanded={item.open} data-testid={key === UNFILED ? 'toggle-everything-else' : 'toggle-workspace'}>
+            <span class="caret" class:down={item.open} class:none={!item.hasChildren}><Icon name="chevron" size={11} /></span>
+            <Icon name={name ? (item.open ? 'folder-open' : 'folder') : 'tray'} size={12} />
+            <span class="wsname">{name ?? CATCHALL_LABEL}</span>
+            {#if item.archivedOwn}<span class="archtag" data-testid="archived-marker">archived</span>{:else if item.archived}<span class="archtag">in archived</span>{/if}
+            {#if item.count}<span class="count">{item.count}</span>{/if}
+            {#if item.live}<span class="dot unread-dot" title="live or unread inside"></span>{/if}
           </button>
           <span class="wsacts">
-            <button class="icon-btn press" onclick={(e) => openFolderMenu(e, group.key)} title="Move folder" aria-label="Move folder" data-testid="move-folder"><Icon name="folder" size={12} /></button>
-            {#if group.name}
-              <button class="icon-btn press" onclick={() => editDesc(group.name)} title="Edit description" aria-label="Edit description" data-testid="edit-description"><Icon name="note" size={12} /></button>
-              <button class="icon-btn press" onclick={() => (wsRenaming = group.name)} title="Rename" aria-label="Rename workspace" data-testid="rename-workspace"><Icon name="write" size={12} /></button>
-              <button class="icon-btn press" onclick={() => deleteWorkspace(group.name)} title="Remove workspace (chats go back to the main list)" aria-label="Remove workspace" data-testid="remove-workspace"><Icon name="close" size={12} /></button>
+            {#if name}
+              <button class="icon-btn press" tabindex="-1" onclick={() => newFolder(key)} title="New subfolder" aria-label="New subfolder" data-testid="new-subfolder"><Icon name="plus" size={12} /></button>
+              <button class="icon-btn press" tabindex="-1" onclick={() => editDesc(name)} title="Edit description" aria-label="Edit description" data-testid="edit-description"><Icon name="note" size={12} /></button>
+              <button class="icon-btn press" tabindex="-1" onclick={() => startRename(name)} title="Rename" aria-label="Rename workspace" data-testid="rename-workspace"><Icon name="write" size={12} /></button>
             {/if}
-            <button class="icon-btn press" onclick={() => enter(group.name)} title={group.name ? `Work in ${group.name}` : 'Leave workspace'} aria-label="Enter workspace" data-testid="enter-workspace"><Icon name="chevron" size={12} /></button>
+            <button class="icon-btn press" tabindex="-1" onclick={(e) => openFolderMenu(e, key)} title="Move folder" aria-label="Move folder" data-testid="move-folder"><Icon name="more" size={12} /></button>
+            {#if name}
+              <button class="icon-btn press" tabindex="-1" onclick={() => enter(name)} title="Focus: make {name} the root and hide everything else (or double-click it)" aria-label="Focus folder" data-testid="enter-workspace"><Icon name="focus" size={12} /></button>
+            {/if}
           </span>
         {/if}
       </div>
-      {#if group.name && descEditing === group.name}
-        <form class="wsdescedit" data-testid="description-editor" onsubmit={(event) => { event.preventDefault(); saveDesc(group.name, descDraft); }}>
-          <label for="desc-{key.replace(/[^a-z0-9]+/g, '-')}">What belongs in {group.name} <span class="wsdescsrc">{descSource(group.name) === 'manual' ? '(your words; the router treats this as the definition)' : descSource(group.name) === 'auto' ? '(auto-written; saving makes it yours)' : '(none yet)'}</span></label>
-          <!-- svelte-ignore a11y_autofocus -->
-          <textarea id="desc-{key.replace(/[^a-z0-9]+/g, '-')}" class="filter focus-ring" rows="4" maxlength="300" bind:value={descDraft} autofocus data-testid="description-text"
-            onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); descEditing = null; } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); saveDesc(group.name, descDraft); } }}></textarea>
-          <div class="wsdescbtns">
-            <button type="submit" class="press" data-testid="description-save">Save</button>
-            <button type="button" class="press" onclick={() => (descEditing = null)}>Cancel</button>
-            {#if descSource(group.name) === 'manual'}<button type="button" class="press" onclick={() => saveDesc(group.name, '')} title="Hand the folder back to the daily generator" data-testid="description-reset">Back to auto</button>{/if}
-          </div>
-        </form>
-      {/if}
-      {#if isOpen(key)}
-        <div class="wsbody">
-          {#each group.children || [] as child (wsKey(child.name))}{@render folderNode(child)}{/each}
-          {#each group.rows as row (row.id)}
-            <div class="group">
-              {@render chatRow(row, false)}
-              {#each row.forks as fork (fork.id)}{@render chatRow(fork, true)}{/each}
-            </div>
-          {/each}
-          {#if !group.rows.length && !(group.children || []).length}<p class="empty">Empty. Drag a chat here, or use its folder button.</p>{/if}
-        </div>
-      {/if}
+      {#if name && descEditing === name}{@render descEditor(name)}{/if}
     </div>
-{/snippet}
+  {/snippet}
 
 {#snippet chatRow(row, isFork)}
     <!-- Two-finger swipe left archives and swipe right pins, and the same buttons appear on
          hover; the reader library rows are the same component, where right stars instead. -->
-    <div class="rowwrap" class:fork={isFork}>
+    <div class="rowwrap" class:fork={isFork} class:cut={$sb.clip === `c:${row.id}`} data-ctx="chat" data-ctx-id={row.id}>
       <SwipeRow
         archived={row.archived}
         onarchive={() => onarchive(row.id, !row.archived)}
@@ -691,10 +981,14 @@
       >
         {#snippet actions()}
           
-          {#if !marksRead(row)}
-            <!-- Mark unread only: marking read IS Done (Cmd-E), so the check half of this toggle went. -->
-            <button class="icon-btn press" onclick={() => onread(row.id, false)} title="Mark unread" aria-label="Mark unread" data-testid="mark-read"><Icon name="circle" size={13} /></button>
-          {/if}
+          
+          <button
+            class="icon-btn press"
+            onclick={() => onread(row.id, marksRead(row))}
+            title={marksRead(row) ? 'Mark read' : 'Mark unread'}
+            aria-label={marksRead(row) ? 'Mark read' : 'Mark unread'}
+            data-testid="mark-read"
+          ><Icon name={marksRead(row) ? 'check' : 'circle'} size={13} /></button>
           <button
             class="icon-btn press"
             onclick={(event) => openMove(event, row.id)}
@@ -730,7 +1024,7 @@
         class="chat press focus-ring"
         class:active={row.id === activeId}
         class:inpane={row.id !== activeId && openIds.includes(row.id)}
-        class:sel={flat[selected]?.id === row.id}
+        class:sel={cursor === `c:${row.id}`} class:picked={isSel(`c:${row.id}`) && selected.size > 1}
         href="?chat={encodeURIComponent(row.id)}"
         onclick={(event) => rowClick(event, row.id)}
         data-testid="chat-row"
@@ -819,6 +1113,8 @@
   .search:hover { color: var(--ink); border-color: var(--ink-faint); }
   .list { flex: 1; min-height: 0; padding: 0 8px 84px; }
   .group { margin-bottom: 1px; }
+  .dim { opacity: 0.5; }
+  .archtag { font-size: 10px; color: var(--ink-faint); border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
   .rowwrap { position: relative; --swipe-bg: var(--bg-sunken); }
   .chat {
     display: flex; align-items: center; gap: 8px;
@@ -883,12 +1179,36 @@
   .wscur .leave { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 5px; color: var(--ink-faint); }
   .wscur .leave:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
   .count { font-size: 10.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-  .wsgroups { margin: 0 0 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
+  /* The explorer (VS Code's tree): every row indents by its depth, with one faint guide line per level. */
+  .wsgroup, .group, .wsnew.sub { --indent: 12px; padding-left: calc(var(--depth, 0) * var(--indent));
+    background-image: repeating-linear-gradient(to right, transparent 0 7px, var(--line-soft, var(--line)) 7px 8px, transparent 8px var(--indent));
+    background-size: calc(var(--depth, 0) * var(--indent)) 100%; background-repeat: no-repeat; }
+  .wshead.sel { background: color-mix(in srgb, var(--ink) 9%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .list:focus { outline: none; }
+  .list:focus-visible .sel { box-shadow: inset 0 0 0 1px var(--accent); }
+  .caret.none { visibility: hidden; }
+  .chat.picked, .wshead.picked { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .wshead.cut, .rowwrap.cut { opacity: 0.5; }
+  .sbnotice { display: flex; align-items: flex-start; gap: 6px; margin: 0 12px 6px; padding: 5px 4px 5px 8px; font-size: 11.5px; line-height: 1.35; color: var(--ink-dim); border: 1px solid var(--line-soft, var(--line)); border-radius: 7px; }
+  .sbnotice span { flex: 1; min-width: 0; }
+  .sbnotice .icon-btn { width: 18px; height: 18px; flex: none; }
+  .wsnew.sub { display: flex; align-items: center; gap: 6px; padding-top: 2px; padding-bottom: 2px; padding-right: 4px; color: var(--ink-faint); }
+  .wsnew.sub .filter { padding: 3px 8px; font-size: 12.5px; }
+  .crumbs { display: flex; align-items: center; gap: 2px; margin: 0 12px 6px; padding: 3px 4px 3px 6px; min-width: 0;
+    border-bottom: 1px solid var(--line-soft, var(--line)); font-size: 12.5px; color: var(--ink-dim); overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+  .crumbs.drop { box-shadow: inset 0 0 0 1px var(--accent); }
+  .crumb { border: 0; background: none; color: inherit; font: inherit; padding: 2px 5px; border-radius: 5px; cursor: pointer; max-width: 12em; overflow: hidden; text-overflow: ellipsis; }
+  button.crumb:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+  .crumb.here { color: var(--ink); font-weight: 500; cursor: default; }
+  .crumbsep { color: var(--ink-faint); padding: 0 1px; }
+  .crumbs .count { margin-left: 4px; }
+  .crumbacts { margin-left: auto; display: flex; gap: 2px; padding-left: 6px; }
+  .crumbacts .icon-btn { width: 22px; height: 22px; }
   .wshead { display: flex; align-items: center; border-radius: 7px; }
   .wshead:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
   .wshead.drop, .wscur.drop { box-shadow: inset 0 0 0 1px var(--accent); }
   .wstoggle {
-    flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px 6px; min-height: 24px;
     border: 0; background: none; color: var(--ink-dim); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
   }
   .wstoggle .wsname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

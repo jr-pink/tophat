@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>same-site outer</title>
+<style>html,body{margin:0;font:12px -apple-system,sans-serif}iframe{width:280px;height:40px;border:1px solid #ddd}input{width:90%;height:24px}</style></head>
+<body>
+<div>outer frame (127.0.0.1:8913, same site as the page, not a CDP target)</div>
+<input id="direct" type="text" autocomplete="off" placeholder="field directly in the same-process frame">
+<iframe id="cvv-frame" name="cvv" src="http://localhost:8911/field.html"></iframe>
+<script>
+  window.__who = 'samesite-outer';
+  const d = document.getElementById('direct');
+  d.addEventListener('input', () => parent.postMessage({ type: 'field', name: 'direct', value: d.value }, '*'));
+  addEventListener('message', (e) => { const m = e.data || {}; if (m.type === 'field') parent.postMessage(m, '*'); });
+</script>
+</body></html>

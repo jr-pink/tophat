@@ -118,7 +118,7 @@
     onmouseleave={() => (hovering = false)}
     onpointerdown={tapStamp}
   >
-    <Markdown text={item.text} {onpath} />
+    <Markdown text={item.text} {onpath} foldId={item.id} />
     
     <span class="stamp float" data-testid="stamp" aria-hidden={!stamp}>{stamp}</span>
   </div>

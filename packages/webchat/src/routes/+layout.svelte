@@ -7,10 +7,11 @@
   import { updated } from '$app/state';
   import { landingFor, landedDecl } from '$lib/core/landing.js';
   import { uiApp } from '$lib/client/ui-app.js';
-  import { marked } from '../../../runner/tools/quicklook-kit/lib/recipes.js';
+  import { marked } from '../../../runner/tools/docstore-kit/lib/recipes.js';
   import { registerServiceWorker } from '$lib/core/sw-register.js';
   import { installFreezeWatch } from '$lib/client/freeze-watch.js';
   import Lightbox from '$lib/ui/Lightbox.svelte';
+  import ContextMenuHost from '$lib/ui/ContextMenuHost.svelte';
 
   let { children } = $props();
 
@@ -105,4 +106,5 @@
 </script>
 
 {@render children()}
+<ContextMenuHost />
 <Lightbox />

@@ -9,8 +9,8 @@
 // The clip they point at is on the machine, in the dictation corpus, and this
 // holds nothing but its id.
 
-import { field, set } from '../../../../../../runner/tools/quicklook-kit/lib/schema.js';
-import { keyed } from '../../../../../../runner/tools/quicklook-kit/lib/recipes.js';
+import { field, set } from '../../../../../../runner/tools/docstore-kit/lib/schema.js';
+import { keyed } from '../../../../../../runner/tools/docstore-kit/lib/recipes.js';
 import { uiApp } from '$lib/client/ui-app.js';
 
 const PREFIX = 'tophat:dictated:';
