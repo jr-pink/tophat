@@ -13,6 +13,12 @@
 // A tier with two or more of the candidates stops the ladder as ambiguous (the tie is shown, never guessed); a tier
 // with none passes to the next. No score, no model: a ladder of equalities, like rev6/push/identity.mjs resolve().
 //
+// A bare first name ("rohan") that two or more people carry is NOT laddered by recency or Contacts: it is ambiguous, with
+// every candidate listed (name, numbers, hints), unless this chat already settled it. "Settled" counts only earlier mentions
+// that were unambiguous (TRUSTED_METHODS: a unique name, a thread key, thread co-presence, a new entity, an explicit id),
+// never a candidate/ambiguous row, a "mention" row (one derived from earlier mentions of the key, the way our own wrong pick
+// became sticky) or a scored context guess. Full names still use the ladder.
+//
 // Reads memory.sqlite read-only with indexed queries (identities, mentions_thread, raw_author, raw_thread); measured in
 // the lookup bench (bench/lookup).
 import { existsSync, readFileSync } from 'node:fs';
@@ -26,6 +32,10 @@ try { identity = await import('../push/identity.mjs'); } catch { identity = null
 
 const RECENT_DAYS = 14;
 const MSG_SOURCES = String(process.env.TOPHAT_MESSAGING_SOURCES || 'imessage-history,beeper').split(',').map((s) => s.trim()).filter(Boolean);
+// mentions.method values (rev6/push/identity.mjs resolve) that are a settled identity, not a guess or a carry-over.
+export const TRUSTED_METHODS = ['name', 'thread-key', 'thread-copresence', 'new', 'interpreter-code'];
+const TRUSTED_SQL = TRUSTED_METHODS.map((m) => `'${m}'`).join(',');
+const SHOWN = 10;
 // Words that are also first names in his store but are ordinary words in his messages ("grant letter", "will do").
 const COMMON = new Set('email idk lol bruh pls someone future bunch also will may mark grant bill rose june april august art max pat ray sky hope faith joy rich dean chase frank sage ash bo dawn eve gene jack jade jay kit lane lee long love major miles page penny reed river rob rock sam sandy star summer sun tim todd van wade wang ward young yan amber angel august autumn bear bishop blue brook brooks cash cole cruz dale drew early ember ezra fox gray green hunter iris ivy jean jordan joy judge king lake lily march mason merry mint north oak ocean paris park parker pearl pierce prince queen rain ray rivers rusty scout shadow silver sterling stone storm tank trinity true victory wolf zen the and for with from that this what when about all any can new one our out you your his her its not but are was were has had did does done open close dm tophat claude yearn shop'.split(' '));
 // Lowercase entries of the system word list are ordinary English ("bunch", "someone", "tasker"): a single-word name
@@ -134,13 +144,13 @@ function lastExchange(h, p, since, until) {
 }
 
 /** The conversation's own context, as it stood at the question:
- *   named:   entities its earlier turns named, and, for a chat born from an event, entities named in the arrival's thread
+ *   named:   entities its earlier turns named UNAMBIGUOUSLY (TRUSTED_METHODS only), and, for a chat born from an event, entities named in the arrival's thread
  *            and that thread's parties (the wake text names "thread X" and "raw record r_...")
  */
 function conversationContext(h, sessionId, at) {
   const named = new Set(), cut = new Date(Date.parse(at) - 1000).toISOString();
   if (!sessionId) return { named };
-  for (const r of stmt(h, "SELECT DISTINCT entity_id FROM mentions WHERE source='webchat' AND thread=? AND at<? AND created_at<=? AND entity_id IS NOT NULL").all(String(sessionId), cut, at)) named.add(r.entity_id);
+  for (const r of stmt(h, `SELECT DISTINCT entity_id FROM mentions WHERE source='webchat' AND thread=? AND at<? AND created_at<=? AND entity_id IS NOT NULL AND method IN (${TRUSTED_SQL})`).all(String(sessionId), cut, at)) named.add(r.entity_id);
   const threads = new Set(), raws = new Set();
   for (const r of stmt(h, "SELECT text FROM raw_data WHERE source='webchat' AND account='' AND thread=? AND occurred_at<? AND role='owner' AND text LIKE '[Automated event%' ORDER BY occurred_at LIMIT 20").all(String(sessionId), cut)) {
     for (const m of String(r.text).matchAll(/\bthread ([^\s;,]+)/gu)) threads.add(m[1]);
@@ -153,7 +163,7 @@ function conversationContext(h, sessionId, at) {
     let parts = []; try { parts = JSON.parse(r.participants || '[]'); } catch { /* none */ }
     for (const n of [r.author, ...parts].filter(Boolean)) for (const e of stmt(h, 'SELECT entity_id FROM identities WHERE native=? AND created_at<=?').all(String(n), at)) named.add(e.entity_id);
   }
-  for (const t of threads) for (const r of stmt(h, 'SELECT DISTINCT entity_id FROM mentions WHERE thread=? AND at<? AND created_at<=? AND entity_id IS NOT NULL LIMIT 200').all(t, cut, at)) named.add(r.entity_id);
+  for (const t of threads) for (const r of stmt(h, `SELECT DISTINCT entity_id FROM mentions WHERE thread=? AND at<? AND created_at<=? AND entity_id IS NOT NULL AND method IN (${TRUSTED_SQL}) LIMIT 200`).all(t, cut, at)) named.add(r.entity_id);
   return { named };
 }
 
@@ -163,6 +173,14 @@ function privacy(env) {
   const file = env.TOPHAT_PRIVATE_PEOPLE_FILE || join(new URL('../base/', import.meta.url).pathname, 'private-people.json');
   try { people = existsSync(file) ? identity.loadPeople(file) : {}; } catch { people = null; }
   return people;
+}
+
+/** Phone numbers a person is known by: phone: identity keys and phone-shaped aliases, as +E.164 (NANP assumed for 10 digits). */
+function phonesOf(p, index) {
+  const out = new Set(), add = (d) => { d = String(d).replace(/\D/gu, ''); if (d.length === 10) out.add(`+1${d}`); else if (d.length === 11 && d[0] === '1') out.add(`+${d}`); else if (d.length >= 11 && d.length <= 15) out.add(`+${d}`); };
+  for (const r of p.idents) if (String(r.key || '').startsWith('phone:')) add(r.key.slice(6));
+  for (const e of p.members) for (const a of index.rows.get(e)?.aliases || []) if (/^\+?[\d\s().-]{10,18}$/u.test(String(a))) add(a);
+  return [...out].slice(0, 2);
 }
 
 const days = (a, b) => Math.round((Date.parse(a) - Date.parse(b)) / 864e5);
@@ -186,20 +204,32 @@ export function linkPeople(text, { dbPath, sessionId = null, at = new Date().toI
     const ps = persons(h, index, index.byName.get(m.key));
     if (!ps.length) continue;
     const pick = (tier, keep, why) => ({ tier, keep, why });
+    const bare = !m.key.includes(' ');
     let decided = null;
     if (ps.length === 1) decided = pick(4, ps, () => 'the only person by that name');
     else {
       convo ??= conversationContext(h, sessionId, at);
-      const tiers = [
-        [1, (p) => p.members.some((e) => convo.named.has(e)), () => 'named earlier in this chat'],
-        [2, (p) => { p.last = lastExchange(h, p, since, at); return Boolean(p.last); }, (p) => `messaged ${days(at, p.last.at) <= 0 ? 'today' : `${shortDate(p.last.at)}`} via ${p.last.via}, ${p.last.handle}`],
-        [3, (p) => p.idents.some((r) => r.source === 'contacts'), () => 'in your Contacts'],
-      ];
-      for (const [tier, test, why] of tiers) {
-        const keep = ps.filter((p) => test(p));
-        if (keep.length) { decided = pick(tier, keep, why); break; }
+      const inChat = (p) => p.members.some((e) => convo.named.has(e));
+      const recent = (p) => { p.last ??= lastExchange(h, p, since, at); return p.last; };
+      const inContacts = (p) => p.idents.some((r) => r.source === 'contacts');
+      const hint = (p) => [inChat(p) && 'named earlier in this chat', inContacts(p) && 'in your Contacts', recent(p) && `messaged ${days(at, p.last.at) <= 0 ? 'today' : shortDate(p.last.at)} via ${p.last.via}`].filter(Boolean).join(', ') || 'in the store';
+      if (bare) {
+        // a bare first name: only this chat's own unambiguous earlier resolution may pick; recency and Contacts only annotate
+        const named = ps.filter(inChat);
+        if (named.length === 1) decided = pick(1, named, () => 'named earlier in this chat, unambiguously');
+        else decided = { tier: named.length ? 1 : 4, keep: [...ps].sort((a, b) => inContacts(b) - inContacts(a) || (inChat(b) - inChat(a)) || String(recent(b)?.at || '').localeCompare(String(recent(a)?.at || ''))), why: hint, bareAmbiguous: true };
+      } else {
+        const tiers = [
+          [1, inChat, () => 'named earlier in this chat'],
+          [2, (p) => Boolean(recent(p)), (p) => `messaged ${days(at, p.last.at) <= 0 ? 'today' : `${shortDate(p.last.at)}`} via ${p.last.via}, ${p.last.handle}`],
+          [3, inContacts, () => 'in your Contacts'],
+        ];
+        for (const [tier, test, why] of tiers) {
+          const keep = ps.filter((p) => test(p));
+          if (keep.length) { decided = pick(tier, keep, why); break; }
+        }
+        decided ??= pick(4, ps, () => 'in the store');
       }
-      decided ??= pick(4, ps, () => 'in the store');
     }
     const pv = privacy(env);
     const visible = decided.keep.filter((p) => !identity.privateIn(pv, [p.name], ''));
@@ -214,9 +244,9 @@ export function linkPeople(text, { dbPath, sessionId = null, at = new Date().toI
       link.findmy = findMyFor(link, bound, { findmyDb });
       links.push(link);
     } else {
-      links.push({ name: surface, status: 'ambiguous', tier: decided.tier, candidates: visible.map((p) => ({ entity: p.entity, members: p.members, name: p.name, why: decided.why(p) })) });
+      links.push({ name: surface, status: 'ambiguous', tier: decided.tier, candidates: visible.map((p) => ({ entity: p.entity, members: p.members, name: p.name, phones: phonesOf(p, index), contacts: p.idents.some((r) => r.source === 'contacts'), why: decided.why(p) })) });
     }
   }
-  const parts = links.map((l) => (l.status === 'resolved' ? `${l.name} = ${l.display} (${l.why}${l.findmy ? `; ${l.findmy}` : ''})` : `${l.name} is ambiguous: ${l.candidates.slice(0, 4).map((c) => `${c.name} (${c.why})`).join(' or ')}`));
+  const parts = links.map((l) => (l.status === 'resolved' ? `${l.name} = ${l.display} (${l.why}${l.findmy ? `; ${l.findmy}` : ''})` : `${l.name} is ambiguous, ${l.candidates.length} people (not guessed; ask or use context): ${l.candidates.slice(0, SHOWN).map((c) => `${c.name}${c.phones?.length ? ` ${c.phones.join(' ')}` : ''} (${c.why})`).join(' | ')}${l.candidates.length > SHOWN ? ` | +${l.candidates.length - SHOWN} more` : ''}`));
   return { ms: Math.round((performance.now() - t0) * 10) / 10, links, line: parts.length ? `Resolved: ${parts.join('; ')}` : '' };
 }

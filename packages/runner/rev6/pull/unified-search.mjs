@@ -272,7 +272,7 @@ function render(hits, { legs, nowIso, env, window, expansion, notes, web, limit,
   const legLine = legs.map((l) => (l.pending ? `${l.name} running` : l.partial ? `${l.name} ${l.hits.length} so far (${l.ms} ms; ${l.pendingCorpora.length} corpora still running)` : `${l.name} ${l.ok ? `${l.hits.length}` : (l.skipped ? 'skipped' : 'FAILED')} (${l.ms} ms)`)).join(', ');
   lines.push(continued ? `search continued "${clipText(query, 100)}" | ${legLine} | the full ranking's hits that the partial list above did not show, numbered after it`
     : `search "${clipText(query, 100)}" | ${localStamp(nowIso, env) || nowIso} | ${legLine}`);
-  if (!continued && link?.line) lines.push(`${link.line} (linked before searching: this chat, then people who messaged you in the last 14 days, then Contacts, then the store; an ambiguous name is listed, not guessed)`);
+  if (!continued && link?.line) lines.push(`${link.line} (linked before searching: this chat, then people who messaged you in the last 14 days, then Contacts, then the store; a full name is laddered that way; a bare first name two or more people carry is listed with every candidate and number, never guessed by recency)`);
   if (expansion?.senses?.length) lines.push(`sense: ${senseNote(expansion.senses)}`);
   for (const l of legs) if (l.name === 'entities' && l.ok && l.note) lines.push(clipText(l.note, 600));
   if (window) lines.push(`window: ${window.label}${window.newest ? '; newest first' : ''}: ${localStamp(window.since, env)} to ${localStamp(window.until, env)}`);
