@@ -1,0 +1,72 @@
+import { json } from '@sveltejs/kit';
+import { ACTIONS, validateAction } from '$lib/core/contract.js';
+import { app, applyAction } from '$lib/server/app.js';
+import { isIncognito } from '$lib/core/incognito.js';
+import { filterEvents, scopeContext, scopeHttpError } from '$lib/server/scope-guard.js';
+
+export async function POST(event) {
+  const { request } = event;
+  let action;
+  try { action = validateAction(await request.json()); }
+  catch (cause) { return json({ error: `Invalid action: ${cause.message}` }, { status: 400 }); }
+  // An incognito chat never reaches the durable store: its actions go to /api/incognito/actions
+  // (src/lib/server/incognito.js). One that arrives here is refused, not quietly written to events.sqlite.
+  if (isIncognito(action.conversation_id) || isIncognito(action.payload?.parentId)) {
+    return json({ error: 'incognito chats are not stored; send to /api/incognito/actions' }, { status: 400 });
+  }
+
+  // Scopes (src/lib/server/scopes.js): with them on, every action on an existing chat is checked
+  // against the caller's account first, and a chat in a scope the account cannot open answers as if
+  // it did not exist. Off, ctx.enabled is false and nothing below changes behaviour.
+  const ctx = scopeContext(event, app.store, app.runner);
+  if (ctx.enabled) {
+    const me = ctx.service.contextFor(ctx.identity);
+    if (!me?.account) return json({ error: 'Sign in with an account that has a scope.', code: 'denied' }, { status: 403 });
+    const target = app.store.conversation(action.conversation_id);
+    const parent = action.payload?.parentId ? app.store.conversation(action.payload.parentId) : null;
+    if ((target && !ctx.service.canSee(ctx.identity, target)) || (parent && !ctx.service.canSee(ctx.identity, parent))
+        || (action.payload?.parentId && !parent)) {
+      return json({ error: 'Unknown conversation', code: 'unknown-conversation' }, { status: 404 });
+    }
+    if (action.op === ACTIONS.MOVE_SCOPE && !target) return json({ error: 'Unknown conversation', code: 'unknown-conversation' }, { status: 404 });
+  }
+
+  const seen = app.store.appliedAction(action.action_id);
+  if (seen) {
+    return json({ events: filterEvents(ctx, app.store, app.store.between(seen.cursor_before, seen.cursor_after)), cursor: app.store.cursor(), replayed: true },
+      { headers: { 'cache-control': 'no-store' } });
+  }
+
+  const before = app.store.cursor();
+  try {
+    if (action.op === ACTIONS.MOVE_SCOPE) {
+      // The dropdown and the router are one operation (scopes.move). A widening move needs the
+      // owner's confirmation in the payload; the screen that asks is the client's, the check is here.
+      await ctx.service.move({
+        identity: ctx.identity,
+        conversationId: action.conversation_id,
+        to: String(action.payload?.to || ''),
+        confirmed: action.payload?.confirmed === true,
+        actor: 'owner',
+        moveId: action.action_id
+      });
+    } else {
+      applyAction(action, { identity: ctx.identity, attribution: { actor: 'human', basis: 'interactive-owner-channel', source: 'webchat-action', deviceId: action.device_id, authorVerified: false } });
+    }
+  } catch (cause) {
+    const scoped = scopeHttpError(cause);
+    if (scoped) return json(scoped.body, { status: scoped.status });
+    return json({ error: cause.message }, { status: 409 });
+  }
+  app.store.markApplied({
+    actionId: action.action_id,
+    conversationId: action.conversation_id,
+    op: action.op,
+    cursorBefore: before,
+    cursorAfter: app.store.cursor(),
+  });
+  
+  
+  return json({ events: filterEvents(ctx, app.store, app.store.since(before)), cursor: app.store.cursor() },
+    { headers: { 'cache-control': 'no-store' } });
+}

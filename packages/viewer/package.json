@@ -1,0 +1,25 @@
+{
+  "name": "@tophat-md/viewer",
+  "version": "1.0.0",
+  "description": "Optional memory graph viewer that runs entirely in the browser: pulls the ciphertext log from the hub, decrypts with WebCrypto, replays, lays out and draws; the hub serves static files only",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-viewer": "./bin/tophat-viewer.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./core": "./src/core/index.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/linknotes": "1.0.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

@@ -1,0 +1,257 @@
+@import 'tailwindcss';
+
+
+
+:root {
+  --bg: #0f1012;
+  --bg-raised: #17181c;
+  --bg-sunken: #0a0b0d;
+  --line: #26282e;
+  --line-soft: #1c1e23;
+  --ink: #e8e6e3;
+  --ink-dim: #a1a09c;
+  --ink-faint: #6d6c69;
+  --accent: #d98a5c;
+  --accent-soft: #d98a5c22;
+  --live: #6fbf8b;
+  --warn: #d9695c;
+  --sans: ui-sans-serif, -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --serif: 'Iowan Old Style', 'Charter', 'Source Serif 4', Georgia, serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  /* What a model wrote. A proportional serif still, so it reads as prose beside his own lines, but
+     a geometric slab: mechanical where the text face is humanist, legible at a glance as not his.
+     Rockwell ships with macOS, American Typewriter with iOS and macOS both. */
+  --serif-machine: 'Rockwell', 'American Typewriter', 'Roboto Slab', 'Charter', Georgia, serif;
+
+  
+  --column: 724px;
+  --column-gutter: clamp(14px, 4vw, 28px);
+  --column-pad: max(var(--column-gutter), calc((100% - var(--column)) / 2));
+
+  
+  --measure: 57ch;
+  --para-gap: 1em;
+
+  --tap: 90ms;
+  --panel: 180ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --radius: 10px;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #faf9f7;
+    --bg-raised: #ffffff;
+    --bg-sunken: #f0efec;
+    --line: #dedbd5;
+    --line-soft: #e9e6e1;
+    --ink: #1b1a18;
+    --ink-dim: #56544f;
+    --ink-faint: #8b8880;
+    --accent: #b4632f;
+    --accent-soft: #b4632f1a;
+    --live: #2f7d4f;
+    --warn: #b03b2c;
+    color-scheme: light;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  
+  overscroll-behavior-y: none;  /* y only: none on both axes also cancels the swipe back */
+}
+
+body { font-size: 15px; line-height: 1.5; }
+
+button { font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; }
+
+
+.press { transition: background-color var(--tap) var(--ease), transform var(--tap) var(--ease), border-color var(--tap) var(--ease); }
+.press:active { transform: scale(0.97); }
+
+.focus-ring:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+
+.prose {
+  font-family: var(--serif);
+  font-size: 16.5px;
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+.prose h1, .prose h2, .prose h3, .prose h4 { font-family: var(--sans); font-weight: 600; line-height: 1.3; }
+
+
+.prose p, .prose ul, .prose ol, .prose blockquote,
+.prose h1, .prose h2, .prose h3, .prose h4 { max-width: var(--measure); }
+
+
+.prose p, .prose ul, .prose ol, .prose blockquote, .prose table, .prose hr,
+.prose h1, .prose h2, .prose h3, .prose h4,
+.prose .md-code, .prose .md-math-block { margin: 0; }
+.prose > * + *,
+.prose > * + * > :first-child { margin-top: var(--para-gap); }
+
+.prose > * + * > :is(h1, h2, h3, h4):first-child { margin-top: 1.7em; }
+.prose > *:has(:is(h1, h2, h3, h4)) + * > :first-child { margin-top: 0.4em; }
+
+.prose > * > * + * { margin-top: var(--para-gap); }
+.prose > * > * + :is(h1, h2, h3, h4) { margin-top: 1.7em; }
+.prose > * > :is(h1, h2, h3, h4) + * { margin-top: 0.4em; }
+.prose h1 { font-size: 1.32em; }
+.prose h2 { font-size: 1.16em; }
+.prose h3 { font-size: 1.04em; }
+
+.prose ul, .prose ol { padding-left: 1.4em; }
+.prose ul { list-style: disc outside; }
+.prose ol { list-style: decimal outside; }
+.prose ul ul { list-style: circle outside; }
+.prose ul ul ul { list-style: square outside; }
+.prose li { margin-bottom: 0.3em; }
+.prose li::marker { color: var(--ink-faint); }
+.prose li.md-task { list-style: none; margin-left: -0.35em; }
+.prose li.md-task.md-done { color: var(--ink-dim); }
+.prose blockquote { padding-left: 0.85em; border-left: 2px solid var(--line); color: var(--ink-dim); }
+
+.prose blockquote > * + * { margin-top: var(--para-gap); }
+.prose blockquote > * + :is(h1, h2, h3, h4) { margin-top: 1.7em; }
+.prose blockquote > :is(h1, h2, h3, h4) + * { margin-top: 0.4em; }
+.prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.prose code { font-family: var(--mono); font-size: 0.86em; background: var(--bg-sunken); padding: 0.1em 0.32em; border-radius: 4px; }
+.prose table { border-collapse: collapse; font-family: var(--sans); font-size: 0.9em; display: block; overflow-x: auto; }
+.prose th, .prose td { border: 1px solid var(--line); padding: 0.32em 0.6em; text-align: left; }
+.prose hr { border: none; border-top: 1px solid var(--line); }
+
+.md-code {
+  font-family: var(--mono);
+  font-size: 12.8px;
+  line-height: 1.55;
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 0.7em 0.85em;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+
+.md-code-open { border-left: 2px solid var(--accent); }
+
+.md-code { position: relative; }
+.md-copy {
+  position: absolute; top: 4px; right: 4px;
+  display: inline-flex; align-items: center; justify-content: center; padding: 4px 5px; border-radius: 6px;
+  border: 1px solid var(--line-soft); background: var(--bg); color: var(--ink);
+  opacity: 0.55; cursor: pointer; user-select: none; -webkit-user-select: none;
+}
+.md-copy .md-copy-ok { display: none; }
+.md-copy[data-done] .md-copy-i { display: none; }
+.md-copy[data-done] .md-copy-ok { display: block; color: var(--live); }
+.md-code:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
+@media (hover: none) { .md-copy { opacity: 1; } }
+
+.md-path {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+  cursor: pointer;
+  transition: background-color var(--tap) var(--ease);
+}
+.md-path:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+/* A markdown link to a file or a web image: its label in the prose font, opening quicklook. */
+.md-path.md-named { font-family: inherit; font-size: inherit; text-decoration: none; }
+.md-path.md-inline-image { padding: 0; background: none; display: inline-block; vertical-align: middle; }
+.md-path.md-inline-image img { max-height: 12em; max-width: 100%; border-radius: 6px; display: block; }
+
+
+
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise var(--panel) var(--ease) both; }
+
+@keyframes pulse-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.live-dot { animation: pulse-live 1.8s ease-in-out infinite; }
+
+.muted-dot { background: var(--ink-faint); }
+
+.unread-dot { background: var(--accent); }
+
+
+.scroller {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  contain: layout paint;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.scroller::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroller::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.scroller::-webkit-scrollbar-track { background: transparent; }
+
+
+.vrow { content-visibility: auto; contain-intrinsic-size: auto 200px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+
+.tok-comment { color: var(--ink-faint); font-style: italic; }
+.tok-string { color: var(--live); }
+.tok-number { color: color-mix(in srgb, var(--accent) 80%, var(--ink)); }
+.tok-keyword { color: var(--accent); }
+
+
+.prose .md-math .katex { font-size: 1.06em; }
+.md-math-block {
+  
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.15em 0;
+}
+.md-math-block .katex-display { margin: 0; }
+/* Display math written mid-paragraph scrolls too, rather than pushing a phone screen sideways. */
+.md-math-display { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+
+.md-math-raw {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+}
+
+
+/** Painted by the CSS Custom Highlight API, by $lib/client/reader-dom.js. These rules cannot live
+ *   in a scoped block, and they are global rather than the reader's because the chat transcript
+ *   like theres no
+ */
+::highlight(reader-yellow) { background-color: rgba(241, 221, 138, 0.55); }
+::highlight(reader-blue) { background-color: rgba(168, 198, 239, 0.5); }
+::highlight(reader-rose) { background-color: rgba(238, 182, 207, 0.5); }
+::highlight(reader-green) { background-color: rgba(169, 213, 173, 0.5); }
+::highlight(reader-note) { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
+::highlight(reader-active) { background-color: rgba(120, 160, 255, 0.45); }
+/* Comments on a public document (DocComments.svelte): the span a comment is on, and the one whose thread is open. */
+::highlight(doc-comment) { background-color: rgba(241, 221, 138, 0.55); }
+::highlight(doc-comment-active) { background-color: rgba(241, 200, 90, 0.85); }
+/* The note being typed marks its own words, quietly, in the page's own grey. */
+::highlight(reader-pending) { background-color: color-mix(in srgb, var(--ink) 20%, transparent); }
+/* tophat's own notes: a wavy underline on the words and a label on the card, so what he reads
+   back as his own thinking is his. */
+::highlight(reader-tophat) { text-decoration: underline; text-decoration-style: wavy; text-underline-offset: 4px; }

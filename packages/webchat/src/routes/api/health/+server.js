@@ -1,0 +1,78 @@
+import { createHash } from 'node:crypto';
+import { json } from '@sveltejs/kit';
+import { threadpoolState } from '$lib/server/threadpool-watch.js';
+import { interactionStats } from '$lib/server/interaction.js';
+import { readingTraceStats } from '$lib/server/reading-trace-store.js';
+import { handoverShape } from '$lib/server/code-shape.js';
+import { bootCodeShape, busyConversations, liveConversations, runnerShape, storeHealth, storeShape } from '$lib/server/app.js';
+
+const instance = `${process.pid}:${Date.now()}`;
+let handover = null;
+
+function telemetryState() {
+  try { return { interaction: interactionStats(), readingTrace: readingTraceStats() }; } catch (error) { return { error: String(error?.message || error) }; }
+}
+
+export function GET({ getClientAddress, request }) {
+  
+  
+  
+  let address = '';
+  try { address = getClientAddress(); } catch { address = ''; }
+  const local = address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  
+  
+  const forwarded = request.headers.has('x-forwarded-for') || request.headers.has('cf-connecting-ip');
+  if (!local || forwarded) return json({ error: 'not found' }, { status: 404 });
+
+  // Health is what the chat path really does, measured: the store's own synthetic probe (a real durable append,
+  // a read back through the read-only index connection and a stream round trip, on a timer), its writer's queue
+  // and age, and the libuv threadpool the file routes ride on. A writer thread that hung, a disk that stopped
+  // accepting writes or a wedged threadpool each turn `ok` false.
+  const chat = storeHealth();
+  const pool = threadpoolState();
+  const poolOk = !pool || (!pool.wedged && (pool.misses || 0) < 2);
+  // In the shadow phase the legacy store serves and the mirror only has to stay alive; its numbers are shown, not gated, until it stalls.
+  // A store that is not ok because the disk is full (`restartHelps: false`) is up and holding events in memory: a restart
+  // (the deploy guard's rollback, the watchdog's kickstart) would only throw them away. It is reported as `degraded` with
+  // its reason and `chat.ok: false`, and does not turn the server's own `ok` false.
+  const chatOk = chat.mode === 'shadow' ? (chat.queue?.inflightMs ?? 0) < 30_000 && (chat.queue?.oldestMs ?? 0) < 30_000 : (chat.ok !== false || chat.restartHelps === false);
+  return json({
+    ok: chatOk && poolOk,
+    ...(chat.ok === false && chat.reason ? { degraded: chat.reason } : {}),
+    product: process.env.PRODUCT_NAME || 'tophat',
+    instance,
+    uptimeSeconds: process.uptime(),
+    
+    
+    
+    
+    build: process.env.WEBCHAT_BUILD_ID || 'unknown',
+    
+    
+    busy: busyConversations().length,
+    
+    live: liveConversations().length,
+    
+    
+    
+    store: createHash('sha256').update(storeShape()).digest('hex').slice(0, 12),
+    
+    
+    runner: createHash('sha256').update(runnerShape()).digest('hex').slice(0, 12),
+    
+    
+    
+    
+    
+    code: bootCodeShape(),
+    // The shape of the handover record this process writes (code-shape.js handoverShape): deploy.sh compares it with the
+    // one the build it is about to restart into accepts, and refuses a restart that would end the live children.
+    handover: (handover ??= handoverShape()),
+    // Async fs/dns liveness (threadpool-watch.js): null where no watch runs.
+    threadpool: pool,
+    chat,
+    // Telemetry day files (telemetry-log.js): queue depth, rows dropped when the queue was full, last write, files on disk.
+    telemetry: telemetryState()
+  }, { headers: { 'cache-control': 'no-store' } });
+}

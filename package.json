@@ -1,0 +1,19 @@
+{
+  "name": "tophat-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node --test --test-concurrency=1 packages/*/test/*.test.mjs test/*.test.mjs",
+    "vendor": "node scripts/vendor.mjs",
+    "vendor:check": "node scripts/vendor.mjs --check"
+  },
+  "license": "MIT",
+  "author": "tophat contributors"
+}

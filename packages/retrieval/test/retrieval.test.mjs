@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { test, after } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { world, tmp } from '@tophat-md/linknotes/testing';
+import { refresh, ask, registerCorpus } from '../index.mjs';
+
+let w;
+after(async () => { await w?.close(); });
+test('one refresh with per-corpus intervals; ask fuses the store and a files corpus; incremental and deletion-aware', async () => {
+  w = await world();
+  const store = w.sqlite('ret'); await store.createScope('ret');
+  await store.apply({ entities: [{ id: '$t', name: 'Compressor', type: 'artifact' }], notes: [{ body: 'The compressor arrives Friday from the lab supplier.', entities: ['$t'] }] });
+  const notes = tmp('linknotes-notes-'); fs.writeFileSync(path.join(notes, 'lab.md'), '# Lab\nThe compressor needs a 20 amp circuit.\n'); fs.writeFileSync(path.join(notes, 'misc.txt'), 'nothing here');
+  const stateDir = tmp('linknotes-ret-');
+  let mailRefreshes = 0;
+  registerCorpus('fake-mail', (c) => ({ name: c.name, async refresh() { mailRefreshes++; return { ok: true }; }, async search() { return []; } }));
+  const cfg = { stateDir, corpora: [{ name: 'linknotes', kind: 'linknotes' }, { name: 'notes', kind: 'files', dir: notes, everySeconds: 86400 }, { name: 'mail', kind: 'fake-mail', everySeconds: 300 }] };
+  const t0 = Date.parse('2026-11-08T00:00:00Z');
+  const r1 = await refresh(cfg, { now: t0 });
+  assert.equal(r1.notes.changed, 2); assert.equal(mailRefreshes, 1);
+  const r2 = await refresh(cfg, { now: t0 + 400_000 });
+  assert.equal(r2.notes.skipped, 'not due'); assert.equal(mailRefreshes, 2, 'mail freshness is its own interval inside the one job');
+  const a = await ask('when does the compressor arrive?', cfg, { store });
+  assert.ok(a.terms.includes('compressor'));
+  assert.deepEqual([...new Set(a.hits.map((h) => h.corpus))].sort(), ['linknotes', 'notes']);
+  fs.rmSync(path.join(notes, 'lab.md'));
+  const r3 = await refresh(cfg, { now: t0, force: true });
+  assert.equal(r3.notes.removed, 1);
+  assert.ok(!(await ask('compressor circuit', cfg, { store })).hits.some((h) => h.corpus === 'notes'));
+});

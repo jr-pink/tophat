@@ -1,0 +1,23 @@
+{
+  "name": "@tophat-md/verify",
+  "version": "1.0.0",
+  "description": "Property harnesses over the MemoryStore interface: multi-party visibility/leak fuzz across replicas, origin-vs-replica differential after hub sync",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-verify": "./bin/tophat-verify.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/linknotes": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

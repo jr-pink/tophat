@@ -1,0 +1,23 @@
+{
+  "name": "@tophat-md/deploy",
+  "version": "1.0.0",
+  "description": "Instance config, the component manifest check and `tophat start`: an instance is a configuration of the packages",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-deploy": "./bin/tophat-deploy.mjs",
+    "tophat-setup": "./bin/tophat-setup.mjs"
+  },
+  "exports": {
+    "./components": "./src/components.mjs",
+    "./instance": "./src/instance.mjs",
+    "./setup": "./src/setup.mjs"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

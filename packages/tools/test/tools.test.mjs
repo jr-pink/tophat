@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { test, after } from 'node:test';
+import { PassThrough } from 'node:stream';
+import { world } from '@tophat-md/linknotes/testing';
+import { listTools, callTool } from '../index.mjs';
+import { serve } from '../mcp.mjs';
+
+let w;
+after(async () => { await w?.close(); });
+test('tools over a sqlite store, and the same calls over MCP stdio', async () => {
+  w = await world();
+  const store = w.sqlite('toolu'); await store.createScope('toolu');
+  assert.deepEqual(listTools().map((t) => t.name), ['memory_search', 'memory_entity', 'memory_page', 'memory_read', 'memory_apply', 'memory_share', 'memory_scopes']);
+  const r = await callTool({ store }, 'memory_apply', { entities: [{ id: '$d', name: 'Dana Okafor', type: 'person' }], notes: [{ body: 'Dana Okafor runs the boiler tests.', entities: ['$d'] }] });
+  const page = await callTool({ store }, 'memory_page', { id: r.id_map.$d });
+  assert.match(page.outline, /boiler tests/);
+  await assert.rejects(callTool({ store }, 'memory_read', { kind: 'note' }), /missing id/);
+  const input = new PassThrough(), output = new PassThrough(), lines = [];
+  output.on('data', (d) => lines.push(...d.toString().split('\n').filter(Boolean).map(JSON.parse)));
+  serve({ store }, { input, output });
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }) + '\n');
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n');
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'memory_search', arguments: { query: 'boiler' } } }) + '\n');
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'nope', arguments: {} } }) + '\n');
+  for (let i = 0; i < 50 && lines.length < 4; i++) await new Promise((r2) => setTimeout(r2, 20));
+  const byId = Object.fromEntries(lines.map((l) => [l.id, l]));
+  assert.equal(byId[1].result.serverInfo.name, 'tophat');
+  assert.equal(byId[2].result.tools.length, 7);
+  assert.ok(JSON.parse(byId[3].result.content[0].text).hits.length >= 1);
+  assert.equal(byId[4].result.isError, true);
+});

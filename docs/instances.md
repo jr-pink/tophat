@@ -1,0 +1,150 @@
+# Instances
+
+An instance is one running tophat: the packages, plus one file, `tophat.instance.json`, that says whose it is, where it keeps its state, which hosts and ports it answers on, which model credentials it may use and which components are enabled. Two instances on one machine are two files; nothing about either is in the code.
+
+## The instance file
+
+```json
+{
+  "name": "demo",
+  "owner": { "label": "Sam", "addresses": ["sam@example.org"] },
+  "scope": { "default": "sam", "groups": [] },
+  "components": ["linknotes", "runner", "webchat", "deploy"],
+  "hosts": { "public": null, "bind": "127.0.0.1" },
+  "ports": { "webchat": 4178 },
+  "paths": { "state": "~/.local/state/tophat/demo", "config": "~/.config/tophat/demo", "instructions": "./instructions.md" },
+  "models": {
+    "chat": { "model": "some-model", "baseUrl": "https://api.example.com", "credential": { "keyring": "chat-api-key" } },
+    "fast": { "baseUrl": "https://fast.example.com/v1", "credential": { "env": "FAST_MODEL_KEY" } }
+  },
+  "deploy": { "labelPrefix": "org.example" }
+}
+```
+
+| key | meaning | default |
+|---|---|---|
+| `name` | instance id: lower case letters, digits, dashes; names its state directory and service label | required |
+| `owner.label` | how the app names the person (or group) it serves | `the owner` |
+| `owner.addresses` | mail addresses that count as the owner's own (sent-mail direction) | `[]` |
+| `scope.default`, `scope.groups` | the memory scope the instance writes as, and the groups it may share into | the instance name, `[]` |
+| `components` | enabled component ids (see below) | required |
+| `hosts.public` | public host name, when the instance is reachable from outside (share links, passkey origin) | none: `http://localhost:<port>` |
+| `hosts.bind` | listen address | `127.0.0.1` |
+| `ports.webchat` | webchat port | `4178` |
+| `paths.state` | everything the instance writes: the chat store, the runner ledger, the workspace | `~/.local/state/tophat/<name>` |
+| `paths.config` | config and the `secrets/` directory | `~/.config/tophat/<name>` |
+| `paths.workspace`, `paths.secrets`, `paths.fileRoots` | the working directory of chats, the keyring directory, extra roots the file viewer may open | under state / config |
+| `paths.instructions` | the system instructions file the runner reads; the product ships none | none |
+| `models.chat` | the chat model: `model`, `baseUrl`, `credential` | the runner's defaults |
+| `models.fast` | a cheap OpenAI-compatible model for titles, folders and routing: `baseUrl`, `credential` | off |
+| `deploy.labelPrefix` | prefix of the service label | `md.tophat` |
+| `scope.user` | the replica's user, when it differs from the write scope (a person writing into one of their groups) | `scope.default` |
+| `models.chat.workspace` | workspace id file for a key scoped to an organisation: `{ file }` or `{ keyring }` | none |
+| `sources` | source adapters `[{ id, family, account?, config }]`; secret-shaped config keys are credential references; the first `imessage` (`config.database`) and `beeper` (`config.index`) source name the stores the runner's message tools read | `[]` |
+| `hub` | hub sync of the runner's replica: `{ url, token, device?, deviceKey? }`, token and device key as `{ file }` or `{ keyring }`; `tophat instance sync --config FILE` runs one round | none |
+| `runner.env` | extra environment for the runner and webchat children, `{ NAME: value }`: feature switches and the places tools and stores live (`TOPHAT_RUNNER_MAIL_ACCOUNTS`, `TOPHAT_RUNNER_WEB_CDP_BIN`, `TOPHAT_REV6_HARNESS`, `TOPHAT_RETRIEVAL_CONFIG`, `TOPHAT_CONTEXT_CLI`, `PATH` ...). A value is a string, number, boolean or an object (written as JSON). A name that reads as a secret (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`) is refused unless it ends in `_FILE`, `_DIR` or `_PATH`; a name the instance file already sets (`runner.env.TOPHAT_RUNNER_MODEL` beside `models.chat.model`) is refused. `TOPHAT_CONTEXT_CLI` names the instance's own retrieval command (`node CLI context --query TEXT`, its stdout is put in front of each turn by the claude hooks and the codex provider); without it a turn carries no retrieved context. Which tools a runner offers follows this environment: a mail, message, search or browser tool exists only when its place is named here or by `sources`; `tophat instance env --config FILE` prints the result | `{}` |
+| `intake` | the intake into the runner's replica: `{ everySeconds, model, maxSteps?, batch?, budget? }`; `model` names a `models` entry (`chat` is read as Messages API, any other as OpenAI-compatible, unless the entry has `provider`) or is `{ provider, model?, baseUrl?, credential?, command? }` (providers of `@tophat-md/push`: `anthropic`, `openai`, `command`, `stub`). Every `everySeconds` the upkeep job `intake` polls the enabled `sources`, ingests into the instance's write scope and derives entities and notes with that model, then syncs through `hub` when there is one. `tophat instance intake --config FILE` runs it when due (`--force` now, `--forever [--tick S]` keeps checking); state under `<paths.state>/intake` and `<paths.state>/upkeep`. The pass also claims the chat transcripts the runner ingested (`webchat` records) for its derive: with `scopes.enabled` in the config file only chats that are unscoped, `legacy`, in the instance's write scope or in a registry group with `everyone: true` are claimed (`deploy/src/transcripts.mjs`). `intake.model.workspace` (`{ file }` or `{ keyring }`) adds the `anthropic-workspace-id` header an organisation-scoped Anthropic key needs. `intake.wake` (`true` or `{ maxAgeHours?, batch? }`): after each pass, arrivals from the sources (not chats) that the intake model judges to need someone are posted into the owning chat (or a new one) through the webchat's loopback `/api/inbound` as an automated event; one decision per record, kept in `<paths.state>/intake/wakes.jsonl` (`deploy/src/wake.mjs`) | none |
+
+Relative paths resolve against the directory of the instance file. Unknown keys are refused.
+
+**Credentials are references, never values.** A credential is exactly one of `{ "env": NAME }` (read from the starting process's environment), `{ "keyring": NAME }` (a file of that name in `paths.secrets`) or `{ "file": PATH }`. A literal key, or an `apiKey` field, is refused when the file is read. The chat runner reads its key from a file, so `models.chat.credential` is a `file` or a `keyring` entry; `models.fast.credential` may also be `env`, and its value reaches the webchat process through its environment only. `tophat instance env --config FILE` prints the environment an instance hands its children, which carries paths and names and never a credential value. It includes `TOPHAT_WEBCHAT_URL` (`http://127.0.0.1:<ports.webchat>`), the loopback origin the runner's own chat tools use, so two instances on one machine never reach each other.
+
+## Components
+
+`tophat.components.json` at the workspace root lists every component with its package, what it depends on, whether it is optional and whether it can be removed:
+
+```
+tophat components list          every component, its package, dependencies and whether it is installed
+tophat components tree webchat  webchat -> runner
+tophat components check --config tophat.instance.json
+```
+
+`check` fails (exit 1) when an enabled component needs one that is not enabled, when a required component (`linknotes`) is off, or when an id is unknown, and prints the smallest enabled set that would pass. `--present` also requires each enabled component's package to be installed. Removing a removable component's package leaves every component that does not depend on it working; `webchat` needs `runner`, nothing needs `webchat` or `deploy`.
+
+## Running an instance
+
+```
+npm install
+npm run build -w @tophat-md/webchat
+tophat components check --config tophat.instance.json
+tophat start --config tophat.instance.json
+```
+
+`tophat start` validates the file and the component set, creates the state, config and workspace directories (0700), creates the webchat's session secret, enrolment token and service token once in `paths.secrets` (0600), builds the child environment from the instance file alone (only `PATH`, `HOME`, `TMPDIR`, locale, `USER`, `SHELL` and `NODE_OPTIONS` are passed through), and serves the webchat build in the foreground. The first device enrols with the token in `<paths.secrets>/webchat-bootstrap-token`. `GET /api/health` answers on loopback only; `product` is the instance name. `--build DIR` serves another build.
+
+To keep it running, `tophat instance unit --config FILE` prints a launchd agent (label `<deploy.labelPrefix>.<name>`) with `PATH` (`runner.env.PATH`, else the printing shell's) and `HOME` in its environment, since launchd starts a job with a bare `PATH`; `--kind systemd` prints a systemd user unit. Installing the unit is left to you.
+
+Each conversation runs one runner child (`@tophat-md/runner`) that speaks stream-json on stdin and stdout and calls the model itself. For tests, `packages/runner/rev5/fake-provider.mjs` serves the model wire format locally; point `models.chat.baseUrl` at it and give it any key file.
+
+## Jobs an instance needs
+
+`tophat instance jobs --config FILE [--write DIR]` lists the background jobs the enabled components imply and, with `--write`, writes their launchd units as `DIR/<label>.plist` (never loaded): `webchat` when `webchat` is a component; `intake` (the push plane, `instance intake --forever`) when `push` and `upkeep` are components and the file has an `intake` block; `fast-proxy` when `models.fast.workspace` is set. `tophat instance unit --job NAME` prints one. `models.fast` for a workspace-scoped key: `{ baseUrl, model, credential, workspace }` plus `ports.fastProxy`; the webchat's title and folder calls go to `http://127.0.0.1:<fastProxy>/chat/completions`, which adds the workspace header (`tophat instance fast-proxy`).
+
+## A group runner is an instance whose scope is the group
+
+Nothing distinguishes a personal assistant from one that serves a group except its instance file:
+
+```json
+{
+  "name": "lab",
+  "owner": { "label": "the lab" },
+  "scope": { "default": "lab", "groups": ["lab"] },
+  "components": ["linknotes", "hub", "runner", "webchat", "deploy"],
+  "ports": { "webchat": 4280 },
+  "paths": { "state": "/srv/tophat/lab", "config": "/etc/tophat/lab", "instructions": "./lab-instructions.md" },
+  "models": { "chat": { "model": "some-model", "credential": { "keyring": "lab-chat-key" } } }
+}
+```
+
+- **Scope.** `scope.default` is the group, so what the instance writes is meant to land in the group's scope and the memory it reads to be what the group can read: a linknotes replica whose user is the group, kept in step with the members' replicas through the ciphertext-only hub (the runner does not read the scope yet; see the limits below). A member's private notes are never in the group replica unless that member shared them into the group.
+- **Owner.** `owner.label` names the group where a personal instance names the person (see the limits below for where it is not substituted yet).
+- **Separation.** Its state, secrets, port and service label are its own, so it runs beside personal instances on the same machine, or alone on a server, without sharing a store.
+- **Instructions.** The group's rules are its instructions file; the product ships no rules of its own.
+
+## Running it in the background
+
+`tophat start` is the foreground process. To run an instance behind you:
+
+```
+tophat instance start  --config tophat.instance.json [--build DIR]
+tophat instance status --config tophat.instance.json
+tophat instance health --config tophat.instance.json
+tophat instance stop   --config tophat.instance.json
+tophat instance release --config tophat.instance.json [--set DIR]
+```
+
+`start` detaches the webchat into its own session, logs to `<paths.state>/logs/webchat.log`, and records the process in
+`<paths.state>/run/webchat.json`; a second `start` while it runs answers `already_running`. Liveness is the kernel's
+answer about the pid, never the file, so a record left by a crash is stale and the next `start` replaces it. `stop` is
+SIGTERM then SIGKILL after ten seconds, and stopping what is not running is not an error. `status` prints the pid, the
+port, the release and the log; `health` is `GET /api/health` on the loopback port (exit 1 when it does not answer).
+The release pointer (`<paths.state>/run/release.json`) names the build the instance serves: `start` writes it, and a
+`start` without `--build` uses it. Nothing here installs a service; `tophat instance unit` still prints one.
+
+Releasing a new webchat build to a running instance: `tophat instance ship --config FILE [--keep N]`. It builds into a
+fresh `packages/webchat/build.<stamp>`, flips the `build-current` pointer (temp+rename) and SIGHUPs serve.mjs (the pid
+in `/api/health`), which reloads the handler in the same process, so runner children are untouched; it keeps the newest
+N builds plus the one served before. Never rebuild the directory a running server serves (`vite build` empties it and the
+server's lazily imported chunks vanish: every page 500s). `tophat start` without `--build` or `webchat.build` follows
+`build-current`; an explicit build is pinned and needs a restart to change.
+
+## Memory and shared work
+
+The runner's memory and task tools are `@tophat-md/linknotes`. `packages/runner/store/memory.mjs` answers every store
+request in process and `packages/runner/store/cli.mjs` is the same thing as a child process, so the webchat and the
+runner reach one replica at `<paths.state>/runner/memory.sqlite`. `scope.default` is the user that replica writes as
+and `scope.groups` are the groups it may share into, both created on first open: a group runner (an instance whose
+scope is the group) writes into the group. Derived pages are built by linknotes on read; there is no model-driven
+consolidation step in the product, so `push` answers `not_supported`.
+
+## Current limits
+
+- Attachment extraction of archives and office documents needs a container worker that is not part of the runner
+  package: those files answer `container-extractor-unavailable` instead of text.
+- The entity-lookup reader (a separate natural-language service) is off, so memory search is full text only.
+- `owner.label` reaches the runner prompts, the inbox rule and the webchat's server-side strings; the browser UI still
+  shows its own built-in labels.
+- Device location, desktop automation, messaging, mail and shopping tools are stubs or need an instance to name the
+  store or endpoint they use (message databases, the bridged-chat API, the browser endpoint); with none named they
+  report that they are not configured.
+- There is no live deploy: `tophat instance start` runs a build that is already on the machine.

@@ -1,0 +1,57 @@
+{
+  "default": "claude-opus-5",
+  "prices": {
+    "gpt-6-astra": { "input": 10, "output": 50, "cached_input": 1 },
+    "claude-opus-5-5": { "input": 4, "output": 20, "cached_input": 0.4, "cache_write": 5 },
+    "claude-opus-5": { "input": 5, "output": 25, "cached_input": 0.5, "cache_write": 6.25 },
+    "claude-sonnet-5-5": { "input": 2, "output": 10, "cached_input": 0.2, "cache_write": 2.5 },
+    "claude-haiku-5-5": { "input": 0.1, "output": 0.5, "cached_input": 0.01, "cache_write": 0.125 }
+  },
+  "ladder": {
+    "anthropic": ["claude-opus-5", "claude-fable-5", "claude-mythos-5"],
+    "openai": ["gpt-6-astra"]
+  },
+  "openaiModel": "^(gpt|o\\d)",
+  "openaiWire": "^(gpt-|o\\d|chatgpt-)",
+  "contextWindow": { "anthropic": 1000000, "openai": 1050000 },
+  "cache": {
+    "maxBreakpoints": 4,
+    "minDefault": 4096,
+    "minTokens": {
+      "claude-opus-5-5": 512, "claude-opus-5": 512, "claude-fable-5": 512, "claude-mythos-5": 512,
+      "claude-opus-4-8": 1024, "claude-sonnet-5": 1024, "claude-sonnet-4-6": 1024, "claude-sonnet-4-5": 1024,
+      "claude-opus-4-7": 2048, "claude-opus-4-6": 4096, "claude-opus-4-5": 4096, "claude-haiku-4-5": 4096
+    }
+  },
+  "limits": {
+    "maxTokens": 16000,
+    "maxTokensCeiling": 128000,
+    "inputBytes": 4194304,
+    "providerBodyBytes": 33554432,
+    "timeoutMs": 0,
+    "retries": 1,
+    "openaiMaxOutput": 128000
+  },
+  "caps": {
+    "maxUsd": 2,
+    "maxContinuations": 4,
+    "truncations": 3,
+    "attemptsPerModel": 3,
+    "cycleWaitMs": [5000, 10000, 20000, 40000, 60000]
+  },
+  "effort": {
+    "anthropicModels": "^claude-(opus|sonnet|haiku|fable)-5",
+    "levels": ["low", "medium", "high", "xhigh", "max"]
+  },
+  "thinking": {
+    "models": "^claude-(opus|sonnet|haiku|fable)-5",
+    "display": "summarized"
+  },
+  "prefillRefusers": ["claude-opus-5"],
+  "callers": ["direct-chat", "subagent-search", "subagent-build", "push", "pipes"],
+  "vault": {
+    "anthropicKey": "anthropic-api-key",
+    "anthropicWorkspace": "anthropic-workspace-id",
+    "openaiKey": "openai-api-key"
+  }
+}

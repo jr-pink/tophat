@@ -1,0 +1,25 @@
+{
+  "name": "@tophat-md/pull",
+  "version": "1.0.0",
+  "description": "Answer from memory: context assembly (retrieval hits + cross-scope derived pages) and a reference one-call runner",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-ask": "./bin/tophat-ask.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/linknotes": "1.0.0",
+    "@tophat-md/push": "1.0.0",
+    "@tophat-md/retrieval": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

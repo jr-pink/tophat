@@ -1,0 +1,11 @@
+# Never in a release (git archive): the vendoring step, its repo-local upstream config, and the traceability deny list.
+scripts/vendor.mjs export-ignore
+scripts/vendor.upstream.json export-ignore
+scripts/traceability-deny.txt export-ignore
+scripts/vendor-app.mjs export-ignore
+scripts/vendor-app.upstream.json export-ignore
+scripts/scrub.mjs export-ignore
+# Manifests of the vendoring and assembly steps carry upstream commit ids and source paths: kept in the source repository, never shipped.
+ASSEMBLY.json export-ignore
+VENDOR.json export-ignore
+scripts/release.mjs export-ignore

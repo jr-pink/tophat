@@ -1,0 +1,20 @@
+{
+  "name": "@tophat-md/groups",
+  "version": "1.0.0",
+  "description": "Shared derived pages for groups: Merkle-keyed page subtrees adopted across viewers when they rest on the same notes, publishable only to groups that hold every supporting note; facet planning and tiered page layout",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "devDependencies": {
+    "@tophat-md/linknotes": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

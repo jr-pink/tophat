@@ -1,0 +1,23 @@
+{
+  "name": "@tophat-md/linknotes",
+  "version": "1.0.0",
+  "description": "Memory with scopes, per-row ACLs, append-only notes and derived pages in a local SQLite replica; end-to-end-encrypted sync through a ciphertext-only hub",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-linknotes": "./bin/tophat-linknotes.mjs",
+    "tophat": "./bin/tophat.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./interface": "./src/interface.mjs",
+    "./testing": "./test/kit.mjs"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

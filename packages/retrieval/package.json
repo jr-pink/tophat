@@ -1,0 +1,25 @@
+{
+  "name": "@tophat-md/retrieval",
+  "version": "1.0.0",
+  "description": "One refresh job and one ask path over pluggable corpora (the MemoryStore, text directories, your own)",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-retrieval": "./bin/tophat-retrieval.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./terms": "./lib/terms.mjs",
+    "./rank": "./lib/rank.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/linknotes": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

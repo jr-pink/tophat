@@ -1,0 +1,24 @@
+{
+  "name": "@tophat-md/upkeep",
+  "version": "1.0.0",
+  "description": "One scheduler for tophat: heartbeat (push + sync), consolidate, health, log-rotate, backup; optional understanding job",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-upkeep": "./bin/tophat-upkeep.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/linknotes": "1.0.0",
+    "@tophat-md/push": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

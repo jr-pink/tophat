@@ -1,0 +1,114 @@
+#!/usr/bin/env node
+// tophat-deploy: the instance side of tophat.
+//   tophat components list [--json]                 every component, its package, dependencies and whether it is present
+//   tophat components tree [ID...]                  dependency tree
+//   tophat components check [--config FILE | ID...] every dependency of an enabled component is enabled (exit 1 if not)
+//   tophat start --config FILE [--build DIR]         boot the instance's enabled app components (webchat) in the foreground
+//   tophat instance env --config FILE                the environment an instance hands its components (no secret values)
+//   tophat instance start|stop|status|health --config FILE   run the instance in the background, and ask after it
+//   tophat instance release --config FILE [--set DIR]         the build the instance serves (printed, or set)
+//   tophat instance ship --config FILE [--keep N]     build the webchat into a fresh build.<stamp>, flip build-current and
+//                                                    SIGHUP the running server (same process, children untouched); never
+//                                                    rebuild the directory a server is serving
+//   tophat instance unit --config FILE [--kind launchd|systemd] [--job NAME]   a service unit that keeps one job running (printed;
+//                                                    default the webchat; `instance jobs` names every job the instance needs)
+//   tophat instance jobs --config FILE [--write DIR]  every job the enabled components imply (webchat, intake, fast-proxy): listed, or with
+//                                                    --write their launchd units written as DIR/<label>.plist (never loaded)
+//   tophat instance fast-proxy --config FILE          the loopback header proxy for a fast model behind a workspace-scoped key (foreground)
+//   tophat instance sync --config FILE                one hub round for the runner's replica (the instance file's hub block)
+//   tophat instance intake --config FILE [--force] [--forever [--tick S]]   the intake (sources -> replica -> derive) when
+//                                                    due on the instance file's intake.everySeconds; --force runs it now
+import path from 'node:path';
+import { WORKSPACE, check, complete, list, loadManifest, tree } from '../src/components.mjs';
+import { instanceEnv, instanceJobs, loadInstance, serviceUnit } from '../src/instance.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const args = process.argv.slice(2);
+const flag = (name) => { const i = args.indexOf(name); if (i < 0) return null; const v = args[i + 1]; args.splice(i, 2); return v; };
+const has = (name) => { const i = args.indexOf(name); if (i < 0) return false; args.splice(i, 1); return true; };
+const out = (v) => console.log(typeof v === 'string' ? v : JSON.stringify(v, null, 1));
+const die = (msg, code = 2) => { console.error(`tophat: ${msg}`); process.exit(code); };
+
+const [cmd, sub] = [args.shift(), args[0]];
+try {
+  if (cmd === 'components') {
+    args.shift();
+    const m = loadManifest();
+    if (sub === 'list' || !sub) {
+      const rows = list(m);
+      if (has('--json')) out(rows);
+      else out(rows.map((r) => `${r.present ? ' ' : '-'} ${r.id.padEnd(10)} ${r.package.padEnd(22)} ${r.optional ? 'optional' : 'required'} ${r.removable ? 'removable' : '         '} needs: ${r.depends.join(', ') || '-'}`).join('\n'));
+    } else if (sub === 'tree') out(tree(m, args.length ? args : null));
+    else if (sub === 'check') {
+      const file = flag('--config');
+      const enabled = file ? loadInstance(file).components : args;
+      if (!enabled.length) die('components check: pass --config FILE or component ids');
+      const r = check(m, enabled, { root: has('--present') ? WORKSPACE : null });
+      out({ ...r, enabled, suggestion: r.ok ? undefined : complete(m, enabled.filter((id) => m.components.some((c) => c.id === id))) });
+      process.exit(r.ok ? 0 : 1);
+    } else die(`components: unknown sub-command ${sub}`);
+  } else if (cmd === 'instance' && sub === 'env') {
+    args.shift();
+    const c = loadInstance(flag('--config'));
+    out(instanceEnv(c));
+  } else if (cmd === 'instance' && ['start', 'stop', 'status', 'health', 'release'].includes(sub)) {
+    args.shift();
+    const file = path.resolve(flag('--config') || die(`instance ${sub}: --config FILE is required`));
+    const { healthInstance, release, startInstance, statusInstance, stopInstance } = await import('../src/service.mjs');
+    if (sub === 'start') { const r = startInstance({ configFile: file, buildDir: flag('--build') }); out(r); process.exit(r.ok ? 0 : 1); }
+    if (sub === 'stop') { const r = await stopInstance({ configFile: file }); out(r); process.exit(r.ok ? 0 : 1); }
+    if (sub === 'status') { const r = statusInstance({ configFile: file }); out(r); process.exit(r.running ? 0 : 1); }
+    if (sub === 'health') { const r = await healthInstance({ configFile: file }); out(r); process.exit(r.ok ? 0 : 1); }
+    const { loadInstance: li } = await import('../src/instance.mjs');
+    const set = flag('--set');
+    out(release(li(file), set ? path.resolve(set) : null) ?? { build: null });
+  } else if (cmd === 'instance' && sub === 'ship') {
+    args.shift();
+    const file = path.resolve(flag('--config') || die('instance ship: --config FILE is required'));
+    const { shipWebchat } = await import('../src/ship.mjs');
+    const r = await shipWebchat({ configFile: file, keep: Number(flag('--keep') || 3) });
+    out(r); process.exit(r.ok ? 0 : 1);
+  } else if (cmd === 'instance' && sub === 'sync') {
+    args.shift();
+    const c = loadInstance(path.resolve(flag('--config') || die('instance sync: --config FILE is required')));
+    const { componentDir } = await import('../src/start.mjs');
+    const runner = componentDir('runner') || die('instance sync: the runner package is not installed');
+    const { syncStore } = await import(path.join(runner, 'store/memory.mjs'));
+    const env = instanceEnv(c);
+    const r = await syncStore(env.TOPHAT_RUNNER_DB, env);
+    out(r.result);
+    process.exit(r.code);
+  } else if (cmd === 'instance' && sub === 'intake') {
+    args.shift();
+    const c = loadInstance(path.resolve(flag('--config') || die('instance intake: --config FILE is required')));
+    if (!c.intake) die('instance intake: the instance file has no intake block ({ everySeconds, model })');
+    const { runIntake } = await import('../src/intake.mjs');
+    const force = has('--force'), forever = has('--forever'), tick = Number(flag('--tick') || 30) * 1000;
+    if (!forever) { out(await runIntake(c, { force })); process.exit(0); }
+    for (;;) {
+      try { const r = await runIntake(c); if (Object.keys(r).length) out(r); } catch (e) { console.error(`tophat: intake: ${e.message}`); }
+      await new Promise((r) => setTimeout(r, tick));
+    }
+  } else if (cmd === 'instance' && sub === 'unit') {
+    args.shift();
+    const file = path.resolve(flag('--config') || die('instance unit: --config FILE is required'));
+    out(serviceUnit(loadInstance(file), { configFile: file, kind: flag('--kind') || 'launchd', bin: fileURLToPath(import.meta.url), job: flag('--job') || 'webchat' }));
+  } else if (cmd === 'instance' && sub === 'jobs') {
+    args.shift();
+    const file = path.resolve(flag('--config') || die('instance jobs: --config FILE is required'));
+    const dir = flag('--write'), c = loadInstance(file), bin = fileURLToPath(import.meta.url);
+    const jobs = instanceJobs(c, { configFile: file });
+    if (dir) { mkdirSync(dir, { recursive: true }); for (const j of jobs) writeFileSync(path.join(dir, `${j.label}.plist`), serviceUnit(c, { configFile: file, bin, job: j.job })); }
+    out(jobs.map((j) => ({ job: j.job, label: j.label, ...(dir ? { unit: path.join(dir, `${j.label}.plist`) } : {}) })));
+  } else if (cmd === 'instance' && sub === 'fast-proxy') {
+    args.shift();
+    const { runFastProxy } = await import('../src/fast-proxy.mjs');
+    runFastProxy(path.resolve(flag('--config') || die('instance fast-proxy: --config FILE is required')));
+  } else if (cmd === 'start') {
+    const file = flag('--config');
+    if (!file) die('start: --config FILE is required');
+    const { start } = await import('../src/start.mjs');
+    await start({ configFile: path.resolve(file), buildDir: flag('--build') });
+  } else die('usage: tophat components list|tree|check, tophat start --config FILE, tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|intake --config FILE');
+} catch (e) { die(e.message, 1); }

@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+    <meta name="theme-color" content="#0f1012" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#faf9f7" media="(prefers-color-scheme: light)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>tophat chat</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      (function () {
+        var ATTEMPTS = 'tophat:shell-boot-attempts';
+        
+        
+        var DEADLINE_MS = 15000;
+        
+        
+        var GRACE_MS = 1500;
+        var acted = false;
+        var poll = null;
+        var deadline = null;
+
+        
+        
+        
+        function shellRoot() {
+          var body = document.body;
+          if (!body) return null;
+          for (var i = 0; i < body.children.length; i += 1) {
+            if (body.children[i].tagName === 'DIV') return body.children[i];
+          }
+          return null;
+        }
+
+        
+        
+        
+        function hydrated() {
+          var root = shellRoot();
+          if (!root) return false;
+          for (var i = 0; i < root.childNodes.length; i += 1) {
+            var node = root.childNodes[i];
+            if (node.nodeType === 1) {
+              if (node.tagName !== 'SCRIPT' && node.tagName !== 'TEMPLATE') return true;
+            } else if (node.nodeType === 3 && node.nodeValue.trim() !== '') {
+              return true;
+            }
+          }
+          return false;
+        }
+
+        function attempts() {
+          try { return parseInt(sessionStorage.getItem(ATTEMPTS) || '0', 10) || 0; } catch (e) { return 0; }
+        }
+
+        function stop() {
+          if (poll) { clearInterval(poll); poll = null; }
+          if (deadline) { clearTimeout(deadline); deadline = null; }
+        }
+
+        
+        
+        
+        
+        // Dropping the cached shell is only a repair when the server is there to hand out a new
+        // one. With the tunnel down or no connection, it would leave nothing to boot from at all,
+        // so the shell stays and the reload comes back to it.
+        function serverReachable() {
+          try {
+            var timer = new Promise(function (resolve) { setTimeout(function () { resolve(false); }, 2500); });
+            var probe = fetch('/api/health', { cache: 'no-store', credentials: 'same-origin' })
+              .then(function (r) {
+                var type = (r.headers && r.headers.get('content-type')) || '';
+                return r.status < 500 && type.indexOf('json') >= 0;
+              })['catch'](function () { return false; });
+            return Promise.race([probe, timer]);
+          } catch (e) { return Promise.resolve(false); }
+        }
+
+        function dropPoisonedShell() {
+          return serverReachable().then(function (up) {
+            if (!up) { console.warn('[shell] server unreachable; keeping the cached shell'); return; }
+            return dropShellNow();
+          });
+        }
+
+        function dropShellNow() {
+          var jobs = [];
+          try {
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+              jobs.push(navigator.serviceWorker.getRegistrations()
+                .then(function (regs) {
+                  return Promise.all(regs.map(function (r) { return r.unregister()['catch'](function () {}); }));
+                })['catch'](function () {}));
+            }
+          } catch (e) {  }
+          try {
+            if (window.caches && caches.keys) {
+              jobs.push(caches.keys()
+                .then(function (keys) {
+                  return Promise.all(keys.map(function (k) { return caches['delete'](k)['catch'](function () {}); }));
+                })['catch'](function () {}));
+            }
+          } catch (e) {  }
+          
+          
+          return Promise.race([
+            Promise.all(jobs),
+            new Promise(function (resolve) { setTimeout(resolve, 2000); })
+          ]);
+        }
+
+        
+        
+        
+        function afterLoad(fn) {
+          if (document.readyState === 'complete') { setTimeout(fn, 0); return; }
+          window.addEventListener('load', function () { setTimeout(fn, 0); }, { once: true });
+        }
+
+        
+        
+        
+        
+        
+        
+        function stuck(detail, afterHydration) {
+          stop();
+          if (document.querySelector('[data-testid="shell-stuck"]')) return;
+          var dark = true;
+          try { dark = !window.matchMedia('(prefers-color-scheme: light)').matches; } catch (e) {  }
+
+          var panel = document.createElement('div');
+          panel.setAttribute('data-testid', 'shell-stuck');
+          panel.setAttribute('role', 'alert');
+          panel.style.cssText = [
+            'position:fixed', 'inset:0', 'z-index:2147483647',
+            'display:flex', 'flex-direction:column', 'align-items:center', 'justify-content:center',
+            'gap:18px', 'padding:24px', 'text-align:center',
+            'font:16px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif',
+            'background:' + (dark ? '#0f1012' : '#faf9f7'),
+            'color:' + (dark ? '#faf9f7' : '#1a1a1a')
+          ].join(';');
+
+          var message = document.createElement('p');
+          message.style.cssText = 'margin:0;max-width:30em';
+          message.textContent = 'This tab is running an older version of the app and could not start. Reload to pick up the current one.';
+
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = 'Reload';
+          button.style.cssText = [
+            'font:inherit', 'padding:10px 22px', 'border-radius:10px', 'cursor:pointer',
+            'border:1px solid ' + (dark ? '#3a3c42' : '#c9c6c0'),
+            'background:' + (dark ? '#1e2025' : '#ffffff'),
+            'color:inherit'
+          ].join(';');
+          button.addEventListener('click', function () {
+            button.disabled = true;
+            try { sessionStorage.removeItem(ATTEMPTS); } catch (e) {  }
+            dropPoisonedShell().then(function () { location.reload(); });
+          });
+
+          panel.appendChild(message);
+          panel.appendChild(button);
+          (document.body || document.documentElement).appendChild(panel);
+          console.warn('[shell] did not boot (' + detail + '); showing the reload prompt');
+
+          
+          
+          
+          
+          
+          if (afterHydration) return;
+          var settle = setInterval(function () {
+            if (!hydrated()) return;
+            clearInterval(settle);
+            if (panel.parentNode) panel.parentNode.removeChild(panel);
+            try { sessionStorage.removeItem(ATTEMPTS); } catch (e) {  }
+          }, 250);
+        }
+
+        function recover(detail) {
+          if (acted || hydrated()) return;
+          acted = true;
+          stop();
+          
+          
+          if (attempts() >= 1) { stuck(detail); return; }
+          try { sessionStorage.setItem(ATTEMPTS, String(attempts() + 1)); }
+          catch (e) { stuck(detail); return; }
+          console.warn('[shell] boot failed (' + detail + '); dropping the cached shell and reloading');
+          afterLoad(function () {
+            dropPoisonedShell().then(function () { location.reload(); });
+          });
+        }
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        var CHUNK_RELOAD = 'tophat:chunk-reload';
+        window.__tophatRecoverChunk = function (detail, buildKey) {
+          stop();
+          var key = String(buildKey || 'unknown');
+          var spent = null;
+          try { spent = sessionStorage.getItem(CHUNK_RELOAD); } catch (e) {  }
+          if (spent === key) {
+            console.warn('[shell] a chunk is still missing after one reload (' + detail + '); asking rather than looping');
+            stuck(detail, true);
+            return;
+          }
+          try { sessionStorage.setItem(CHUNK_RELOAD, key); }
+          catch (e) { stuck(detail, true); return; }
+          console.warn('[shell] a chunk went missing after hydration (' + detail + '); dropping the cached shell and reloading');
+          dropPoisonedShell().then(function () { location.reload(); });
+        };
+
+        
+        
+        
+        
+        
+        
+        
+        window.addEventListener('unhandledrejection', function (event) {
+          if (acted || hydrated()) return;
+          var reason = event && event.reason;
+          var text = String((reason && (reason.message || reason)) || '');
+          if (!/module|import|chunk/i.test(text)) {
+            console.warn('[shell] unrecognised pre-boot rejection, left to the deadline: ' + text.slice(0, 200));
+            return;
+          }
+          setTimeout(function () { recover('import failed: ' + text.slice(0, 120)); }, GRACE_MS);
+        });
+
+        
+        
+        
+        function watch() {
+          poll = setInterval(function () {
+            if (!hydrated()) return;
+            stop();
+            try { sessionStorage.removeItem(ATTEMPTS); } catch (e) {  }
+          }, 100);
+          deadline = setTimeout(function () {
+            if (!hydrated() && !acted) { acted = true; stuck('nothing rendered within ' + DEADLINE_MS + 'ms'); }
+          }, DEADLINE_MS);
+        }
+
+        if (document.body) watch();
+        else document.addEventListener('DOMContentLoaded', watch, { once: true });
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        // A new worker takes control as soon as it installs, which used to reload the document
+        // unconditionally: every first launch after a deploy was paid twice over, document, 897KB
+        // of script and an 838KB bootstrap, for a shell the user was already looking at. The old
+        // shell and the new worker get along (a hashed chunk missing from this generation is
+        // answered from the one before it), so the swap is only worth a reload while the screen
+        // is still blank. The new build is what the next launch loads, because this worker is
+        // already the active one by then.
+        try {
+          if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+            var swapped = false;
+            navigator.serviceWorker.addEventListener('controllerchange', function () {
+              if (swapped || hydrated()) return;
+              swapped = true;
+              afterLoad(function () { if (!hydrated()) location.reload(); });
+            });
+          }
+          // The worker says so when the server answered a background refresh with the sign-in
+          // bounce instead of the shell; it has dropped the cached documents by then, so one
+          // reload goes to the network and lands on /login rather than sitting in a dead shell.
+          if (navigator.serviceWorker) {
+            var bounced = false;
+            navigator.serviceWorker.addEventListener('message', function (event) {
+              var data = event && event.data;
+              if (!data || data.type !== 'tophat:shell-redirect' || bounced) return;
+              bounced = true;
+              afterLoad(function () { location.reload(); });
+            });
+          }
+        } catch (e) {  }
+      })();
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

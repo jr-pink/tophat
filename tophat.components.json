@@ -1,0 +1,19 @@
+{
+ "note": "Every component of tophat. depends: component ids that must be enabled with it. optional: an instance may leave it off. removable: deleting its package leaves every component that does not depend on it working. present: false for a component designed but not in this workspace yet. Read by `tophat components` (packages/deploy).",
+ "components": [
+  { "id": "linknotes", "package": "@tophat-md/linknotes", "path": "packages/linknotes", "depends": [], "optional": false, "removable": false, "provides": ["memory store", "MemoryStore interface", "cli:tophat-linknotes", "cli:tophat"] },
+  { "id": "hub", "package": "@tophat-md/linknotes", "path": "packages/linknotes", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["ciphertext-only sync hub", "service:tophat-hub"] },
+  { "id": "sources", "package": "@tophat-md/sources", "path": "packages/sources", "depends": [], "optional": true, "removable": true, "provides": ["source readers", "cli:tophat-sources"] },
+  { "id": "push", "package": "@tophat-md/push", "path": "packages/push", "depends": ["linknotes", "sources"], "optional": true, "removable": true, "provides": ["derivation", "budget", "cli:tophat-push"] },
+  { "id": "retrieval", "package": "@tophat-md/retrieval", "path": "packages/retrieval", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["corpus registry", "ask", "cli:tophat-retrieval"] },
+  { "id": "pull", "package": "@tophat-md/pull", "path": "packages/pull", "depends": ["linknotes", "push", "retrieval"], "optional": true, "removable": true, "provides": ["context assembly", "cli:tophat-ask"] },
+  { "id": "tools", "package": "@tophat-md/tools", "path": "packages/tools", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["memory tools", "MCP server", "cli:tophat-mcp"] },
+  { "id": "upkeep", "package": "@tophat-md/upkeep", "path": "packages/upkeep", "depends": ["linknotes", "push"], "optional": true, "removable": true, "provides": ["scheduler", "cli:tophat-upkeep"] },
+  { "id": "verify", "package": "@tophat-md/verify", "path": "packages/verify", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["leak and differential harnesses", "cli:tophat-verify"] },
+  { "id": "groups", "package": "@tophat-md/groups", "path": "packages/groups", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["shared group pages"] },
+  { "id": "viewer", "package": "@tophat-md/viewer", "path": "packages/viewer", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["in-browser graph viewer over the ciphertext log", "http:/graph", "cli:tophat-viewer"] },
+  { "id": "runner", "package": "@tophat-md/runner", "path": "packages/runner", "depends": ["linknotes"], "optional": true, "removable": true, "provides": ["chat runner (stream-json child)", "goals and waits"] },
+  { "id": "webchat", "package": "@tophat-md/webchat", "path": "packages/webchat", "depends": ["runner"], "optional": true, "removable": true, "provides": ["chat web app", "http:/api/health"] },
+  { "id": "deploy", "package": "@tophat-md/deploy", "path": "packages/deploy", "depends": [], "optional": true, "removable": true, "provides": ["instance config", "cli:tophat start", "cli:tophat components"] }
+ ]
+}

@@ -1,0 +1,118 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="th-hub" content=""><meta name="viewport" content="width=device-width,initial-scale=1"><title>memory graph</title>
+<style>
+html,body{margin:0;padding:0;height:100%}
+#mg{position:fixed;inset:0;background:#efe6cc;color:#111;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;overflow:hidden}
+#mg *{box-sizing:border-box}
+#mg-canvas{position:absolute;inset:0}
+#mg-bar{position:absolute;top:10px;left:10px;display:flex;gap:8px;align-items:center;z-index:5}
+#mg-bar input{font:inherit;color:#111;background:#f7f0dc;border:1px solid #111;border-radius:0;padding:3px 7px;height:26px;width:210px;outline:none}
+#mg-modes{display:flex;border:1px solid #111;background:#f7f0dc}
+#mg-modes button{font:inherit;color:#111;background:none;border:0;border-left:1px solid #111;border-radius:0;padding:0 9px;height:24px;cursor:pointer}
+#mg-modes button:first-child{border-left:0}
+#mg-modes button.on{background:#111;color:#f7f0dc}
+#mg-hits{position:absolute;top:38px;left:10px;width:210px;background:#f7f0dc;border:1px solid #111;z-index:6;display:none}
+#mg-hits div{padding:3px 7px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mg-hits div:hover,#mg-hits div.sel{background:#111;color:#f7f0dc}
+#mg-hits small{opacity:.6}
+#mg-status{position:absolute;left:10px;bottom:8px;opacity:.7;z-index:4;pointer-events:none}
+#mg-time{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);z-index:5;background:#f7f0dc;border:1px solid #111;padding:6px 10px;display:none;align-items:center;gap:10px}
+#mg-time.on{display:flex}
+#mg-time input{width:180px;accent-color:#111;margin:0}
+#mg-time span{min-width:84px;text-align:center}
+#mg-regions span{position:absolute;transform:translate(-50%,-50%);letter-spacing:.18em;text-transform:uppercase;font-size:11px;opacity:.55;pointer-events:none;white-space:nowrap}
+#mg-tip{position:absolute;z-index:8;max-width:380px;background:#f7f0dc;border:1px solid #111;padding:7px 9px;pointer-events:none;display:none;white-space:pre-wrap}
+#mg-tip .n{margin-top:5px;opacity:.9}
+#mg-tip .d{opacity:.55}
+#mg-panel{position:absolute;top:0;right:0;bottom:0;width:min(380px,92vw);background:#f7f0dc;border-left:1px solid #111;z-index:7;padding:12px 14px;overflow:auto;transform:translateX(102%);transition:transform .18s ease-out}
+#mg-panel.open{transform:none}
+#mg-panel h1{font:700 14px/1.3 ui-monospace,Menlo,monospace;margin:0 22px 2px 0}
+#mg-panel .m{opacity:.65;margin-bottom:6px}
+#mg-panel .btns{margin:8px 0;display:flex;gap:6px}
+#mg-panel .btns button{font:inherit;color:#111;background:#f7f0dc;border:1px solid #111;border-radius:0;padding:2px 8px;cursor:pointer;text-decoration:none}
+#mg-panel .btns button.open{background:#111;color:#f7f0dc}
+#mg-panel #mg-x{position:absolute;top:8px;right:10px;border:0;background:none;font:inherit;font-size:15px;padding:0;cursor:pointer}
+#mg-panel pre{white-space:pre-wrap;font:inherit;margin:8px 0;border-top:1px solid #111;padding-top:8px}
+#mg-panel .lk{margin-top:8px;border-top:1px solid #111;padding-top:6px}
+#mg-panel .lk a,#mg-panel .lk div{display:flex;justify-content:space-between;gap:8px;color:#111;text-decoration:none;cursor:pointer;padding:1px 0}
+#mg-panel .lk a span:last-child{opacity:.5}
+#mg-panel .lk a:hover span:first-child,#mg-panel .lk div:hover{text-decoration:underline}
+#mg-load{position:absolute;top:0;left:0;right:0;height:2px;z-index:20;display:none;overflow:hidden}
+#mg-load-fill{height:100%;width:0;background:#111;transition:width .12s linear}
+#mg-load.ind #mg-load-fill{width:30%!important;transition:none;animation:mg-ind 1.1s linear infinite}
+@keyframes mg-ind{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
+#mg-canvas:focus{outline:none}
+#mg-modal{position:fixed;inset:0;z-index:30;background:rgba(239,230,204,.72);display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px}
+#mg-modal[hidden]{display:none}
+#mg-mbox{position:relative;width:min(860px,100%);max-height:92vh;overflow:auto;background:#efe6cc;border:1px solid #111;padding:14px 22px 40px;font:13px/1.55 ui-monospace,Menlo,Consolas,monospace;color:#111;outline:none;overscroll-behavior:contain}
+#mg-mbox a{color:#111}
+#mg-mbox .mtop{display:flex;justify-content:space-between;margin-bottom:16px}
+#mg-mbox .mtop button{font:inherit;color:#111;background:none;border:0;border-bottom:1px solid #111;padding:0;cursor:pointer;opacity:.75}
+#mg-mbox .mtop button:hover,#mg-mbox .mtop button:focus-visible{opacity:1}
+#mg-mbox h1{font-size:18px;margin:0 0 2px}
+#mg-mbox .m{opacity:.62}
+#mg-mbox .badge{border:1px solid #111;background:#111;color:#efe6cc;padding:0 5px;margin-left:6px}
+#mg-mbox h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:400;opacity:.7;margin:24px 0 8px;border-top:1px solid #111;padding-top:8px}
+#mg-mbox .pg div{white-space:pre-wrap;margin:0 0 6px}
+#mg-mbox .nb{columns:2 300px;column-gap:28px}
+#mg-mbox .nb a{display:flex;justify-content:space-between;gap:10px;text-decoration:none;padding:1px 0;break-inside:avoid}
+#mg-mbox .nb a:hover span:first-child,#mg-mbox .nb a:focus-visible span:first-child{text-decoration:underline}
+#mg-mbox .nb a span:last-child{opacity:.5}
+#mg-mbox details summary{cursor:pointer;opacity:.62;margin:4px 0}
+#mg-mbox .nt div{margin:0 0 9px;white-space:pre-wrap}
+#mg-mbox .nt b{font-weight:400;opacity:.55;margin-right:8px}
+:focus-visible{outline:1px solid #111;outline-offset:1px}
+#th-lockbtn{font:inherit;color:#111;background:#f7f0dc;border:1px solid #111;border-radius:0;padding:0 9px;height:26px;cursor:pointer}
+#th-lock{position:fixed;inset:0;z-index:40;background:#efe6cc;display:flex;align-items:flex-start;justify-content:center;padding:12vh 16px}
+#th-lock[hidden],#th-lock [hidden]{display:none}
+#th-form{width:min(460px,100%);border:1px solid #111;background:#f7f0dc;padding:16px 20px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;color:#111}
+#th-form h1{font-size:15px;margin:0 0 4px}
+#th-form .m{opacity:.65;margin:0 0 12px}
+#th-form label{display:block;margin:0 0 10px}
+#th-form label>span{display:block;opacity:.7;margin-bottom:2px}
+#th-form input[type=password],#th-form textarea{font:inherit;color:#111;background:#efe6cc;border:1px solid #111;border-radius:0;padding:4px 7px;width:100%;outline:none;resize:vertical}
+#th-form input[type=file]{font:inherit}
+#th-form .chk{display:flex;gap:8px;align-items:center}
+#th-form .btns{display:flex;gap:8px;margin-top:4px}
+#th-form button{font:inherit;color:#111;background:#f7f0dc;border:1px solid #111;border-radius:0;padding:2px 10px;cursor:pointer}
+#th-form button[type=submit]{background:#111;color:#f7f0dc}
+#th-err{min-height:1.5em;margin:10px 0 0;opacity:.8;white-space:pre-wrap}
+</style></head>
+<body>
+<div id="mg">
+<div id="mg-canvas" tabindex="-1"></div>
+<div id="mg-load"><div id="mg-load-fill"></div></div>
+<div id="mg-regions"></div>
+<div id="mg-bar">
+<input id="mg-q" placeholder="search entity  /" autocomplete="off" spellcheck="false">
+<div id="mg-modes">
+<button data-mode="plain" class="on" title="plain force-directed layout">plain</button>
+<button data-mode="regions" title="each type pulled to its own region">regions</button>
+<button data-mode="community" title="tint by Louvain community">community</button>
+<button data-mode="local" title="the selected entity and its 2-hop neighbourhood">local</button>
+<button data-mode="time" title="only notes inside a date window">time</button>
+</div>
+<button id="th-lockbtn" title="lock: drop the decrypted view from this tab">lock</button>
+</div>
+<div id="mg-hits"></div>
+<div id="mg-time"><input id="mg-t0" type="range"><span id="mg-tl">from to</span><input id="mg-t1" type="range"></div>
+<div id="mg-status">loading</div>
+<div id="mg-tip"></div>
+<div id="mg-modal" hidden><div id="mg-mbox" role="dialog" aria-modal="true" aria-labelledby="mg-mtitle" tabindex="-1"><div id="mg-mbody"></div></div></div>
+<div id="th-lock" hidden><form id="th-form" autocomplete="off">
+<h1>memory graph</h1>
+<p class="m">Decrypted in this tab only. The hub sends ciphertext and never sees your keys.</p>
+<div id="th-new">
+<label><span>key file</span><input id="th-file" type="file" accept=".json,application/json"></label>
+<label><span>device token</span><textarea id="th-token" rows="3" spellcheck="false" placeholder="mc1...."></textarea></label>
+<label class="chk"><input id="th-keep" type="checkbox" checked> keep an encrypted copy on this device</label>
+</div>
+<label><span>passphrase</span><input id="th-pass" type="password" autocomplete="current-password"></label>
+<div class="btns"><button type="submit">open</button><button type="button" id="th-forget" hidden>forget this device</button></div>
+<div id="th-err"></div>
+</form></div>
+<div id="mg-panel"><button id="mg-x" title="close">x</button><div id="mg-pbody"></div></div>
+</div>
+<script src="/graph/libs.js"></script>
+<script src="/graph/app.js"></script>
+</body></html>

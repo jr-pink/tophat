@@ -1,0 +1,4 @@
+{
+  "note": "The private no-model roster: people whose material is never sent to a model. Empty in the product; an instance names its own file with TOPHAT_PRIVATE_PEOPLE_FILE.",
+  "people": []
+}

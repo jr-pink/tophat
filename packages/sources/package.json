@@ -1,0 +1,23 @@
+{
+  "name": "@tophat-md/sources",
+  "version": "1.0.0",
+  "description": "Source adapters for tophat: a plugin interface, a runner, file-drop and webhook, Gmail, iMessage, Beeper, IMAP, Apple, HTTP pulls",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-sources": "./bin/tophat-sources.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./webhook": "./webhook.mjs",
+    "./run": "./run.mjs",
+    "./adapters/*": "./adapters/*.mjs"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

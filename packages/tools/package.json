@@ -1,0 +1,24 @@
+{
+  "name": "@tophat-md/tools",
+  "version": "1.0.0",
+  "description": "tophat memory as agent tools: a tool registry over any MemoryStore and an MCP stdio server",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-mcp": "./bin/tophat-mcp.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./mcp": "./mcp.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/linknotes": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

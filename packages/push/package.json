@@ -1,0 +1,26 @@
+{
+  "name": "@tophat-md/push",
+  "version": "1.0.0",
+  "description": "The tophat push plane: poll sources, derive entities/notes/pages with a budget-capped model, write through any MemoryStore backend",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "tophat-push": "./bin/tophat-push.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./providers": "./providers.mjs",
+    "./derive": "./derive.mjs"
+  },
+  "dependencies": {
+    "@tophat-md/sources": "1.0.0",
+    "@tophat-md/linknotes": "1.0.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.mjs"
+  }
+}

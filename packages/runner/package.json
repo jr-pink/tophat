@@ -1,0 +1,16 @@
+{
+  "name": "@tophat-md/runner",
+  "version": "1.0.0",
+  "description": "The chat runner: a child process speaking stream-json, with goals, waits and tools",
+  "license": "MIT",
+  "author": "tophat contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "@tophat-md/linknotes": "1.0.0",
+    "linkedom": "^0.18.13"
+  }
+}
