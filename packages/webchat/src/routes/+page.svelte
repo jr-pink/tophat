@@ -7,9 +7,11 @@
   import ChatPane from '$lib/ui/ChatPane.svelte';
   import Quicklook from '$lib/ui/Quicklook.svelte';
   import SearchPalette from '$lib/ui/SearchPalette.svelte';
+  import Onboarding from '$lib/ui/Onboarding.svelte';
+  import { onboard } from '$lib/client/onboarding.js';
   import { createSession } from '$lib/client/session.js';
   import { conversationItems, emptyState } from '$lib/core/reducer.js';
-  import { reusableBlankChat } from '$lib/core/newchat.js';
+  import { reusableBlankChat, releasesTransient } from '$lib/core/newchat.js';
   import { transientFate } from '$lib/core/transient.js';
   import { readDraft } from '$lib/core/attachments.js';
   import { newChatSettings } from '$lib/client/agent-preference.js';
@@ -142,8 +144,10 @@
     { id: 'search', label: 'Search everything' },
     { id: 'incognito', label: 'Incognito chat' },
     
-    { id: 'voice', label: 'Voice mode' }
+    { id: 'voice', label: 'Voice mode' },
+    { id: 'onboarding', label: 'Replay tour' }
   ]);
+  let replayRequest = $state(0);
 
   function toggleSidebar() {
     sidebarPeek = false;
@@ -192,6 +196,7 @@
     if (id === 'search') searching = true;
     if (id === 'incognito') newIncognitoChat();
     if (id === 'voice') paneRefs[layout.focused]?.openVoice?.();
+    if (id === 'onboarding') replayRequest += 1;
   }
 
   onMount(() => {
@@ -404,6 +409,7 @@
       : null;
     const was = Boolean(state.conversations[id]?.archived);
     session.archive(id, archived);
+    if (archived) onboard('chat.archived', { chat: id });
     // Undoing a Done on the chat he was reading puts the chat back AND puts him back in it,
     // because the archive moved the pane off it.
     rememberUndo(id, archived ? 'Done:' : 'Put back:', () => {
@@ -526,9 +532,11 @@
 
   function openFork(id, { split = true } = {}) {
     if (!willSplit(layout, split, viewportPx) && !leaveIncognito(id)) return;
-    releaseTransient(id);
+    if (releasesTransient(split)) releaseTransient(id);   // a split adds a pane beside the blank one, it never drops it
     sidebarOpen = false;
-    pane('pane.openFor', { id, split, viewportPx });
+    // An explicit split is always a new pane, even when the chat is already open in another one.
+    if (split === true && layout.panels.length) paneGesture(paneStore, 'split', { chat: id });
+    else pane('pane.openFor', { id, split, viewportPx });
     activeId = layout.panels[layout.focused] ?? id;
     for (const panel of layout.panels) session.hydrate(panel);
     replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
@@ -568,11 +576,11 @@
     settlePanes();
   }
 
-  // Dragging a divider. The only thing that has to follow the pointer is the divider and the pane
-  // edges; re-wrapping every transcript to each intermediate width is what made the drag lag
-  // (measured: 60 pointer moves cost 38k layouts and 4.2s of layout, 134 of 156 frames over 20ms).
-  // So the panes keep the width they had when the drag began, clipped by their slot, and the
-  // slots alone move, once per frame. The transcripts re-wrap once, when he lets go.
+  // Dragging a divider. Panes re-wrap live, but only the bottom LIVE_SCREENS screens of each
+  // transcript (plus whatever is on screen if he is scrolled up): re-wrapping every row at every
+  // intermediate width is what made the drag lag (measured: 60 pointer moves cost 38k layouts and 4.2s
+  // of layout). Older rows get content-visibility:hidden for the drag (no layout, they keep their last
+  // size) and re-wrap once, when he lets go.
   let dragging = $state(null);
   let dragFromX = 0;
   function startDrag(index, event) {
@@ -583,13 +591,24 @@
   $effect(() => {
     if (dragging === null) return;
     const index = dragging;
-    const frozen = [...document.querySelectorAll('main > .pane-slot')]
-      .map((slot) => slot.firstElementChild)
-      .filter(Boolean);
-    for (const pane of frozen) {
-      const { width } = pane.getBoundingClientRect();
-      pane.style.flex = 'none';
-      pane.style.width = `${width}px`;
+    const LIVE_SCREENS = 2;
+    const skipped = [];
+    for (const scroller of document.querySelectorAll('main .scroller.transcript')) {
+      const view = scroller.clientHeight;
+      const rows = scroller.querySelectorAll('.vrow');
+      const bottomEdge = scroller.scrollHeight - LIVE_SCREENS * view;
+      const viewTop = scroller.scrollTop - view / 2;
+      const viewBottom = scroller.scrollTop + view * 1.5;
+      for (const row of rows) {
+        const top = row.offsetTop;
+        const end = top + row.offsetHeight;
+        const nearBottom = end >= bottomEdge;
+        const onScreen = end >= viewTop && top <= viewBottom;
+        if (nearBottom || onScreen) continue;
+        row.style.containIntrinsicSize = `auto ${Math.max(1, Math.round(row.offsetHeight))}px`;
+        row.style.contentVisibility = 'hidden';
+        skipped.push(row);
+      }
     }
     document.querySelector('main')?.classList.add('resizing');
     let lastX = dragFromX;
@@ -617,7 +636,7 @@
       window.removeEventListener('pointercancel', onUp);
       cancelAnimationFrame(frame);
       document.querySelector('main')?.classList.remove('resizing');
-      for (const pane of frozen) { pane.style.flex = ''; pane.style.width = ''; }
+      for (const row of skipped) { row.style.contentVisibility = ''; }
     };
   });
 
@@ -748,9 +767,10 @@
     const beside = willSplit(layout, split, viewportPx);
     if (!beside && !leaveIncognito(null)) return;
     const focusedId = layout.panels[layout.focused] ?? activeId;
-    // Pressing new chat while sitting in the untouched transient chat is the same intent twice:
-    // reusableBlankChat focuses this one instead of stacking another (core/newchat.js).
-    if (transientId && transientId !== focusedId) releaseTransient(null);
+    // Pressing new chat while sitting in the untouched transient chat is the same intent twice: reusableBlankChat focuses this
+    // one instead of stacking another (core/newchat.js). An explicit split never drops the blank transient chat sitting in
+    // another pane: that dropped a pane, so the new one looked like a replacement.
+    if (releasesTransient(split) && transientId && transientId !== focusedId) releaseTransient(null);
     const reuse = split === true ? null : reusableBlankChat({
       lastCreatedId: lastNewChatId,
       focusedId,
@@ -769,6 +789,7 @@
     // The agent is the one he last used (agent-preference.js); nothing stored leaves the default.
     session.create(id, { title: 'New chat', ...newChatSettings(), ...scopePayload(focusedId), ...workspacePayload() });
     pane('pane.openFor', { id, split, viewportPx });
+    onboard('chat.created', { chat: id, split });
     activeId = layout.panels[layout.focused] ?? id;
     sidebarOpen = false;
     replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
@@ -870,6 +891,7 @@
     chatState={state}
     {session}
     {activeId}
+    openIds={layout.panels}
     {status}
     open={sidebarShown || (sidebarPeek && sidebarHidden)}
     shownav={navInSidebar}
@@ -975,6 +997,8 @@
   </div>
 
   <BackgroundChat {session} online={status.online !== false && !status.offline} onnewchat={newChat} />
+
+  <Onboarding conversations={state.conversations} {status} workspaceNames={$sidebarStore.names} {replayRequest} />
 
   <UndoBar label={undoLabel} onundo={undoNow} variant="float" testid="chat-undo" />
 

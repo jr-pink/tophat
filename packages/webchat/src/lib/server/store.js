@@ -199,6 +199,8 @@ export function openLegacyStore(path) {
     ['aside', 'INTEGER NOT NULL DEFAULT 0'],
     // The named workspace the chat is filed under (core/workspaces.js); null is unfiled.
     ['workspace', 'TEXT'],
+    // The peer that runs the chat (hosts.js); null is this machine.
+    ['host', 'TEXT'],
     ['defer_until', 'TEXT'],
     ['defer_condition', 'TEXT'],
     ['deferred_at', 'TEXT']
@@ -482,6 +484,7 @@ export function openLegacyStore(path) {
       if (kind === 'conversation.aside') set('aside', content.aside ? 1 : 0);
       if (kind === 'conversation.created' && content.workspace) set('workspace', content.workspace);
       if (kind === 'conversation.workspace') set('workspace', content.workspace || null);
+      if (kind === 'conversation.host') set('host', content.host || null);
       if (kind === 'conversation.deferred') {
         set('defer_until', content.until || null);
         set('defer_condition', content.condition || null);

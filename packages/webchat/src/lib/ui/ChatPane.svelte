@@ -1,5 +1,6 @@
 <script>
   import { tick, untrack } from 'svelte';
+  import { onboard } from '$lib/client/onboarding.js';
   import ChatHeader from './ChatHeader.svelte';
   import FindBar from './FindBar.svelte';
   import Transcript from './Transcript.svelte';
@@ -819,6 +820,7 @@
 
   function send(text, attachments = []) {
     uploadFailures = [];
+    onboard('message.sent', { chat: conversationId, n: (conversation?.turns || 0) + 1 });
     session.send(conversationId, text, uploadRefs(attachments));
     // The agent he just worked with is the one his next new chat opens on.
     rememberAgent(conversation?.settings);
@@ -828,6 +830,8 @@
   function forkSend(text, attachments = [], { split = false } = {}) {
     const id = fork(null, { beside: split });
     uploadFailures = [];
+    onboard('chat.created', { chat: id, split });
+    onboard('message.sent', { chat: id, n: 1 });
     session.send(id, text, uploadRefs(attachments));
     dictation?.noteSent(text);
   }
@@ -1031,6 +1035,7 @@
       rememberAgent(next);
     }}
     onrename={(title) => session.rename(conversationId, title)}
+    onhost={(host) => session.setHost(conversationId, host)}
     onmovescope={(to, opts) => session.moveScope(conversationId, to, { ...opts, from: conversation?.scope ?? null })}
   />
 
@@ -1154,7 +1159,7 @@
     {autofocus}
     draftKey={conversationId}
     ondraft={() => session?.commitProvisional?.(conversationId)}
-    queued={status.unsentMessages ?? status.queued ?? 0}
+    queued={status.unsentByConversation ? (status.unsentByConversation[conversationId] || 0) : (status.unsentMessages ?? status.queued ?? 0)}
     online={status.online !== false && !status.offline}
     placeholder={running ? 'Correct it mid-run…' : 'Message…'}
     dictate={incognito ? null : dictateControl}

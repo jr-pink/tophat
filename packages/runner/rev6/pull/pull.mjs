@@ -14,12 +14,12 @@ import { costOf } from './call.mjs';
 import { modelFor } from './wire.mjs';
 import { providersAvailable, resolveCredentials } from './credentials.mjs';
 import { buildMessages, compactionCut, ledgerPath, openLedger } from './ledger.mjs';
-import { DATES_RULE, baselinePrompt, contextBlock, createInstructions, imageBlocksFor, landedImageBlocks, liveBlock, rootSystem, withLiveContext } from './context.mjs';
+import { DATES_RULE, baselinePrompt, contextBlock, createInstructions, imageBlocksFor, landedImageBlocks, liveBlock, publicPrompt, rootSystem, withLiveContext } from './context.mjs';
 import { continuationDecision, openGoals } from './goals.mjs';
 import { agentEnv, createTools, memoryCli, memoryStore, receiptComplete, rootAgentId, searchDeps, warmMemoryStore } from './tools.mjs';
 import { createAgents } from './agents.mjs';
-import { BACKGROUND_CALL_NOTE, BACKGROUND_CANCEL_MARK, BACKGROUND_FORK_NOTE, BACKGROUND_MARK, BACKGROUND_NOTE, BACKGROUND_TURN_PREFIX, backgroundGist, backgroundReportText,
-  backgroundResult, isBackgroundTurn } from './background.mjs';
+import { BACKGROUND_CALL_NOTE, BACKGROUND_CANCEL_MARK, BACKGROUND_FORK_NOTE, BACKGROUND_MARK, BACKGROUND_NOTE, BACKGROUND_TURN_PREFIX, backgroundGist, backgroundMinGeneratingMs, backgroundReportText,
+  backgroundResult, createLiveView, isBackgroundTurn } from './background.mjs';
 import { checkInText } from './progress.mjs';
 import { createChatTools } from './chat.mjs';
 import { INBOX_RULE, endsWithInboxRule } from '../base/inbox-rule.mjs';
@@ -74,6 +74,8 @@ const uploadHoldMs = (env) => { const v = Number(env.TOPHAT_RUNNER_UPLOAD_HOLD_M
 export function createRunner({ args, env = process.env, write = (line) => process.stdout.write(`${line}\n`), now = () => new Date().toISOString(), ledger = openLedger(ledgerPath(incognitoEnv(env))), factories = {} }) {
   env = resolveCredentials(incognitoEnv(env)).env;
   const incognito = isIncognito(env);
+  // TOPHAT_RUNNER_TRANSCRIPTS=0: this runner writes none of a chat's words to the memory store, whatever the chat's scope. For an instance whose visitors must never reach shared memory; incognito implies it.
+  const keepsNoTranscript = incognito || env.TOPHAT_RUNNER_TRANSCRIPTS === '0';
   const cwd = args.cwd || process.cwd();
   mkdirSync(cwd, { recursive: true });
   const cli = factories.memoryCli || memoryCli;
@@ -89,7 +91,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     chatWork: null, checkInTimer: null, settleTimer: null, started: false, stopped: false, restarting: false };
   const agents = env.TOPHAT_RUNNER_AGENTS === '0' ? null : (factories.agents || createAgents)({ ledger, parentSessionId: sessionId, cwd, roots: args.addDirs, env, permissionMode, model, now,
     emit: (p) => emit(p), onOwnerWord: (cb) => { state.ownerWaiters.add(cb); return () => state.ownerWaiters.delete(cb); },
-    onSettled: (id) => { if (state.stopIds.delete(id)) return settledByStop(id); announceBackground(id); return scheduleAgentWake(); }, systemContext: () => `Workspace: ${cwd}. Allowed file roots: ${tools.roots.join(', ')}. ${DATES_RULE}${incognito ? ` ${INCOGNITO_NOTE}` : ''}`, toolFactories: factories.childTools || {}, stream: factories.streamMessage || null });
+    onSettled: (id) => { if (state.stopIds.delete(id)) return settledByStop(id); announceBackground(id); return scheduleAgentWake(); }, systemContext: () => (publicPrompt(env) ? `Your tools: ${tools.specs.map((t) => t.name).join(', ')}.${incognito ? ` ${INCOGNITO_NOTE}` : ''}` : `Workspace: ${cwd}. Allowed file roots: ${tools.roots.join(', ')}. ${DATES_RULE}${incognito ? ` ${INCOGNITO_NOTE}` : ''}`), toolFactories: factories.childTools || {}, stream: factories.streamMessage || null });
   const instructions = createInstructions({ cwd, roots: args.addDirs, env });
   const goals = env.TOPHAT_RUNNER_GOAL_HOOK === '0' ? null : (factories.goals ? factories.goals(sessionId) : openGoals({ sessionId, env, now }));
   const toolEnv = agentEnv(env.TOPHAT_AGENT_ID || rootAgentId(env.TOPHAT_CONVERSATION_ID || sessionId), env);
@@ -106,7 +108,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   } });
   agents?.resumeInterrupted();
   let stableSystem = null;
-  const systemPrompt = () => (stableSystem ??= rootSystem({ cwd, tools, store, goals, agents, baseline: baselinePrompt({ env, now }), instructions: instructions.prompt(), v2: hf.size ? hf : false }) + (incognito ? `\n\n${INCOGNITO_NOTE}` : ''));
+  const systemPrompt = () => (stableSystem ??= rootSystem({ cwd, tools, store, goals, agents, baseline: baselinePrompt({ env, now }), instructions: instructions.prompt(), v2: hf.size ? hf : false, env }) + (incognito ? `\n\n${INCOGNITO_NOTE}` : ''));
   const inject = (blocks) => { ledger.append(sessionId, 'user', 'injected', blocks, now()); for (const b of blocks) emit({ type: 'user', message: { role: 'user', content: [b] }, isSynthetic: true, parent_tool_use_id: null }); };
   const stream = factories.streamMessage || streamMessage;
   const hf = harnessFeatures(env);
@@ -244,7 +246,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       automated: isAutomatedEvent(first), ownerJoined: false, archiveCall: null,
       // Background-turn state (backgroundTurn()): `sid` is the session this turn writes to, the main one until it is
       // moved; `bg` is set when it is; `opts` is the runAgent options object, whose sessionId is retargeted then.
-      sid: sessionId, bg: null, opts: null, first, fromSeq, streaming: false, streamText: '', calls: null, wakes: new Set(), log: [] };
+      sid: sessionId, bg: null, opts: null, first, fromSeq, streaming: false, streamText: '', live: createLiveView(), gen: { since: null, last: null, ms: 0 }, calls: null, wakes: new Set(), log: [] };
     if (holder) holder.turn = thisTurn;
     const out = (p) => { if (!thisTurn.bg) emit(p); };
     const lastOwnerSeq = ledger.lastOwnerSeq(sessionId);
@@ -266,6 +268,8 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       request: (m) => ({ model: m, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}), system: systemPrompt(), cache_tail_skip: 1, tools: tools.specs, max_tokens: 16_000 }),
       async beforeStep() {
         if (thisTurn.interrupted) return 'stop';
+        // A new request is a new generation segment.
+        thisTurn.gen = { since: null, last: null, ms: 0 }; thisTurn.live.reset();
         if (thisTurn.bg) {
           // A background turn drains only its own arrivals and what agent_send queued for it; the conversation's
           // jobs, reports, owner words, prefetch and compaction belong to the main session's turns.
@@ -279,15 +283,15 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         const ownerRecords = transcriptRecords(ledger, sessionId, ownerCursor, through).filter((rec) => rec.role === 'owner');
         ownerCursor = through;
         // A chat the instance's scope does not serve writes nothing to the store (chat-scope.mjs): the store files rows under the instance's own group.
-        const scopeHold = ownerRecords.length && store.installed && !incognito ? runnerChatVerdict(sessionId, env) : null;
-        if (ownerRecords.length && store.installed && goals && !state.chatWork && env.TOPHAT_RUNNER_CHAT_WORK !== '0' && !scopeHold) {
+        const scopeHold = ownerRecords.length && store.installed && !keepsNoTranscript ? runnerChatVerdict(sessionId, env) : null;
+        if (ownerRecords.length && store.installed && goals && !state.chatWork && env.TOPHAT_RUNNER_CHAT_WORK !== '0' && !keepsNoTranscript && !scopeHold) {
           state.chatWork = cli('tasks', { op: 'chat', session: sessionId, title: String(ownerRecords[0].text || '').slice(0, 200) }, { env })
             .then((res) => { if (res?.ok === false) process.stderr.write(`[rev6 pull] chat work item not made: ${res.detail || res.reason}\n`); return res; });
           // Awaited before the first request: a turn that answers fast must not end before the chat's work item exists.
           await state.chatWork.catch((error) => { process.stderr.write(`[rev6 pull] chat work item not made: ${error?.message || error}\n`); return null; });
         }
         if (scopeHold) thisTurn.sourceContext = 'The scope of this chat is not one this instance stores memory for (or could not be confirmed), so its words were not stored as raw memory rows. Do not invent source_refs.';
-        else if (ownerRecords.length && store.installed && !incognito) {
+        else if (ownerRecords.length && store.installed && !keepsNoTranscript) {
           const receipt = await cli('ingest', { records: ownerRecords }, { env, timeoutMs: 2000 });
           if (receiptComplete(ownerRecords, receipt).complete) {
             sourceIds.push(...ownerRecords.map((rec) => rec.id));
@@ -334,6 +338,8 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       },
       signal: () => thisTurn.requestStop.signal,
       onEvent(event) {
+        thisTurn.live.take(event);
+        if (event.type === 'content_block_delta') { const at = Date.now(); thisTurn.gen.since ??= at; thisTurn.gen.last = at; }
         if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') thisTurn.streamText += event.delta.text || '';
         if (thisTurn.bg) return;
         if (event.type === 'message_start') { cacheRead = event.message?.usage?.cache_read_input_tokens || 0; cacheWrite = event.message?.usage?.cache_creation_input_tokens || 0; }
@@ -345,7 +351,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         if (event.type !== 'ping') emit({ type: 'stream_event', event, parent_tool_use_id: null });
       },
       onAborted(partial, res) {
-        thisTurn.streaming = false;
+        thisTurn.streaming = false; closeGeneration(thisTurn);
         const text = partial.message.content.filter((p) => p?.type === 'text' && p.text);
         if (partial.message.id) { usage.requests += 1; for (const k of Object.keys(usage)) if (k !== 'requests') usage[k] += partial.message.usage?.[k] || 0; }
         if ((thisTurn.paceCut || thisTurn.ownerCut) && !thisTurn.interrupted) {
@@ -366,7 +372,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       },
       onStop() { const late = thisTurn.arrivals.splice(0); if (late.length) ledger.append(thisTurn.sid, 'user', 'injected', late, now()); },
       onAssistant(message) {
-        thisTurn.streaming = false;
+        thisTurn.streaming = false; closeGeneration(thisTurn);
         thisTurn.calls = message.stop_reason === 'tool_use' ? message.content.filter((p) => p.type === 'tool_use') : null;
         if (thisTurn.bg) return;
         const stale = measuredGeneration !== state.compactGeneration;
@@ -475,7 +481,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     return 'compacted';
   }
   function pushLater() {
-    if (!store.installed || env.TOPHAT_RUNNER_PUSH === '0') return;
+    if (!store.installed || env.TOPHAT_RUNNER_PUSH === '0' || keepsNoTranscript) return;
     state.pushing = (state.pushing || Promise.resolve()).then(() => new Promise((res) => setTimeout(res, 10)))
       .then(() => drainPushes({ ledger, sessionId, env, now, cli })).catch((error) => process.stderr.write(`[rev6 pull] push drain failed: ${error.message}\n`));
   }
@@ -526,7 +532,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     // so the rows that close the main session's side of the turn (streamed text, calls answered as still running, the note)
     // sit above his message in the history. Pace checks and automated events keep the old behaviour; so does a turn between
     // requests (nothing to move yet).
-    if (!pace && !isAutomatedEvent(primary) && backgroundable(state.turn)) backgroundTurn(state.turn);
+    if (!pace && !isAutomatedEvent(primary) && backgroundable(state.turn) && keepsInBackground(state.turn)) backgroundTurn(state.turn);
     const { blocks, spoken, redactions, seq: at } = intake(texts, pace ? 'pace' : 'owner');
     if (!pace) emit({ type: 'user', message: { role: 'user', content: spoken }, isReplay: true, parent_tool_use_id: null });
     if (redactions.length) process.stderr.write(`[rev6 pull] redacted ${redactions.join(', ')} from an owner message before it reached the model\n`);
@@ -565,6 +571,21 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     state.running = run;
   }
 
+  /** How long the turn's current generation segment (its latest model request) has streamed: live while it streams, its final length after. */
+  const generatingMs = (t) => (t.gen.since !== null ? Date.now() - t.gen.since : t.gen.ms);
+  const closeGeneration = (t) => { if (t.gen.since !== null) { t.gen.ms = t.gen.last - t.gen.since; t.gen.since = null; } };
+  /** A turn whose latest segment streamed for less is not moved: the old path runs (his message is queued, the request cut, calls
+   * detached; nothing forks). The threshold is config.json rev5.backgroundTurnMinGeneratingMs; unset is a loud refusal to fork,
+   * never a code default.
+   */
+  function keepsInBackground(t) {
+    try { return generatingMs(t) > (factories.backgroundMinGeneratingMs ? factories.backgroundMinGeneratingMs() : backgroundMinGeneratingMs({ env })); }
+    catch (error) {
+      process.stderr.write(`[rev6 pull] background turn not kept: ${error.message}\n`);
+      emit({ type: 'system', subtype: 'status', status: 'background_turn_config_missing', detail: error.message });
+      return false;
+    }
+  }
   /** A turn can be moved only while its model request streams or its tool calls run, and only once its loop has started. */
   const backgroundable = (t) => Boolean(t && !t.interrupted && !t.bg && t.opts && (t.streaming || t.calls?.length) && agents && typeof agents.adopt === 'function' && !state.restarting);
   /** Its model request keeps streaming and its tool calls (an Agent launch included) keep running; every row it writes
@@ -577,6 +598,8 @@ export function createRunner({ args, env = process.env, write = (line) => proces
    */
   function backgroundTurn(t) {
     const id = `${BACKGROUND_TURN_PREFIX}${randomUUID().slice(0, 8)}`, fork = `${sessionId}/agent/${id}`, gist = backgroundGist(t.first);
+    // What the turn has written so far, taken before anything moves: the new turn reads it in the note (BACKGROUND_NOTE).
+    const view = { generatingMs: generatingMs(t), streaming: t.streaming, blocks: t.live.blocks(), calls: t.calls || [] };
     try {
       ledger.ensureSession(fork, { model, cwd, forkedFrom: sessionId, at: now() });
       // Only the rows still in context, summary first, as active() orders them.
@@ -609,7 +632,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       ledger.append(sessionId, 'user', 'tool_result', answered, now());
       for (const b of answered) emit({ type: 'user', message: { role: 'user', content: [b] }, tool_use_result: b.content, parent_tool_use_id: null });
     }
-    ledger.append(sessionId, 'user', 'injected', [contextBlock('Background turn', BACKGROUND_NOTE(id))], now());
+    ledger.append(sessionId, 'user', 'injected', [contextBlock('Background turn', BACKGROUND_NOTE(id, view))], now());
     if (state.turn === t) state.turn = null;
     state.running = null;
     return id;

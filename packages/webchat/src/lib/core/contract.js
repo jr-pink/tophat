@@ -20,6 +20,8 @@ export const ACTIONS = Object.freeze({
   ASIDE: 'conversation.set_aside',
   // Which named workspace (a folded group in the sidebar) the chat is filed under; null is unfiled.
   WORKSPACE: 'conversation.set_workspace',
+  // Which peer (a hub device id, server/hosts.js) runs the chat; null is this machine.
+  HOST: 'conversation.set_host',
   DEFER: 'conversation.set_deferred',
   TOUCH: 'conversation.touch',
   READ: 'conversation.set_read',
@@ -35,6 +37,7 @@ export const EVENT_KINDS = Object.freeze([
   'conversation.archived',
   'conversation.aside',
   'conversation.workspace',
+  'conversation.host',
   'conversation.deferred',
   'conversation.meta',
   'conversation.opened',

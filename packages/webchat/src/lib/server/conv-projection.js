@@ -55,6 +55,7 @@ export function blankConversation(id, init = {}) {
     session_provider: null,
     aside: 0,
     workspace: null,
+    host: null,
     defer_until: null,
     defer_condition: null,
     deferred_at: null
@@ -105,6 +106,7 @@ export function projectEvent(record, { kind, content = {}, at, cursor = 0 }, { l
   if (kind === 'conversation.aside') patch.aside = content.aside ? 1 : 0;
   if (kind === 'conversation.created' && content.workspace) patch.workspace = content.workspace;
   if (kind === 'conversation.workspace') patch.workspace = content.workspace || null;
+  if (kind === 'conversation.host') patch.host = content.host || null;
   if (kind === 'conversation.deferred') {
     patch.defer_until = content.until || null;
     patch.defer_condition = content.condition || null;

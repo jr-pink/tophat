@@ -9,7 +9,7 @@
 // is the single path for the dropdown and for the router. Rules that do not touch storage live in
 // core/scopes.js.
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as registryModule from '../../../../runner/src/scopes/registry.mjs';
@@ -57,8 +57,11 @@ export function scopesConfig({ env = process.env, configFile = null } = {}) {
  * Adapts src/scopes/registry.mjs. `loaded` is what loadRegistry returned (the parsed registry); it
  * is where a group's `everyone` and member list come from, which decide how open the scope is.
  */
-export function registryApi(loaded, api = registryModule) {
-  const scopeEntry = (id) => loaded?.scopes?.[id] || null;
+export function registryApi(source, api = registryModule) {
+  // `source` is the parsed registry, or a function returning the current one (reloadingRegistry), so accounts added to the
+  // registry file while the server runs are known to this service as they already are to the sign-in gate.
+  const current = typeof source === 'function' ? source : () => source;
+  const scopeEntry = (id) => current()?.scopes?.[id] || null;
   const opennessFor = (id) => {
     const entry = scopeEntry(id);
     if (!entry) return opennessOf(id);
@@ -66,10 +69,20 @@ export function registryApi(loaded, api = registryModule) {
     return entry.everyone ? 2 : 1;
   };
   return {
-    accountsFor: (identity) => api.accountsFor(identity, loaded),
-    canAccess: (account, scope) => api.canAccess(account, scope, loaded),
-    listScopes: (account) => api.listScopes(account, loaded).map((entry) => ({ ...entry, openness: opennessFor(entry.id) })),
+    accountsFor: (identity) => api.accountsFor(identity, current()),
+    canAccess: (account, scope) => api.canAccess(account, scope, current()),
+    listScopes: (account) => api.listScopes(account, current()).map((entry) => ({ ...entry, openness: opennessFor(entry.id) })),
     opennessOf: opennessFor
+  };
+}
+
+/** The registry file, parsed again whenever its mtime changes (the sign-in gate already does: edge-gate.mjs registryFromFile). */
+export function reloadingRegistry(file, api = registryModule) {
+  let stamp = null, loaded = null;
+  return () => {
+    const m = statSync(file).mtimeMs;
+    if (!loaded || m !== stamp) { loaded = api.loadRegistry(file); stamp = m; }
+    return loaded;
   };
 }
 
@@ -340,7 +353,7 @@ export function scopeServiceFor(store, { runner = null, configFile = null, env =
   let registry = null;
   if (config.enabled) {
     if (!config.registryPath) throw new Error('scopes.enabled is on but scopes.registryFile names no registry');
-    registry = registryApi(registryModule.loadRegistry(config.registryPath));
+    registry = registryApi(reloadingRegistry(config.registryPath));
   }
   service = createScopeService({
     store, registry, config, hooks: hooks || scopeHooks,

@@ -79,6 +79,7 @@ export function decodeConversation(record) {
     archived: Boolean(record.archived),
     aside: Boolean(record.aside),
     workspace: record.workspace || null,
+    host: record.host || null,
     deferUntil: record.defer_until || null,
     deferCondition: record.defer_condition || null,
     deferredAt: record.deferred_at || null,

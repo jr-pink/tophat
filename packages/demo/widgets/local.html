@@ -1,0 +1,96 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: a technical drawing, blue line on cool paper */
+:root{--bg:#eef2f6;--in:#f8fafc;--ink:#173558;--dim:#5b7391;--hot:#1a64d6}
+@media (prefers-color-scheme:dark){:root{--bg:#0a141f;--in:#0e1c2b;--ink:#b9d0ee;--dim:#7390b3;--hot:#6aa8ff}}
+body{background:var(--bg);color:var(--ink);font:11px/1.3 system-ui,-apple-system,"Segoe UI",sans-serif}
+.art{flex:1;min-height:0;position:relative}
+svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+text{fill:var(--ink);font:11px system-ui,-apple-system,"Segoe UI",sans-serif}
+.t{font-weight:600;letter-spacing:.04em;text-transform:uppercase;font-size:10.5px}
+.s{fill:var(--dim);font-size:10.5px}
+.box{fill:var(--in);stroke:var(--ink);stroke-width:1.2}
+.out{fill:none;stroke:var(--ink);stroke-width:1.2}
+.dash{stroke-dasharray:4 3}
+.bound{fill:var(--in);stroke:var(--ink);stroke-width:1.4;stroke-dasharray:7 4}
+.ln{stroke:var(--ink);stroke-width:1.2;fill:none}
+.lh{stroke:var(--hot);stroke-width:1.8;fill:none}
+.pk{fill:var(--hot)}
+.arr{fill:var(--ink)}.arr.h{fill:var(--hot)}
+.lab{fill:var(--dim);font-size:10px;font-style:italic}
+.lab.h{fill:var(--hot)}
+@media (prefers-reduced-motion:reduce){.pk{display:none}}
+</style></head><body>
+<figure>
+<div class="art"><svg id="s" role="img" aria-label="what runs on your machine and what leaves it"></svg></div>
+<figcaption><b>Fig. 6</b>What runs where. Everything inside the dashed line runs on your machine, from one instance file; the only things that cross it are the prompt you send to the model provider you chose and, if you run one, sealed notes to a hub that cannot read them.</figcaption>
+</figure>
+<script>
+const NS='http://www.w3.org/2000/svg',svg=document.getElementById('s');
+const el=(n,a,t)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);if(t!=null)e.textContent=t;svg.appendChild(e);return e};
+function arrow(x1,y1,x2,y2,cls,both){
+  /* a straight line with a filled head at the end (and at the start when both) */
+  const a=Math.atan2(y2-y1,x2-x1),h=(x,y,ang)=>el('path',{d:`M${x} ${y}l${-7*Math.cos(ang-.4)} ${-7*Math.sin(ang-.4)}M${x} ${y}l${-7*Math.cos(ang+.4)} ${-7*Math.sin(ang+.4)}`,class:cls==='h'?'lh':'ln'});
+  const l=el('line',{x1,y1,x2,y2,class:cls==='h'?'lh':'ln'});if(cls==='d')l.setAttribute('stroke-dasharray','4 3');
+  h(x2,y2,a);if(both)h(x1,y1,a+Math.PI);return l;
+}
+function box(x,y,w,h,title,sub,o={}){
+  el('rect',{x,y,width:w,height:h,class:o.out?'out dash':'box'});
+  el('text',{x:x+9,y:y+16,class:'t'},title);
+  if(sub)el('text',{x:x+9,y:y+31,class:'s'},sub);
+}
+function build(){
+  svg.innerHTML='';const W=svg.clientWidth,H=svg.clientHeight;if(!W||!H)return;
+  const narrow=W<700,pad=narrow?10:18,bx=pad,bw=W-2*pad,by=16,bh=H-112;
+  /* the dashed boundary: your machine */
+  el('rect',{x:bx,y:by,width:bw,height:bh,class:'bound',rx:2});
+  const lab=el('text',{x:bx+12,y:by+4,class:'t'},'your machine');const lw=lab.getComputedTextLength();
+  /* the label sits on the line: a gap in the paper colour behind it */
+  const gap=el('rect',{x:bx+8,y:by-6,width:lw+8,height:12,fill:'var(--bg)'});svg.insertBefore(gap,lab);
+  const ml=el('text',{x:bx+bw-12,y:by+4,class:'s','text-anchor':'end'},'MIT licensed');const mw=ml.getComputedTextLength();
+  svg.insertBefore(el('rect',{x:bx+bw-12-mw-4,y:by-6,width:mw+8,height:12,fill:'var(--bg)'}),ml);
+  const ix=bx+12,iw=bw-24,sh=narrow?28:30;
+  /* the instance file runs under every part */
+  el('rect',{x:ix,y:by+18,width:iw,height:sh,class:'box'});
+  el('text',{x:ix+9,y:by+18+(narrow?17:19),class:'t'},'tophat.instance.json');
+  if(!narrow)el('text',{x:ix+iw-9,y:by+37,class:'s','text-anchor':'end'},'one file: models, scope, components; credentials are references, never values');
+  else el('text',{x:ix+iw-9,y:by+36,class:'s','text-anchor':'end'},'credentials are references');
+  const gapx=narrow?38:56,bwid=(iw-gapx)/2,bh2=narrow?40:44;
+  const r1=by+18+sh+(narrow?22:26),r2=r1+bh2+(narrow?34:36);
+  const xL=ix,xR=ix+bwid+gapx;
+  box(xL,r1,bwid,bh2,'sources',narrow?'mail, chats, files':'mail, chats, files, webhooks');
+  box(xR,r1,bwid,bh2,'chat app','127.0.0.1:4178');
+  box(xL,r2,bwid,bh2,'memory',narrow?'SQLite file':'SQLite, notes and entities');
+  box(xR,r2,bwid,bh2,'runner',narrow?'agent and tools':'the agent and its tools');
+  /* inside the boundary */
+  const mx=xL+bwid/2,rx=xR+bwid/2;
+  arrow(mx,r1+bh2,mx,r2,'',false);el('text',{x:mx+8,y:r1+bh2+22,class:'lab'},'records');
+  arrow(rx,r1+bh2,rx,r2,'',true);el('text',{x:rx+8,y:r1+bh2+22,class:'lab'},'messages');
+  arrow(xL+bwid,r2+bh2/2,xR,r2+bh2/2,'',true);el('text',{x:(xL+bwid+xR)/2,y:r2+bh2/2-6,class:'lab','text-anchor':'middle'},'recall');
+  /* the only ways out */
+  const oy=by+bh+30,oh=46,ow=Math.min(190,bwid);
+  const px=rx-ow/2>xR-4?rx-ow/2:xR,hx=Math.max(ix,mx-ow/2);
+  box(narrow?xR+bwid-ow:px,oy,ow,oh,'model provider','the one you chose');
+  box(narrow?xL:hx,oy,ow,oh,'hub (optional)','ciphertext only',{out:true});
+  const pc=(narrow?xR+bwid-ow:px)+ow/2,hc=(narrow?xL:hx)+ow/2;
+  const ya=r2+bh2;
+  arrow(rx,ya,pc,oy,'h',false);
+  const ph=el('circle',{r:3,class:'pk'});
+  arrow(mx,ya,hc,oy,'d',false);
+  el('text',{x:Math.max(rx,pc)+8,y:(ya+oy)/2+4,class:'lab h'},'prompt');
+  el('text',{x:Math.min(mx,hc)+8,y:(ya+oy)/2+4,class:'lab'},'sealed');
+  /* a packet along the one arrow that carries your words out */
+  if(!matchMedia('(prefers-reduced-motion:reduce)').matches){
+    const t0=performance.now(),D=2600,f=n=>{const p=((n-t0)%D)/D;ph.setAttribute('cx',rx+(pc-rx)*p);ph.setAttribute('cy',ya+(oy-ya)*p);ph.setAttribute('opacity',Math.sin(p*Math.PI));build.raf=requestAnimationFrame(f)};
+    cancelAnimationFrame(build.raf);build.raf=requestAnimationFrame(f);
+  }else ph.remove();
+}
+build();new ResizeObserver(build).observe(svg);
+</script></body></html>

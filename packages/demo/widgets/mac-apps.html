@@ -1,0 +1,84 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: a desktop with a dock; the icons are the only colour */
+:root{--bg:#d9dee5;--ink:#141a21;--dim:#5d6875;--dock:rgba(255,255,255,.55);--dock-line:rgba(20,26,33,.16);--ease:cubic-bezier(.2,.7,.2,1)}
+@media (prefers-color-scheme:dark){:root{--bg:#1c232c;--ink:#eef1f5;--dim:#93a0af;--dock:rgba(255,255,255,.09);--dock-line:rgba(255,255,255,.16)}}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.art{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:space-between;padding:18px 22px 16px}
+.rd{min-height:0;transition:opacity .16s ease-out}
+.rd.sw{opacity:0}
+.app{font-size:26px;font-weight:300;letter-spacing:-.01em;line-height:1.1}
+.where{margin-top:4px;color:var(--dim);font-size:12px;display:flex;align-items:center;gap:7px}
+.where i{width:7px;height:7px;border-radius:50%;border:1.5px solid var(--dim);display:inline-block}
+.where i.pub{background:var(--ink);border-color:var(--ink)}
+.eg{margin-top:14px;font:12.5px/1.6 ui-monospace,"SF Mono",Menlo,monospace}
+.eg div{overflow-wrap:anywhere}.eg .c{color:var(--ink)}.eg .c::before{content:"e.g.  ";color:var(--dim)}.eg .o{color:var(--dim);padding-left:5ch}.eg .o::before{content:"\2192  ";margin-left:-3ch;color:var(--dim)}
+.dock{align-self:center;display:flex;align-items:flex-end;gap:10px;padding:9px 12px 7px;background:var(--dock);border:1px solid var(--dock-line);border-radius:20px;max-width:100%}
+.ic{position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;border:0;background:none;padding:0;cursor:pointer;font:inherit;color:inherit}
+.ic svg{width:52px;height:52px;display:block;transition:transform .16s var(--ease);transform-origin:50% 100%}
+.ic:hover svg,.ic:focus-visible svg,.ic[aria-pressed=true] svg{transform:translateY(-5px) scale(1.1)}
+.ic:focus-visible{outline:2px solid var(--ink);outline-offset:3px;border-radius:12px}
+.ic u{width:5px;height:5px;border-radius:50%;border:1.3px solid var(--dim);background:transparent;display:block;text-decoration:none}
+.ic u.pub{background:var(--ink);border-color:var(--ink)}
+@media (min-width:561px){.app{font-size:36px}.where{font-size:13px;margin-top:6px}.eg{font-size:14px;margin-top:18px}}
+@media (min-width:700px){.ic svg{width:60px;height:60px}.dock{gap:12px}}
+@media (max-width:560px){
+  .art{padding:12px 12px 12px}.app{font-size:21px}.eg{font-size:11.5px;margin-top:9px}
+  .dock{gap:4px;padding:7px 7px 6px;border-radius:15px}.ic svg{width:34px;height:34px}
+}
+@media (max-width:340px){.art{padding:12px 8px}.dock{gap:3px;padding:6px 5px 5px}.ic svg{width:30px;height:30px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body data-shots="messages|#k-messages|click;findmy|#k-findmy|click">
+<figure>
+<div class="art">
+ <div class="rd" id="rd"><div class="app" id="app"></div><div class="where" id="where"></div><div class="eg"><div class="c" id="c"></div><div class="o" id="o"></div></div></div>
+ <div class="dock" id="dock" role="group" aria-label="apps the agent can reach"></div>
+</div>
+<figcaption><b>Fig. 3</b>The apps the agent can reach on a Mac, in a dock. A filled dot marks what ships in the public repo; a hollow dot is in the full system only. Pick an app to see an example call and what comes back.</figcaption>
+</figure>
+<script>
+const ICON={
+ contacts:'<rect width="48" height="48" rx="11" fill="#b08855"/><circle cx="24" cy="19" r="7" fill="#fff"/><path d="M10 40c1-8 7-12 14-12s13 4 14 12z" fill="#fff"/><rect x="40" y="10" width="3" height="6" rx="1.5" fill="#f3e6d0"/><rect x="40" y="19" width="3" height="6" rx="1.5" fill="#f3e6d0"/>',
+ calendar:'<rect width="48" height="48" rx="11" fill="#fff"/><path d="M0 11a11 11 0 0 1 11-11h26a11 11 0 0 1 11 11v4H0z" fill="#e5483f"/><text x="24" y="39" text-anchor="middle" font-family="system-ui,sans-serif" font-size="22" font-weight="300" fill="#222">9</text>',
+ notes:'<rect width="48" height="48" rx="11" fill="#f4c542"/><rect y="0" width="48" height="12" rx="11" fill="#e7b52a"/><path d="M10 22h28M10 29h28M10 36h18" stroke="#fff" stroke-width="2.4" stroke-linecap="round" opacity=".9"/>',
+ messages:'<rect width="48" height="48" rx="11" fill="#33c25a"/><path d="M24 11c-8.3 0-15 5.2-15 11.6 0 3.600 2 6.800 5.200 8.900-.4 2.200-1.600 4.100-3.200 5.500 3.400-.2 6.100-1.400 8-3.100 1.600.4 3.200.6 5 .6 8.300 0 15-5.200 15-11.600S32.300 11 24 11z" fill="#fff"/>',
+ browser:'<rect width="48" height="48" rx="11" fill="#2f7de1"/><circle cx="24" cy="24" r="14" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M29.500 18.500l-3.800 8-8 3.800 3.800-8z" fill="#fff"/>',
+ findmy:'<rect width="48" height="48" rx="11" fill="#2a3a2f"/><circle cx="24" cy="24" r="6" fill="none" stroke="#5fd17a" stroke-width="1.8"/><circle cx="24" cy="24" r="12" fill="none" stroke="#5fd17a" stroke-width="1.8" opacity=".6"/><circle cx="24" cy="24" r="18" fill="none" stroke="#5fd17a" stroke-width="1.8" opacity=".3"/><circle cx="24" cy="24" r="2.800" fill="#5fd17a"/>',
+ shortcuts:'<rect width="48" height="48" rx="11" fill="#6a4be0"/><rect x="10" y="10" width="17" height="17" rx="5" fill="#fff" opacity=".95"/><rect x="21" y="21" width="17" height="17" rx="5" fill="#ff6fa8"/>',
+ home:'<rect width="48" height="48" rx="11" fill="#f79a1a"/><path d="M10 24L24 12l14 12" fill="none" stroke="#fff" stroke-width="2.800" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 22v14h20V22" fill="#fff"/><rect x="21" y="27" width="6" height="9" rx="1" fill="#f79a1a"/>'
+};
+/* key, name, in the public repo, example call, example result (made-up data) */
+const A=[
+ ['contacts','Contacts',1,'contacts.find "Priya"','Priya Raman, mobile ending 0142, birthday Mar 6'],
+ ['calendar','Calendar',1,'calendar.events next 3 days','Thu 10:00 dentist; Fri 14:30 call with Sam; Sat free'],
+ ['notes','Notes',1,'notes.search "lisbon"','Lisbon trip, edited Nov 8, 14 lines'],
+ ['messages','iMessage',1,'messages.recent "Sam" --limit 2','Sam: landing at 4. Sam: can you grab the keys? (read only)'],
+ ['browser','Browser',1,'browser.open flights.example/lis','page text read, 14 results; nothing clicked without a step'],
+ ['findmy','Find My',0,'findmy.where "Priya"','Priya: 0.8 mi away, location 2 min old'],
+ ['shortcuts','Shortcuts',0,'shortcuts.run "Evening lights"','finished in 1.2 s'],
+ ['home','Apple Home',0,'home.set "Desk lamp" on','Desk lamp: on']
+];
+const dock=document.getElementById('dock'),rd=document.getElementById('rd');
+const $=id=>document.getElementById(id);
+let cur=-1,auto=true,timer=null;
+A.forEach((a,i)=>{const b=document.createElement('button');b.type='button';b.className='ic';b.id='k-'+a[0];b.setAttribute('aria-label',a[1]);b.setAttribute('aria-pressed','false');
+  b.innerHTML=`<svg viewBox="0 0 48 48" aria-hidden="true">${ICON[a[0]]}</svg><u class="${a[2]?'pub':''}"></u>`;
+  b.addEventListener('click',()=>{auto=false;clearTimeout(timer);show(i)});b.addEventListener('pointerenter',e=>{if(e.pointerType==='mouse'){auto=false;clearTimeout(timer);show(i)}});
+  dock.appendChild(b)});
+function fill(i){const a=A[i];$('app').textContent=a[1];$('where').innerHTML=`<i class="${a[2]?'pub':''}"></i>${a[2]?'in the public repo':'full system only'}`;$('c').textContent=a[3];$('o').textContent=a[4]}
+function show(i){
+  if(i===cur)return;const first=cur<0;cur=i;
+  dock.querySelectorAll('.ic').forEach((b,j)=>b.setAttribute('aria-pressed',j===i));
+  if(first||matchMedia('(prefers-reduced-motion:reduce)').matches){fill(i);return}
+  rd.classList.add('sw');setTimeout(()=>{fill(i);rd.classList.remove('sw')},160);
+}
+show(0);
+if(!matchMedia('(prefers-reduced-motion:reduce)').matches){const tick=()=>{if(!auto)return;timer=setTimeout(()=>{if(!auto)return;show((cur+1)%A.length);tick()},2600)};tick()}
+</script></body></html>

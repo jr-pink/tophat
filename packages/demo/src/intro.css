@@ -1,0 +1,48 @@
+/* The opening motion of the demo (driven by shim.js; the class names and variables are its). The real webchat is never edited: on a first
+   visit the page starts as black with only the composer, scaled up so the typing caret sits at the middle of the screen and the bar slides
+   left under it. On send, one motion and one easing bring the whole app back: the app scales and slides to its real place, the black fades,
+   the bar widens to its real width.
+   html.demo-intro      the opening (set by the page's first script, before the app paints)
+   html.demo-ready      the opening's geometry is measured and set: the bar may show
+   html.demo-intro-out  the motion back to the normal app (transitions live here only)
+   html.demo-measure    a synchronous measuring pass: the app untransformed
+   --di-ox --di-oy --di-dx --di-dy --di-s --di-pl --di-ms --di-ease   set by shim.js */
+
+html.demo-measure .app { transform: none !important; }
+
+html.demo-intro, html.demo-intro body { background: #000 !important; }
+html.demo-intro-out, html.demo-intro-out body { transition: background-color var(--di-ms) var(--di-ease); }
+
+html.demo-intro .app, html.demo-intro-out .app { transform-origin: var(--di-ox) var(--di-oy); }
+html.demo-intro .app { transform: translate(var(--di-dx), var(--di-dy)) scale(var(--di-s)); }
+html.demo-intro-out .app { transition: transform var(--di-ms) var(--di-ease); }
+
+/* the black: a layer over the whole app, under the composer */
+html.demo-intro .app::after, html.demo-intro-out .app::after { content: ""; position: absolute; inset: 0; z-index: 1000; background: #000; pointer-events: none; }
+html.demo-intro-out:not(.demo-intro) .app::after { opacity: 0; transition: opacity var(--di-ms) var(--di-ease); }
+
+/* the composer: above the black, no strip behind it, narrower, no attach button, no native caret (shim.js draws the fixed one) */
+html.demo-intro .app .composer, html.demo-intro-out .app .composer { z-index: 1001; }
+html.demo-intro .app .composer { padding-left: var(--di-pl, var(--column-pad)); padding-right: var(--di-pl, var(--column-pad)); background: transparent; border-top-color: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+html.demo-intro .app .composer .attach { opacity: 0; }
+html.demo-intro:not(.demo-ready) .app .composer { opacity: 0; }
+html.demo-intro.demo-ready .app .composer { transition: opacity 400ms ease; }
+html.demo-intro .app [data-testid="composer"] { caret-color: transparent; }
+html.demo-intro-out .app .composer { transition: padding-left var(--di-ms) var(--di-ease), padding-right var(--di-ms) var(--di-ease), background-color var(--di-ms) var(--di-ease), border-top-color var(--di-ms) var(--di-ease); }
+html.demo-intro-out .app .composer .attach { transition: opacity var(--di-ms) var(--di-ease); }
+
+/* the desktop frame of very large screens (serve.mjs's #demo-bigscreen): no window around the bar, then the window comes back */
+html.demo-intro body::before, html.demo-intro body::after { opacity: 0; }
+html.demo-intro-out body::before, html.demo-intro-out body::after { transition: opacity var(--di-ms) var(--di-ease); }
+html.demo-intro body > div[style*="contents"] { background: transparent !important; box-shadow: none !important; }
+html.demo-intro-out body > div[style*="contents"] { transition: background-color var(--di-ms) var(--di-ease), box-shadow var(--di-ms) var(--di-ease); }
+
+/* the opener never shows a pending state: no "sending" while the scripted message goes in */
+html.demo-opener [data-testid="activity"][data-phase="queued"] { visibility: hidden; }
+html.demo-opener [data-testid="user-text"].queued { opacity: 1 !important; }
+
+/* the typing caret: fixed at the middle of the screen, steady while typing, blinking after */
+#demo-caret { position: fixed; z-index: 2147482000; pointer-events: none; transform: translate(-50%, -50%); opacity: 1; transition: opacity 120ms linear; }
+#demo-caret.idle { animation: demo-caret-blink 1060ms steps(1, end) infinite; }
+#demo-caret.gone { opacity: 0; animation: none; }
+@keyframes demo-caret-blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }

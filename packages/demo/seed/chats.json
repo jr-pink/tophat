@@ -1,0 +1,420 @@
+{
+ "note": "The chats every visitor starts with. `slot` chats take their transcript from the demo's cached real turns (demo.json slots); `prompt` on a slot chat replaces the cached user message with a casual wording of the same question. The rest are written here. Fictional or about tophat itself; nothing about any person. Folder names are the chats' `workspace`; every chat is filed in one, so Inbox starts empty.",
+ "chats": [
+  {
+   "id": "opener",
+   "title": "New chat",
+   "workspace": "tophat",
+   "opener": true,
+   "messages": []
+  },
+  {
+   "id": "weekly",
+   "slot": "weekly",
+   "workspace": "tophat",
+   "title": "whats new this week",
+   "prompt": "whats new in tophat this week"
+  },
+  {
+   "id": "split",
+   "title": "workout split",
+   "workspace": "healthhh",
+   "messages": [
+    {
+     "role": "user",
+     "text": "i lift 3 days a week and i get bored of the same thing. what split should i run"
+    },
+    {
+     "role": "assistant",
+     "text": "With three days, two alternating full-body days (A and B) beat a body-part split. You hit everything about 1.5 times a week, and at equal weekly sets frequency matters less than total volume and showing up.\n\n**Day A**\n- Front squat or goblet squat, 3x5, supersetted with a seated row, 3x8\n- Dumbbell bench press, 3x8, supersetted with a hamstring curl (sliders or a machine), 3x10\n- Plank or carries to finish\n\n**Day B**\n- Romanian deadlift, 3x6, supersetted with pull-ups or a lat pulldown, 3x8\n- Overhead press, 3x6, supersetted with split squats, 2x8 per leg\n- Curls and triceps if you want them\n\nAlternate A, B, A one week and B, A, B the next. Pair exercises that use different muscles, so you rest one while you work the other and the session stays under an hour.\n\nTo progress, add a rep to every set until you hit the top of the range, then add the smallest weight jump available and drop back to the bottom. If you still get bored, rotate the accessories every 4 to 6 weeks and leave the main lifts alone; those are what you are measuring progress on."
+    },
+    {
+     "role": "user",
+     "text": "are supersets bad for strength?"
+    },
+    {
+     "role": "assistant",
+     "text": "Not if the pair doesn't compete. A squat with a row is fine; a squat with a set of lunges is not, because the second exercise tires the first. For heavy sets of 5 or fewer, take a full rest between the two lifts anyway. Supersets are for saving time on the accessory work, not for the lift you most want to get stronger."
+    }
+   ]
+  },
+  {
+   "id": "mom",
+   "title": "call mom sunday",
+   "workspace": "personal assistant project",
+   "messages": [
+    {
+     "role": "user",
+     "text": "remind me to call mom sunday"
+    },
+    {
+     "role": "assistant",
+     "text": "Done: a reminder for Sunday at 10:00 am to call your mom. If a different time suits better, say so and I will move it.\n\nDo you want me to add anything to it, like something you wanted to bring up?"
+    },
+    {
+     "role": "user",
+     "text": "yeah ask about the garden"
+    },
+    {
+     "role": "assistant",
+     "text": "Added: \"Call mom, ask about the garden.\" It will show up Sunday at 10:00 am."
+    }
+   ]
+  },
+  {
+   "id": "bench",
+   "title": "mem bench results",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "how did we do on the memory bench again"
+    },
+    {
+     "role": "assistant",
+     "text": "On our own benchmark, 99 questions about one person's real messages, workouts, sleep and code history, buried in about 300k tokens of everyday text, tophat answered **85/99**. Every system got the same input, answering model and judge:\n\n- full context: 96\n- tophat: 85\n- Grok Bot: 85\n- Mem0 (Opus): 84\n- Meta Muse: 77\n- Instinct: 76, Mem0 (Haiku): 76, an LLM keeping wiki-style notes (Opus): 76\n\nOn the 15 hardest questions from the public LongMemEval-S set, tophat scored **9/15**, tied with full context. Mem0 (Opus) got 6 and wiki-style notes 6 to 7.\n\nTwo caveats. The 99-question set is ours, so read it as a regression test, not an independent ranking. And tophat trails full context there: its weakest questions combine facts across many sessions or ask for the latest value of something that changed."
+    },
+    {
+     "role": "user",
+     "text": "why does it do ok then, if search is not embeddings"
+    },
+    {
+     "role": "assistant",
+     "text": "Four things, as far as we can tell: facts are stored as entities and links instead of loose text, every note cites the raw record it came from, search is full text with rank fusion across sources, and context for the turn is prefetched before the model starts. We have not run an ablation that proves which of those matters most, so treat that as the design reasoning, not a measured result."
+    }
+   ]
+  },
+  {
+   "id": "cave",
+   "title": "whats encyclopedia cave",
+   "workspace": "curiosity / collection",
+   "messages": [
+    {
+     "role": "user",
+     "text": "whats encyclopedia cave ??"
+    },
+    {
+     "role": "assistant",
+     "text": "I can only vouch for one public source: a personal photo page hosted at Stanford (web.stanford.edu/~siegelr/stanford/encyclopediacave.html). It is a gallery called \"Encyclopedia Cave\" from three visits, in August and December of one year and June of the next. The captions mention a library, equations, studying in caves, a copy of Origin of Species, and a note left in the cave (a line from Lovecraft). So it reads like a hidden, cave-like study spot that students visit and leave things in.\n\nWhat I could not find is an official description: where it is, who maintains it, or whether you may go in. I would not guess at any of that. If you want the real answer, ask someone who has been, since this seems to be passed along by word of mouth."
+    }
+   ]
+  },
+  {
+   "id": "release",
+   "title": "release notes v1.0.2",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "draft release notes for v1.0.2 from these commits\n- store: fix a lost note when two writers append in the same millisecond\n- webchat: sidebar folders keep their order after a reload\n- runner: a tool allow-list for instances that serve strangers\n- docs: instance file examples"
+    },
+    {
+     "role": "assistant",
+     "text": "## v1.0.2\n\n**Fixes**\n- Memory store: two writers appending in the same millisecond no longer lose a note.\n- Chat app: sidebar folders keep their order after a reload.\n\n**New**\n- Runner: `TOPHAT_RUNNER_TOOLS_ALLOW` names the only tools an instance offers. Meant for instances that serve strangers, such as a public demo; unset, nothing changes.\n\n**Docs**\n- More instance file examples.\n\nThe store fix is the one worth upgrading for, so I would lead with it."
+    },
+    {
+     "role": "user",
+     "text": "shorter. lead w the store fix"
+    },
+    {
+     "role": "assistant",
+     "text": "## v1.0.2\n\n- **Fix:** two writers appending to the memory store in the same millisecond no longer lose a note. Worth upgrading for.\n- **Fix:** chat sidebar folders keep their order after a reload.\n- **New:** `TOPHAT_RUNNER_TOOLS_ALLOW` limits a runner to the tools you name, for instances that serve strangers.\n- **Docs:** more instance file examples."
+    }
+   ]
+  },
+  {
+   "id": "pistol",
+   "title": "pistol squat progression",
+   "workspace": "healthhh",
+   "messages": [
+    {
+     "role": "user",
+     "text": "how do i work up to a pistol squat"
+    },
+    {
+     "role": "assistant",
+     "text": "A pistol is mostly three things: strength in one leg, ankle mobility, and balance with the other leg held out. Train them in this order.\n\n1. **Check the prerequisites.** You should be able to do 10 or more controlled bodyweight squats to full depth with your heels down, and a few split squats per side.\n2. **Ankle mobility.** Do knee-over-toe drills against a wall, a few sets of 10 before you train. If your heels lift in a deep squat, put a small plate under them for now and shrink it over the weeks.\n3. **Assisted pistols.** Hold a TRX strap, a door frame or a pole and use your arms only as much as you need. Fewer fingers on it each week.\n4. **Box pistols.** Sit back to a box on one leg and stand up. Start with a high box and lower it a little as it gets easy.\n5. **Eccentric negatives.** Lower yourself on one leg over 3 to 5 seconds, then stand back up using both legs. This builds the strength for the bottom position.\n6. **Counterweight.** Holding a light weight out in front (5 to 10 lb) moves your balance forward and makes a full pistol easier. Drop it once you can do it with nothing.\n\nDo it 2 or 3 times a week, 3 sets of 3 to 5 per leg, and move up a step when the top of the range feels clean. Expect weeks to months, depending on where you start.\n\nIf your knee hurts (a sharp pain, not effort), stop the set and go back a step. Keep your free leg straight and lifted; hip flexor strength is often what limits people at the end."
+    },
+    {
+     "role": "user",
+     "text": "my heel keeps lifting at the bottom"
+    },
+    {
+     "role": "assistant",
+     "text": "That is the ankle. Keep the small heel plate for now and do the wall drill every day, 2 sets of 10 per side with the heel pinned. Pistols with a raised heel are a perfectly good stop on the way: reduce the plate gradually instead of waiting until the ankle is perfect."
+    }
+   ]
+  },
+  {
+   "id": "website",
+   "title": "landing page intro",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "landing page has six features and nobody reads past the first. what leads"
+    },
+    {
+     "role": "assistant",
+     "text": "Lead with the line and the one-sentence description, then the features in the order a person decides:\n\n1. **Headline:** \"Your exobrain, for you, forever.\"\n2. **One sentence:** local, open-source agent memory and runner that gets stuff done so you can think.\n3. **Memory first:** self-hosted, structured-database-based, high recall. It is the thing the rest sits on.\n4. **Runner and chat app second:** this is what people can try, so on the live site it is the page itself.\n5. **Connectors, computer use, sharing, privacy** after that, one line each.\n6. **One call to action:** the install block, with the repo link, at the bottom.\n\nKeep each feature to one line and put the longer explanation behind a click. People who want detail will open it; the rest should still see all six."
+    },
+    {
+     "role": "user",
+     "text": "and the install part?"
+    },
+    {
+     "role": "assistant",
+     "text": "Paste-into-your-coding-agent is the right shape: it is one block, it names the repo, and it asks the agent to scan the code for privacy and security problems before it installs anything. Say plainly that setup is developer-level and works best on a Mac, so nobody is surprised."
+    }
+   ]
+  },
+  {
+   "id": "privacy",
+   "slot": "privacy",
+   "workspace": "tophat",
+   "title": "is my memory private",
+   "prompt": "wait is my memory actually private"
+  },
+  {
+   "id": "dinner",
+   "title": "plan a dinner",
+   "workspace": "personal assistant project",
+   "messages": [
+    {
+     "role": "user",
+     "text": "plan a dinner for friday, 4 people, one is vegetarian, nothing that takes more than an hour"
+    },
+    {
+     "role": "assistant",
+     "text": "Here is one that works for everyone and takes about 50 minutes:\n\n**Menu**\n- **Starter:** burrata with tomatoes and basil, bread on the side (10 minutes)\n- **Main:** mushroom and spinach pasta with garlic and parmesan, with a chicken cutlet on the side for whoever wants it (35 minutes)\n- **Dessert:** vanilla ice cream with espresso poured over it (2 minutes)\n\n**Order**\n1. Put the pasta water on and slice the mushrooms.\n2. Cook the cutlets while the water comes to a boil.\n3. Do the pasta and the mushrooms together.\n4. Assemble the starter while it all finishes.\n\nThe vegetarian eats the same pasta, so you are cooking one sauce. Want a shopping list, grouped by store section?"
+    },
+    {
+     "role": "user",
+     "text": "yes"
+    },
+    {
+     "role": "assistant",
+     "text": "**Produce:** cherry tomatoes, basil, garlic, mushrooms (500 g), baby spinach\n**Dairy:** burrata (2), parmesan, butter\n**Meat:** chicken cutlets (2)\n**Pantry:** pasta (400 g), olive oil, espresso or strong coffee\n**Bread and dessert:** a loaf of bread, vanilla ice cream\n\nCheck you have salt, pepper and olive oil at home; I left them off."
+    }
+   ]
+  },
+  {
+   "id": "values",
+   "title": "values study",
+   "workspace": "curiosity / collection",
+   "messages": [
+    {
+     "role": "user",
+     "text": "random but how do people actually figure out what their values are"
+    },
+    {
+     "role": "assistant",
+     "text": "Researchers use a few methods, and they work better than just thinking about it:\n\n- **Card sorts.** You get a deck of 50 to 100 values (honesty, adventure, security, and so on) and sort them into very important, important and not important. The forced ranking is the point: it is easy to say everything matters, and hard to keep it up when only ten cards fit in the top pile.\n- **Questionnaires.** Shalom Schwartz's work, tested across many countries, groups values into about ten broad types, such as achievement, benevolence, security and self-direction, and shows which ones tend to pull against each other.\n- **Looking at behaviour.** What you spend your time and money on, and what you are angry about, show your values more reliably than what you say. A gap between the two is the interesting part.\n- **Peak and low moments.** Write down the best and worst weeks of the last year and ask what was present or missing.\n\nA practical way to start: do a card sort once, then check it against your calendar and bank statement for a week. Where they disagree, either the values or the schedule needs to change."
+    },
+    {
+     "role": "user",
+     "text": "is the card sort worth doing alone?"
+    },
+    {
+     "role": "assistant",
+     "text": "Yes, it takes about 20 minutes and works fine alone. It works better if you do it twice, a week apart, and then look at which cards moved. The ones that stayed in the top pile both times are the ones to trust."
+    }
+   ]
+  },
+  {
+   "id": "sharing",
+   "slot": "sharing",
+   "workspace": "tophat",
+   "title": "how sharing works",
+   "prompt": "how does sharing work"
+  },
+  {
+   "id": "syncbug",
+   "title": "deleted note came back",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "bug: i deleted a note on my laptop, synced my phone, and it came back"
+    },
+    {
+     "role": "assistant",
+     "text": "That is the classic missing-tombstone shape. Check in this order:\n\n1. **Is the delete recorded as an event?** If the laptop removed the row instead of writing a delete marker, the phone has nothing to tell it the note is gone, and its copy syncs straight back.\n2. **Is the delete keyed by the note's id?** A delete that matches on text or position will miss when the other side's copy differs slightly.\n3. **Ordering.** If the phone's older \"create\" arrives after the laptop's delete, the winner must be decided by something deterministic (the delete's time or version), not by arrival order.\n4. **Reproduce it in a test** with two replicas: create on A, sync, delete on A, edit or re-sync on B, sync both ways, assert the note stays gone. Run it with the sync order reversed too.\n\nNotes in this store are append-only, so for them the fix is usually a retraction event rather than a delete. If it is retracted and still shows up, look at the read path: something is listing raw rows without applying retractions."
+    }
+   ]
+  },
+  {
+   "id": "speech",
+   "title": "dictation on a laptop",
+   "workspace": "personal assistant project",
+   "messages": [
+    {
+     "role": "user",
+     "text": "what can i run locally for dictation on an m-series laptop"
+    },
+    {
+     "role": "assistant",
+     "text": "Whisper-family models run fine: the small and medium sizes transcribe faster than real time on Apple silicon, and the large ones are workable if you can wait a few seconds per clip. Two practical notes:\n\n- Stream in short chunks and re-transcribe the tail as it grows; that is what makes dictation feel live.\n- Accuracy on names and jargon is the weak point. A custom word list, or a correction pass by a language model that has your context, fixes most of it.\n\nNothing leaves the machine either way, which is the point."
+    }
+   ]
+  },
+  {
+   "id": "graph",
+   "slot": "graph",
+   "workspace": "tophat",
+   "title": "current memory graph",
+   "prompt": "show me the current memory graph"
+  },
+  {
+   "id": "perf",
+   "title": "long chats lag",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "a chat with like 400 messages gets janky when it streams. where do i look"
+    },
+    {
+     "role": "assistant",
+     "text": "Measure first: record a performance profile while a reply streams and look at what runs on every token. The usual causes, most likely first:\n\n1. **Re-rendering everything per token.** Only the message that is streaming should update. Key each message by its id and keep finished ones static.\n2. **Re-parsing markdown for old messages.** Cache the rendered output by message id and text, so a finished message is parsed once.\n3. **Too many nodes.** Four hundred long messages is a lot of DOM. Render only what is near the viewport and keep a fixed placeholder for the rest.\n4. **Layout thrash.** Reading scroll height right after writing to the DOM forces a reflow on every token. Batch reads before writes, or update once per animation frame.\n\nThen pick a budget and test it: every interaction should paint within 100 ms, including while a reply is streaming. A long chat with a scripted stream makes a good regression test."
+    }
+   ]
+  },
+  {
+   "id": "roman",
+   "title": "roman concrete",
+   "workspace": "curiosity / collection",
+   "messages": [
+    {
+     "role": "user",
+     "text": "why did roman concrete last so long"
+    },
+    {
+     "role": "assistant",
+     "text": "Two things, one about the recipe and one about repair.\n\n1. **Recipe.** Roman builders mixed lime with volcanic ash (pozzolana). The ash reacts slowly with the lime and water over years and keeps forming new binding minerals. In harbor structures, seawater took part in that reaction and made the concrete stronger over time, not weaker.\n2. **Self-repair.** A 2023 study of Roman samples found small white lumps of lime inside the concrete. If a crack reaches one, water dissolves some of the lime and it recrystallizes, closing the crack. The authors argue the lumps come from mixing with quicklime while hot, not from sloppy mixing, which is what people used to assume.\n\nModern concrete is built for strength in a few decades, and its steel reinforcement is what usually fails first, since it rusts. Roman concrete had no steel, which helps it last."
+    }
+   ]
+  },
+  {
+   "id": "review",
+   "title": "pr review checklist",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "short checklist for reviewing a pr that touches the sync code?"
+    },
+    {
+     "role": "assistant",
+     "text": "For sync code I would check these, in order:\n\n1. **Idempotence.** Applying the same change twice must leave the same state. Look for any write that is not keyed by an id.\n2. **Ordering.** What happens if two devices send in the opposite order? There should be a deterministic winner.\n3. **Deletes.** A delete needs a tombstone, otherwise the next sync resurrects the row.\n4. **What leaves the machine.** Anything sent to a hub must already be sealed to its group key.\n5. **A test that kills the connection** halfway through a round and then retries.\n\nIf a change fails any of the first three, stop there; the rest is polish."
+    }
+   ]
+  },
+  {
+   "id": "rrf",
+   "title": "rank fusion explained",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "explain reciprocal rank fusion, i know search but not this trick"
+    },
+    {
+     "role": "assistant",
+     "text": "You have several rankers (full text, vectors, recency) that each return an ordered list. Their scores are on different scales, so you cannot add them. Reciprocal rank fusion throws the scores away and uses only the position.\n\nFor each document $d$, its fused score is\n\n$$\\text{RRF}(d) = \\sum_{r \\in R} \\frac{1}{k + \\text{rank}_r(d)}$$\n\nwhere $R$ is the set of rankers, $\\text{rank}_r(d)$ is the position of $d$ in ranker $r$'s list (1 is best), and $k$ is a constant, commonly 60, that stops the top few ranks from dominating.\n\nA document that is high in several lists beats one that is first in a single list, which is the behaviour you want from a fusion. It needs no training and no score calibration, which is why it is the default way to blend retrievers."
+    }
+   ],
+   "sidechats": [
+    {
+     "quote": "stops the top few ranks from dominating",
+     "title": "why 60?",
+     "messages": [
+      {
+       "role": "user",
+       "text": "why 60 and not 1?"
+      },
+      {
+       "role": "assistant",
+       "text": "With $k = 1$ the first place scores $1/2$ and the second $1/3$: a big gap, so one ranker's top pick wins everything. With $k = 60$ they score $1/61$ and $1/62$, nearly equal, so agreement across rankers decides. 60 comes from the original paper's tuning; the result is not sensitive to it."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "instance",
+   "slot": "instance",
+   "workspace": "tophat",
+   "title": "run my own instance",
+   "prompt": "how do i run my own instance"
+  },
+  {
+   "id": "bike",
+   "title": "bike chain skipping",
+   "workspace": "personal assistant project",
+   "messages": [
+    {
+     "role": "user",
+     "text": "chain skips under load and the rear brake squeals.. where do i start"
+    },
+    {
+     "role": "assistant",
+     "text": "Both are common and cheap. In this order:\n\n1. **Chain wear.** Measure it with a chain checker; past 0.75% stretch it is eating the cassette and skipping is the symptom. Replace the chain before the cassette goes too.\n2. **Cable tension and the derailleur hanger.** If the chain is fine, a slightly loose cable or a bent hanger gives the same skip.\n3. **Brake squeal.** Usually glazed pads or oil on the rotor. Wipe the rotor with isopropyl alcohol, sand the pads lightly, and re-bed them with a few firm stops.\n\nIf the squeal survives that, the pads are contaminated and cheaper to replace than to clean."
+    }
+   ],
+   "sidechats": [
+    {
+     "quote": "past 0.75% stretch",
+     "title": "what is 0.75%?",
+     "messages": [
+      {
+       "role": "user",
+       "text": "0.75% of what?"
+      },
+      {
+       "role": "assistant",
+       "text": "Of the chain's pitch. A new chain's links are exactly 1 inch apart; 12 links should measure 12 inches. At 12 1/16 inches the chain is 0.5% stretched, at 12 3/32 it is 0.75%. The checker tool just reads that off."
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "sourdough",
+   "title": "sourdough saturday",
+   "workspace": "personal assistant project",
+   "messages": [
+    {
+     "role": "user",
+     "text": "want to bake at 3pm saturday, work backwards for me"
+    },
+    {
+     "role": "assistant",
+     "text": "Assuming a 24 degree kitchen and an active starter:\n\n- **Fri 8:00 pm** feed the starter\n- **Sat 7:30 am** mix the dough (flour, water, 20% starter, salt)\n- **Sat 8:00 am to 12:00 pm** bulk rise with a fold every 45 minutes for the first two hours\n- **Sat 12:00 pm** shape, then into the fridge for the final proof\n- **Sat 2:15 pm** preheat the oven and pot to 245 C\n- **Sat 3:00 pm** score and bake, lid on for 20 minutes, off for 25\n\nIf the kitchen is colder, push the mix earlier by about an hour for every 3 degrees."
+    }
+   ]
+  },
+  {
+   "id": "box",
+   "slot": "box",
+   "workspace": "tophat",
+   "title": "whats in the box",
+   "prompt": "wait whats actually in the box"
+  },
+  {
+   "id": "welcome",
+   "title": "what can i ask here",
+   "workspace": "tophat",
+   "messages": [
+    {
+     "role": "user",
+     "text": "what can i even ask u"
+    },
+    {
+     "role": "assistant",
+     "text": "This is a live tophat chat, and it knows tophat: what it is, how the memory and the runner work, how sharing and encryption work, and how to install it. Ask it anything about those.\n\nThe chats in the sidebar are examples of the kind of thing it does. You can open one and keep going, fork it, select text to start a side chat, or start a new chat of your own. A few messages in, it will point you at the download."
+    }
+   ]
+  }
+ ]
+}

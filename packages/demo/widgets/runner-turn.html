@@ -1,0 +1,83 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: a terminal transcript, dark in both schemes */
+:root{--t-bg:#101112;--t-ink:#d9dbde;--t-dim:#7e848c;--t-rule:#26292d;--t-hot:#e6b45e;--t-ok:#86b894}
+@media (prefers-color-scheme:dark){:root{--t-bg:#17181a;--t-rule:#2b2e32}}
+body{background:var(--t-bg);color:var(--t-ink);font:12px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.art{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--t-bg)}
+#log{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:10px 14px 4px}
+.l{display:grid;grid-template-columns:42px minmax(0,1fr);gap:0 8px;opacity:0;transition:opacity .2s ease-out;flex:none}
+.l.in{opacity:1}
+.l time{color:var(--t-dim);font-size:10.5px;padding-top:1px;white-space:nowrap}
+.b{min-width:0;overflow-wrap:anywhere}
+.u .b{color:#fff;padding-left:2ch;text-indent:-2ch}
+.u .b::before{content:"\203a  ";color:var(--t-hot);text-indent:0}
+.note{color:var(--t-hot);padding-left:19px;font-size:11px}
+.t .b{display:flex;flex-wrap:wrap;gap:0 10px}
+.t .n{font-weight:700;color:#fff}.t .a{color:var(--t-dim)}
+.t .r{margin-left:auto;color:var(--t-dim);white-space:nowrap}
+.t.done .r{color:var(--t-ok)}
+.g{color:var(--t-dim);white-space:pre}
+.t .r.wait::after{content:"";display:inline-block;width:1ch;animation:blink 1s steps(2,start) infinite}
+.t .r.wait::before{content:"running"}
+@keyframes blink{50%{opacity:0}}
+#bar{flex:none;display:flex;align-items:center;gap:14px;padding:6px 14px;border-top:1px solid var(--t-rule);color:var(--t-dim);font-size:11px}
+#bar button{font:inherit;color:var(--t-ink);background:none;border:0;border-bottom:1px solid var(--t-dim);padding:0;margin-left:auto;cursor:pointer}
+#bar button:focus-visible{outline:1px solid var(--t-hot);outline-offset:3px}
+#st b{color:var(--t-ink);font-weight:400}
+@media (min-width:561px){body{font-size:13px;line-height:1.65}.l{grid-template-columns:48px minmax(0,1fr)}.note{padding-left:21px}}
+@media (prefers-reduced-motion:reduce){.l{transition:none}.t .r.wait::after{animation:none}}
+</style></head><body>
+<figure>
+<div class="art"><div id="log" aria-live="polite"></div><div id="bar"><span id="st"></span><button id="re" type="button">replay</button></div></div>
+<figcaption><b>Fig. 2</b>One turn in the runner, as a trace. The second message is sent while the turn is still running and is folded into it rather than queued behind it; the subagent works inside the same turn and reports back to it.</figcaption>
+</figure>
+<script>
+const log=document.getElementById('log'),st=document.getElementById('st');
+/* [ms since the previous line, kind, ...]: u user, m message sent mid-turn, a runner text, t tool call, s subagent, c subagent child, d finish a call */
+const S=[
+ [300,'u','0:00.0',"find last month's plumber invoice and file it under Home"],
+ [600,'a','0:00.7','On it. Searching your mail and files first.'],
+ [450,'t','0:01.2','memory_search','"plumber invoice"','3 hits','a1'],
+ [800,'t','0:02.0','mail_search','from:plumber newer_than:45d','1 message','a2'],
+ [750,'m','0:02.8','also tag it for taxes, I will need it in April','sent mid-turn: joins the running turn'],
+ [650,'t','0:03.5','read_document','invoice-0412.pdf','$240.00, paid','a3'],
+ [750,'s','0:04.3','subagent','file it and add the tax tag','running','a4'],
+ [650,'c','0:04.9','\u251c','task_update','move to Home/Plumbing','done','a5'],
+ [650,'c','0:05.5','\u2514','task_update','tag: taxes 2026','done','a6'],
+ [450,'d','a4','done'],
+ [550,'a','0:06.1','Filed as Home / Plumbing / invoice-0412.pdf and tagged taxes 2026. The invoice was $240.00 and is marked paid.']
+];
+const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+let run=0,timers=[],calls=0;
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function line(cls,time,html){const d=document.createElement('div');d.className='l '+cls;d.innerHTML=`<time>${time}</time><div class="b">${html}</div>`;log.appendChild(d);
+  while(log.children.length>1&&log.firstChild.getBoundingClientRect().top<log.getBoundingClientRect().top+6)log.removeChild(log.firstChild);
+  if(reduce)d.classList.add('in');else requestAnimationFrame(()=>requestAnimationFrame(()=>d.classList.add('in')));return d}
+function status(txt){st.innerHTML=txt}
+function play(){
+  run++;const me=run;timers.forEach(clearTimeout);timers=[];log.innerHTML='';calls=0;status('turn running');
+  let at=0;const els={};
+  S.forEach((s,i)=>{at+=reduce?0:s[0];timers.push(setTimeout(()=>{if(me!==run)return;
+    const k=s[1];
+    if(k==='u')line('u',s[2],esc(s[3]));
+    else if(k==='a')line('a',s[2],esc(s[3]));
+    else if(k==='m'){line('u',s[2],esc(s[3]));line('note','',esc(s[4]));status('turn running · <b>message delivered mid-turn</b>')}
+    else if(k==='t'||k==='s'){calls++;const d=line('t'+(k==='s'?' sub':''),s[2],`<span class="n">${esc(s[3])}</span><span class="a">${esc(s[4])}</span><span class="r wait"></span>`);els[s[6]]={d,res:s[5]};
+      const fin=()=>{if(me!==run)return;const e=els[s[6]];if(!e||k==='s')return;e.d.classList.add('done');const r=e.d.querySelector('.r');r.classList.remove('wait');r.textContent=e.res};
+      if(k==='t')timers.push(setTimeout(fin,reduce?0:550))}
+    else if(k==='c'){calls++;const d=line('t done',s[2],`<span class="g">  ${s[3]} </span><span class="n">${esc(s[4])}</span><span class="a">${esc(s[5])}</span><span class="r">${esc(s[6])}</span>`)}
+    else if(k==='d'){const e=els[s[2]];e.d.classList.add('done');const r=e.d.querySelector('.r');r.classList.remove('wait');r.textContent=s[3]}
+    if(i===S.length-1)timers.push(setTimeout(()=>{if(me===run)status(`turn done · <b>${calls} tool calls</b>, 1 subagent`)},reduce?0:300));
+  },at))});
+}
+document.getElementById('re').onclick=play;
+play();
+</script></body></html>

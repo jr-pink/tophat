@@ -9,7 +9,11 @@ export const COLLAPSE_AT = MIN_WIDTH * 0.7;
 export const RAIL_PX = 34;
 
 
-export const MAX_PANELS = 4;
+// MAX_OPEN is how many panes sit side by side at full width; MAX_PANELS is the backstop on panes kept at all (the rest
+// are rails). An explicit split never refuses: past MAX_OPEN the pane farthest from the new one folds to a rail, and
+// past MAX_PANELS the farthest rail is dropped (its chat stays in the sidebar).
+export const MAX_OPEN = 4;
+export const MAX_PANELS = 12;
 
 export function initial(conversationId = null) {
   if (!conversationId) return { panels: [], keys: [], collapsed: [], widths: [], focused: 0, seq: 0 };
@@ -33,15 +37,25 @@ function normalised(widths, collapsed) {
   return widths.map((width, index) => (collapsed[index] ? 0 : width / total));
 }
 
+// The pane farthest from `at`, rails first (a folded pane is the cheapest to lose), never `at` itself.
+function farthest(state, at, { openOnly = false } = {}) {
+  let best = -1;
+  let bestScore = -1;
+  state.panels.forEach((_, index) => {
+    if (index === at) return;
+    if (openOnly && state.collapsed[index]) return;
+    const score = Math.abs(index - at) + (state.collapsed[index] ? 1000 : 0);
+    if (score > bestScore) { best = index; bestScore = score; }
+  });
+  return best;
+}
+
 function insertAfter(state, at, conversationId, key = null) {
   if (state.panels.length >= MAX_PANELS) {
-    
-    
-    return replaceAt(state, at, conversationId);
+    const drop = farthest(state, at);
+    if (drop < 0) return replaceAt(state, at, conversationId);
+    return insertAfter(closeAt(state, drop), drop < at ? at - 1 : at, conversationId, key);
   }
-  
-  
-  
   const from = state.collapsed[at] ? expand(state, at) : state;
   const seq = from.seq + 1;
   const panels = [...from.panels];
@@ -52,16 +66,22 @@ function insertAfter(state, at, conversationId, key = null) {
   panels.splice(at + 1, 0, conversationId);
   keys.splice(at + 1, 0, key ?? `p${seq}`);
   collapsed.splice(at + 1, 0, false);
+  let next;
   if (donor / 2 < MIN_WIDTH) {
-    
-    
-    
     const even = panels.map((_, index) => (collapsed[index] ? 0 : 1));
-    return { panels, keys, collapsed, widths: normalised(even, collapsed), focused: at + 1, seq };
+    next = { panels, keys, collapsed, widths: normalised(even, collapsed), focused: at + 1, seq };
+  } else {
+    widths.splice(at + 1, 0, donor / 2);
+    widths[at] = donor / 2;
+    next = { panels, keys, collapsed, widths: normalised(widths, collapsed), focused: at + 1, seq };
   }
-  widths.splice(at + 1, 0, donor / 2);
-  widths[at] = donor / 2;
-  return { panels, keys, collapsed, widths: normalised(widths, collapsed), focused: at + 1, seq };
+  // Make room by folding the open pane farthest from the new one, never the new one or the one it split from.
+  while (openCount(next.collapsed) > MAX_OPEN) {
+    const fold = farthest({ ...next, collapsed: next.collapsed.map((shut, index) => shut || index === at + 1 || index === at) }, at + 1, { openOnly: true });
+    if (fold < 0) break;
+    next = { ...collapse(next, fold), focused: at + 1 };
+  }
+  return next;
 }
 
 function replaceAt(state, at, conversationId) {
@@ -118,7 +138,7 @@ export function panelPx(state, index, viewportPx) {
 export function splitFits(state, viewportPx, { comfortable = COMFORTABLE_PX } = {}) {
   if (!Number.isFinite(viewportPx) || viewportPx <= 0) return false;
   if (!state.panels.length) return false;
-  if (state.panels.length >= MAX_PANELS) return false;
+  if (openCount(state.collapsed) >= MAX_OPEN) return false;
   return panelPx(state, state.focused, viewportPx) / 2 >= comfortable;
 }
 
@@ -223,12 +243,12 @@ export function duplicatePanel(state, index) {
 }
 
 
-// A new panel with its own id, showing `chat`, right after the panel `after`. Absolute: the id already there, a
-// missing anchor, or a full row is a no-op (same state).
+// A new panel with its own id, showing `chat`, right after the panel `after`. Absolute: the id already there, or a
+// missing anchor is a no-op (same state).
 export function addPanel(state, { id, chat, after } = {}) {
   if (!isId(id) || !isId(chat) || state.keys.includes(id)) return state;
   const at = state.keys.indexOf(after);
-  if (at < 0 || state.panels.length >= MAX_PANELS) return state;
+  if (at < 0) return state;
   return insertAfter(state, at, chat, id);
 }
 

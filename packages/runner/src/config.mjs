@@ -47,7 +47,9 @@ export function loadConfig({home, configFile, overrides = {}} = {}) {
     // an installed release stays immutable code and everything that changes
     // sits under the config, state and data directories.
     rev5: {enabled: false, model: 'claude-opus-5-5', maxTokens: 16000, askRoot: null,
-      searxngUrl: null, instructionsFile: null, instructionsMaxBytes: null, cuaConfig: null, ...raw.rev5},
+      searxngUrl: null, instructionsFile: null, instructionsMaxBytes: null, cuaConfig: null,
+      // No default in code: the value lives only in config.json (rev6/pull/background.mjs refuses without it).
+      backgroundTurnMinGeneratingMs: null, ...raw.rev5},
     // Public ingress is absent until the owner declares it, so the default is
     // null rather than an empty object: nothing here guesses a hostname.
     ingress: raw.ingress === undefined ? null : raw.ingress,
@@ -252,6 +254,7 @@ export function validateRev5(rev5) {
     const value = rev5[key] ?? null;
     if (value !== null && (typeof value !== 'string' || !path.isAbsolute(value))) throw new Error(`rev5.${key} must be an absolute path or null`);
   }
+  if (rev5.backgroundTurnMinGeneratingMs !== null && (!Number.isSafeInteger(rev5.backgroundTurnMinGeneratingMs) || rev5.backgroundTurnMinGeneratingMs < 0)) throw new Error('rev5.backgroundTurnMinGeneratingMs must be an integer (milliseconds) >= 0 or unset');
   if (rev5.searxngUrl !== null && !/^https?:\/\//.test(rev5.searxngUrl || '')) throw new Error('rev5.searxngUrl must be an http(s) URL or null');
   if (rev5.mailAccounts !== undefined && rev5.mailAccounts !== null) throw new Error('rev5.mailAccounts is retired: the Gmail account list is config.json sources (kind "gmail", config.mailDir/email/stream)');
 }

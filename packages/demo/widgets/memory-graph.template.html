@@ -1,0 +1,125 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: ink on paper, one accent */
+:root{--bg:#fbfaf6;--ink:#1c1b19;--dim:#77736a;--line:#d9d5c9;--edge:#bcb7a6;--sheet:#ffffff;--hot:#c2410c}
+@media (prefers-color-scheme:dark){:root{--bg:#131312;--ink:#e9e6dd;--dim:#8f8b80;--line:#34332f;--edge:#4d4b44;--sheet:#1a1a18;--hot:#ff7a45}}
+body{background:var(--bg);color:var(--ink);font:11px/1.45 ui-monospace,"SF Mono",Menlo,monospace}
+.art{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 272px}
+#g{position:relative;min-width:0;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:pan-y}
+#pages{border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}
+.sh{border-bottom:1px solid var(--line);background:var(--sheet);min-height:0;display:flex;flex-direction:column;flex:none}
+.sh:last-child{border-bottom:0}
+.sh.open{flex:1 1 0}
+.hd{display:flex;align-items:baseline;gap:8px;padding:6px 10px;cursor:pointer;white-space:nowrap;overflow:hidden}
+.hd b{font:700 12.5px/1.2 Georgia,"Iowan Old Style",serif;overflow:hidden;text-overflow:ellipsis}
+.hd u{margin-left:auto;text-decoration:none;color:var(--dim);font-size:10px;flex:none}
+.hd b{flex:0 1 auto;min-width:0}
+.sh:not(.open) .hd:hover b{color:var(--hot)}
+.sh.open .hd{cursor:default;padding-bottom:3px}
+.bd{flex:1;min-height:0;overflow:hidden;padding:0 10px 6px;display:none;position:relative}
+.sh.open .bd{display:block}
+.bd::after{content:"";position:absolute;left:0;right:0;bottom:0;height:18px;background:linear-gradient(transparent,var(--sheet));pointer-events:none}
+.ln{display:grid;grid-template-columns:34px minmax(0,1fr);gap:0 6px;padding:2px 0;border-top:1px dotted var(--line)}
+.ln:first-child{border-top:0}
+.ln span{color:var(--dim);font-size:10px;white-space:nowrap}
+.ln p{margin:0;max-height:2.8em;overflow:hidden;font-size:10.5px;line-height:1.4}
+.pv .hd u{color:var(--hot)}
+.none{padding:10px;color:var(--dim)}
+@media (max-width:560px){
+  .art{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) 46%}
+  #pages{border-left:0;border-top:1px solid var(--line)}
+  .ln{grid-template-columns:34px minmax(0,1fr)}.ln p{white-space:nowrap;text-overflow:ellipsis}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body data-shots="page2|#pages .sh:nth-child(2) .hd|click;hover|@140_170|hover">
+<figure>
+<div class="art"><div id="g"><canvas id="c" aria-label="graph of the memory's entities"></canvas></div><div id="pages"></div></div>
+<figcaption><b>Fig. 1</b>The memory behind this site: a dot per entity, a line where notes mention two together. Hover a dot to read the page derived from its notes; click to keep it open.</figcaption>
+</figure>
+<script>
+const DATA=/*DATA*/{"open":[],"nodes":[],"links":[],"notes":0,"at":""}/*END*/;
+(()=>{
+const cv=document.getElementById('c'),cx=cv.getContext('2d'),host=document.getElementById('pages');
+const N=DATA.nodes.map((n,i)=>({...n,i,x:0,y:0,r:2.6+Math.sqrt(n.n)*.62}));
+const L=DATA.links.map(([a,b,w])=>({a:N[a],b:N[b],w}));
+const adj=N.map(()=>new Set());L.forEach(l=>{adj[l.a.i].add(l.b.i);adj[l.b.i].add(l.a.i)});
+let W=0,H=0,dpr=1,hot=-1,drag=null,front=0;
+let pinned=DATA.open.slice(0,3);
+const narrow=()=>matchMedia('(max-width:560px)').matches;
+const maxPages=()=>narrow()?2:3;
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+/* layout: Fruchterman-Reingold, run to rest before the first paint, so nothing drifts or settles in view */
+function layout(){
+  const pad=14,k=.9*Math.sqrt((W-2*pad)*(H-2*pad)/Math.max(1,N.length));
+  N.forEach((n,i)=>{const t=i/N.length*Math.PI*2+.4;n.x=W/2+Math.cos(t)*W*.3;n.y=H/2+Math.sin(t)*H*.3;});
+  let temp=Math.min(W,H)/6;
+  for(let it=0;it<320;it++){
+    const dx=N.map(()=>0),dy=N.map(()=>0);
+    for(const a of N)for(const b of N){if(a===b)continue;let x=a.x-b.x,y=a.y-b.y,d=Math.hypot(x,y)||.01,f=k*k/d;dx[a.i]+=x/d*f;dy[a.i]+=y/d*f}
+    for(const l of L){let x=l.a.x-l.b.x,y=l.a.y-l.b.y,d=Math.hypot(x,y)||.01,f=d*d/k*.2*(1+.35*Math.log(l.w));dx[l.a.i]-=x/d*f;dy[l.a.i]-=y/d*f;dx[l.b.i]+=x/d*f;dy[l.b.i]+=y/d*f}
+    for(const n of N){dx[n.i]+=(W/2-n.x)*.04;dy[n.i]+=(H/2-n.y)*.04;const m=Math.hypot(dx[n.i],dy[n.i])||1,s=Math.min(m,temp)/m;n.x+=dx[n.i]*s;n.y+=dy[n.i]*s;n.x=Math.max(pad+n.r,Math.min(W-pad-n.r,n.x));n.y=Math.max(pad+n.r,Math.min(H-pad-n.r,n.y))}
+    temp*=.985;
+  }
+}
+function size(){dpr=devicePixelRatio||1;const w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;const redo=Math.abs(w-W)>2||Math.abs(h-H)>2;W=w;H=h;cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);if(redo)layout();draw();pages()}
+const shown=()=>{const p=pinned.slice(0,maxPages());if(hot>=0&&!p.includes(hot))return{ids:[hot,...p].slice(0,maxPages()),open:hot,pv:hot};return{ids:p,open:hot>=0?hot:(p.includes(front)?front:p[0]),pv:-1}};
+function draw(){
+  if(!W)return;
+  cx.setTransform(dpr,0,0,dpr,0,0);cx.clearRect(0,0,W,H);
+  const line=css('--edge'),ink=css('--ink'),dim=css('--dim'),acc=css('--hot'),bg=css('--bg'),sh=shown(),on=sh.open;
+  const lit=new Set([on]);if(on>=0)adj[on].forEach(i=>lit.add(i));
+  for(const l of L){const e=on>=0&&(l.a.i===on||l.b.i===on);cx.strokeStyle=e?acc:line;cx.globalAlpha=on>=0&&!e?.55:1;cx.lineWidth=e?1.3:Math.min(1.6,.6+l.w*.1);cx.beginPath();cx.moveTo(l.a.x,l.a.y);cx.lineTo(l.b.x,l.b.y);cx.stroke()}
+  cx.globalAlpha=1;cx.font='10.5px ui-monospace,Menlo,monospace';cx.textBaseline='middle';
+  const placed=[],isOpen=i=>sh.ids.includes(i);
+  const order=[...N].sort((a,b)=>(isOpen(a.i)-isOpen(b.i))||(a.n-b.n));
+  for(const n of order){
+    const o=isOpen(n.i),h=n.i===on;
+    cx.beginPath();cx.arc(n.x,n.y,n.r,0,7);cx.fillStyle=o?acc:(lit.has(n.i)&&on>=0?ink:ink);cx.globalAlpha=on>=0&&!lit.has(n.i)&&!o?.4:1;cx.fill();
+    if(o){cx.beginPath();cx.arc(n.x,n.y,n.r+3,0,7);cx.strokeStyle=acc;cx.lineWidth=1;cx.stroke()}
+  }
+  cx.globalAlpha=1;
+  /* labels: opened pages and the hovered entity first, then the best-linked while there is room */
+  const want=[...N].sort((a,b)=>(isOpen(b.i)-isOpen(a.i))||(b.n-a.n));
+  for(const n of want){
+    const o=isOpen(n.i),must=o||n.i===on;if(!must&&(narrow()||n.n<30))continue;
+    let t=n.name;if(t.length>24)t=t.slice(0,23)+'…';
+    const w=cx.measureText(t).width,hit=b=>placed.some(p=>b[0]<p[0]+p[2]&&b[0]+b[2]>p[0]&&b[1]<p[1]+p[3]&&b[1]+b[3]>p[1])||N.some(m=>m!==n&&m.x+m.r+1>b[0]&&m.x-m.r-1<b[0]+b[2]&&m.y+m.r+1>b[1]&&m.y-m.r-1<b[1]+b[3]);
+    let x=n.x+n.r+5,box=[x-2,n.y-7,w+4,14];
+    if(n.x+n.r+5+w>=W-3||(!must&&hit(box))){x=n.x-n.r-5-w;box=[x-2,n.y-7,w+4,14]}
+    if(!must&&(x<2||hit(box)))continue;
+    placed.push(box);cx.fillStyle=bg;cx.globalAlpha=.8;cx.fillRect(...box);cx.globalAlpha=1;cx.fillStyle=o?acc:ink;cx.fillText(t,x,n.y+.5);
+  }
+}
+function pages(){
+  const sh=shown();let h='';
+  if(!sh.ids.length){host.innerHTML='<div class="none">click a dot to open its page</div>';return}
+  for(const id of sh.ids){
+    const n=N[id],open=id===sh.open,pg=n.page||{lines:[],total:0};
+    h+=`<section class="sh${open?' open':''}${id===sh.pv?' pv':''}" data-i="${id}"><div class="hd"><b>${esc(n.name)}</b><u>${id===sh.pv?'preview':esc(n.type)} · ${pg.total} notes</u></div>`;
+    if(open)h+='<div class="bd">'+pg.lines.map(([d,t])=>`<div class="ln"><span>${esc(d.slice(5))}</span><p>${esc(t)}</p></div>`).join('')+'</div>';
+    h+='</section>';
+  }
+  host.innerHTML=h;
+}
+function at(e){const r=cv.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=-1,bd=1e9;for(const n of N){const d=(n.x-x)**2+(n.y-y)**2;if(d<(n.r+7)**2&&d<bd){bd=d;best=n.i}}return best}
+function pin(i){pinned=[i,...pinned.filter(x=>x!==i)].slice(0,3);front=i}
+cv.addEventListener('pointermove',e=>{if(drag){const r=cv.getBoundingClientRect();drag.n.x=Math.max(8,Math.min(W-8,e.clientX-r.left));drag.n.y=Math.max(8,Math.min(H-8,e.clientY-r.top));drag.moved=true;draw();return}const h=at(e);if(h!==hot){hot=h;cv.style.cursor=h<0?'default':'pointer';draw();pages()}});
+cv.addEventListener('pointerleave',()=>{if(drag)return;if(hot!==-1){hot=-1;draw();pages()}});
+cv.addEventListener('pointerdown',e=>{const h=at(e);if(h>=0){drag={n:N[h],moved:false};hot=h;cv.setPointerCapture(e.pointerId);draw();pages()}});
+cv.addEventListener('pointerup',e=>{if(drag){pin(drag.n.i);drag=null;if(e.pointerType!=='mouse')hot=-1;draw();pages()}});
+cv.addEventListener('pointercancel',()=>{drag=null});
+host.addEventListener('click',e=>{const s=e.target.closest('.sh');if(!s)return;const i=+s.dataset.i;if(e.target.closest('.hd')&&!s.classList.contains('open')){front=i;if(!pinned.includes(i))pin(i);draw();pages()}});
+new ResizeObserver(size).observe(cv);matchMedia('(prefers-color-scheme:dark)').addEventListener('change',draw);
+addEventListener('resize',()=>{pages()});
+size();
+})();
+</script></body></html>

@@ -4,8 +4,13 @@
 //   tophat-demo seed --config demo.json                           records -> the instance replica (the group scope), then the graph snapshot
 //   tophat-demo ask --config demo.json --slot NAME [--prompt TEXT] run one real turn on the instance and cache its answer for the slot
 //   tophat-demo daily --config demo.json                          seed, then re-run every slot marked daily
+//   tophat-demo widgets|instructions --config demo.json           regenerate the memory-graph widget / the agent's standing context from their sources
+//   tophat-demo release --repo DIR [--revendor]                    (maintainer) build main and publish it for the demo user; --revendor first re-assembles packages/webchat from the upstream app when it drifted and has been quiet 2 minutes (the timer job only)
+//   tophat-demo instance --config demo.json [--check]            write seed/instance-policy.json into the instance file (--check: report only; exit 1 on a difference or any webchat row in memory)
+//   tophat-demo update --config demo.json [--root DIR]                          (demo user) install the published release into the root, restart the demo
+//   tophat-demo check [--repo DIR] [--port 4472]              exit 1 when the live demo is not on the repository's main
 //   tophat-demo serve --config demo.json                          the public surface: shell, cached chats, the graph (GET only)
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, symlinkSync, unlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,7 +25,7 @@ const config = () => {
   const dir = path.dirname(file);
   const abs = (p) => (p ? path.resolve(dir, expand(p)) : p);
   const out = { ...c, file };
-  for (const k of ['db', 'records', 'manifest', 'cache', 'snapshot', 'instance', 'viewerAssets', 'visitorDb', 'sessionSecretFile', 'visitorInstructions', 'modelKeyFile', 'modelWorkspaceFile']) out[k] = abs(c[k]);
+  for (const k of ['db', 'records', 'manifest', 'cache', 'snapshot', 'instance', 'viewerAssets', 'visitorDb', 'sessionSecretFile', 'visitorInstructions', 'modelKeyFile', 'modelWorkspaceFile', 'edgeSecretFile']) out[k] = abs(c[k]);
   if (c.turnstile) out.turnstile = { ...c.turnstile, secretFile: abs(c.turnstile.secretFile) };
   return out;
 };
@@ -45,6 +50,70 @@ if (cmd === 'export') {
   for (const s of c.slots.filter((x) => x.daily)) out.asked.push(await ask(c, s.id, null).catch((e) => ({ slot: s.id, error: e.message })));
   print(out);
   if (out.asked.some((a) => a.error)) process.exit(1);
+} else if (cmd === 'widgets') {
+  const c = config();
+  const { buildGraph } = await import('../widgets/build-graph.mjs');
+  print(buildGraph({ snapshot: c.snapshot }));
+} else if (cmd === 'instructions') {
+  const c = config();
+  const { writeInstructions } = await import('../src/instructions.mjs');
+  print(writeInstructions(c));
+} else if (cmd === 'instance') {
+  const c = config();
+  const { applyInstancePolicy, checkInstance } = await import('../src/instance-config.mjs');
+  const applied = flags.check ? null : applyInstancePolicy(c.instance);
+  const r = await checkInstance(c.instance, c.db);
+  print({ ...(applied ? { applied } : {}), ...r });
+  if (flags.check ? !r.ok : r.policy.length) process.exit(1); // an update only applies; webchat rows are the check's finding
+} else if (cmd === 'release') {
+  const { release } = await import('../src/release.mjs');
+  if (flags.revendor) {
+    const { revendor } = await import('../src/revendor.mjs');
+    const stamp = (l) => console.log(`${new Date().toISOString()} ${l}`);
+    try { revendor({ repo: expand(flags.repo || die('--repo')), node: flags.node ? expand(flags.node) : undefined, npm: flags.npm ? expand(flags.npm) : null, log: stamp }); } catch (e) { stamp(`revendor error (publishing continues): ${String(e.message || e).split('\n')[0]}`); }
+  }
+  print(release({ repo: expand(flags.repo || die('--repo')), out: flags.out ? expand(flags.out) : undefined, node: flags.node ? expand(flags.node) : undefined, npm: flags.npm ? expand(flags.npm) : null }));
+} else if (cmd === 'update') {
+  const c = config();
+  const { update } = await import('../src/release.mjs');
+  const { execFileSync } = await import('node:child_process');
+  const root = flags.root ? expand(flags.root) : path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
+  const node = process.execPath;
+  const run = (args) => execFileSync(node, [path.join(root, 'packages/demo/bin/tophat-demo.mjs'), ...args, '--config', c.file], { encoding: 'utf8' });
+  // the new release's server and the webchat's markdown must import with the dependencies the root already has (its own node_modules is linked in for the check)
+  const preflight = (staging) => {
+    const link = path.join(staging, 'node_modules');
+    const hasRoot = existsSync(path.join(root, 'node_modules'));
+    if (hasRoot && !existsSync(link)) symlinkSync(path.join(root, 'node_modules'), link);
+    try { execFileSync(node, ['--input-type=module', '-e', `await import(${JSON.stringify(path.join(staging, 'packages/demo/src/serve.mjs'))})`], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 60_000 }); }
+    catch (e) { throw new Error(String(e.stderr || e.message)); }
+    finally { if (hasRoot) { try { unlinkSync(link); } catch { /* gone */ } } }
+  };
+  const r = update({ root, out: flags.out ? expand(flags.out) : undefined, preflight, derive: () => { run(['instance']); run(['widgets']); run(['instructions']); }, restart: () => {
+    // our own processes only; launchd starts them again from the new root
+    const pids = execFileSync('pgrep', ['-u', String(process.getuid()), '-f', `${root}/packages/(deploy/bin/tophat-deploy.mjs start|webchat/serve.mjs|demo/bin/tophat-demo.mjs serve)`], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number).filter((n) => n !== process.pid);
+    for (const pid of pids) { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } }
+  }, after: async (sha) => {
+    // how long the demo was away: wait for the new build to answer, and say so in the log
+    const t0 = Date.now();
+    while (Date.now() - t0 < 60_000) {
+      const h = await fetch(`http://127.0.0.1:${c.port || 4472}/healthz`, { signal: AbortSignal.timeout(1500) }).then((x) => x.json()).catch(() => null);
+      if (h?.build === sha) { console.log(`back on ${sha.slice(0, 12)} after ${((Date.now() - t0) / 1000).toFixed(1)} s`); return; }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    console.error(`NOT back on ${sha.slice(0, 12)} after 60 s`);
+  } });
+  const { waiting, ...shown } = r;
+  print(shown);
+  await waiting;
+} else if (cmd === 'check') {
+  const { headOf, currentOf } = await import('../src/release.mjs');
+  const live = await fetch(`http://127.0.0.1:${flags.port || 4472}/healthz`).then((r) => r.json()).catch(() => null);
+  const head = flags.repo ? headOf(expand(flags.repo)) : null, published = currentOf();
+  const rows = { repoMain: head, published, live: live?.build || null };
+  print(rows);
+  const behind = (head && published !== head) || !live || (published && live.build !== published);
+  if (behind) { console.error('the demo is behind main (or down)'); process.exit(1); }
 } else if (cmd === 'serve') {
   const c = config();
   const { serve } = await import('../src/serve.mjs');

@@ -131,6 +131,10 @@ N builds plus the one served before. Never rebuild the directory a running serve
 server's lazily imported chunks vanish: every page 500s). `tophat start` without `--build` or `webchat.build` follows
 `build-current`; an explicit build is pinned and needs a restart to change.
 
+## Peers
+
+Instances on one hub are peers and a chat can live on any of them: see [peer-chat.md](peer-chat.md).
+
 ## Memory and shared work
 
 The runner's memory and task tools are `@tophat-md/linknotes`. `packages/runner/store/memory.mjs` answers every store

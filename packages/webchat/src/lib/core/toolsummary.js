@@ -493,6 +493,8 @@ function derive(tool, ctx) {
       return join([str('pattern'), str('path') && `in ${shortenPath(str('path'))}`]);
     case 'memory_search':
       return join([str('query'), str('kind')]);
+    case 'memory_list':
+      return join([str('entity'), str('term'), str('source'), str('since') && `from ${str('since')}`, str('until') && `to ${str('until')}`]);
     case 'memory_read':
       return [str('kind'), str('id')].filter(Boolean).join(' ');
     case 'memory_apply': {

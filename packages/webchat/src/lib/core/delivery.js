@@ -106,6 +106,13 @@ export function unsentMessages(state) {
   return n;
 }
 
+/** The same count per chat: a composer's outbox note is about its own chat, never the whole tab's outbox. */
+export function unsentByConversation(state) {
+  const out = {};
+  for (const action of state.outbox) if ((action.wire || action).op === 'message.send') { const cid = conversationOf(action); out[cid] = (out[cid] || 0) + 1; }
+  return out;
+}
+
 export function waitingUploadsByConversation(state) {
   const out = {};
   for (const action of state.outbox) {

@@ -23,7 +23,11 @@
     { id: 'secrets', label: 'Secrets', href: '/secrets' }
   ];
 
-  const menuItems = $derived([...items, ...ALWAYS.filter((entry) => !items.some((item) => item.id === entry.id))]);
+  // An instance that serves one surface (a public demo that is only chats) names the ids it shows in window.__tophatSurfaces
+  // before the app loads; unset, every tab and menu entry shows.
+  const surfaces = typeof window !== 'undefined' && Array.isArray(window.__tophatSurfaces) ? new Set(window.__tophatSurfaces) : null;
+  const shown = (entry) => !surfaces || surfaces.has(entry.id);
+  const menuItems = $derived([...items, ...ALWAYS.filter((entry) => !items.some((item) => item.id === entry.id))].filter(shown));
 
   function pick(id) {
     open = false;
@@ -35,7 +39,7 @@
 </script>
 
 <nav class="pill" data-testid="nav-pill" aria-label="Sections">
-  {#each TABS as tab (tab.id)}
+  {#each TABS.filter(shown) as tab (tab.id)}
     <a
       class="tab press focus-ring"
       class:active={current === tab.id}

@@ -57,6 +57,8 @@ export const panesComp = {
   actions: panesDecl.actions,
   gestures: {
     duplicate: (s, { index } = {}) => (at(s, index) ? ['pane.add', { id: ulid(), chat: s.layout.panels[index], after: at(s, index) }] : null),
+    // An explicit split: always a new pane after the focused one, even for a chat already open in another pane.
+    split: (s, { chat } = {}) => (typeof chat === 'string' && chat && s.layout.panels.length ? ['pane.add', { id: ulid(), chat, after: s.layout.keys[s.layout.focused] }] : null),
     move: (s, { index, delta } = {}) => (at(s, index) && Number.isInteger(delta) ? ['pane.move', { id: at(s, index), to: index + delta }] : null),
     resizeBy: (s, { index, delta } = {}) => (at(s, index) && Number.isFinite(delta) ? ['pane.set', { id: at(s, index), size: s.layout.widths[index] + delta }] : null),
     close: (s, { index } = {}) => (at(s, index) ? ['pane.remove', { id: at(s, index) }] : null)

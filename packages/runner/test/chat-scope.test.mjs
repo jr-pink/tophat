@@ -10,8 +10,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { chatScopeVerdict, runnerChatVerdict } from '../rev6/pull/chat-scope.mjs';
 import { drainPushes } from '../rev6/pull/pushq.mjs';
 import { openLedger } from '../rev6/pull/ledger.mjs';
+import { createRunner } from '../rev6/pull/pull.mjs';
 
 const NOW = '2026-11-08T21:00:00Z';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function instance(t, { scopesOn = true } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'tophat-chat-scope-'));
@@ -75,4 +77,43 @@ test('turn drain: scopes off ingests as before; scopes on a personal chat writes
   await unplaced.run();
   assert.deepEqual(unplaced.calls, []);
   assert.equal(unplaced.ledger.allPending().length, 1);
+});
+
+// ---- the runner: the owner's words ahead of the turn and the chat work item.
+function runner(t, env0, sessionId, conversation, extra = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chat-scope-run-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(path.join(dir, 'key'), 'sk-ant-api03-synthetic0123456789', { mode: 0o600 });
+  const ledger = openLedger(path.join(dir, 'runner.sqlite'));
+  const jobs = { adopt: () => ({ job_id: 'j' }), undelivered: () => [], running: () => [], stopAll() {} };
+  const toolsStub = () => ({ ready: async () => {}, computerPrompt: () => null, specs: [], jobs, mail: null, roots: ['/'], confined: false, closeBrowser: async () => {}, setPermissionMode() {}, abortForeground() {}, async run() { return { content: '', isError: false }; } });
+  const streamStub = async (request) => ({ id: 'm1', model: request.model, role: 'assistant', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
+  const calls = [];
+  const memoryCli = async (command, payload) => { calls.push({ command, op: payload?.op, thread: payload?.records?.[0]?.thread }); return { ok: true, stored: (payload?.records || []).map((r) => r.id), duplicates: [], rejected: [] }; };
+  const env = { ...env0, TOPHAT_CONVERSATION_ID: conversation, TOPHAT_TIMEZONE: 'America/Los_Angeles', TOPHAT_RUNNER_API_KEY_FILE: path.join(dir, 'key'), TOPHAT_STATE_DIR: path.join(dir, 'state'), TOPHAT_RUNNER_RUNNER_DB: path.join(dir, 'runner.sqlite'),
+    TOPHAT_RUNNER_DB: path.join(dir, 'memory.sqlite'), TOPHAT_RUNNER_GOALS_DIR: path.join(dir, 'goals'), TOPHAT_RUNNER_PUSH: '0', TOPHAT_RUNNER_AGENTS: '0', TOPHAT_RUNNER_VISION: '0', TOPHAT_RUNNER_GOAL_HOOK: '0', TOPHAT_RUNNER_CHAT_TOOLS: '0',
+    TOPHAT_RUNNER_NO_RETRIEVAL: '1', TOPHAT_REV6_PREFETCH_WAIT_MS: '0', ...extra };
+  const r = createRunner({ args: { sessionId, model: 'fake-model', cwd: path.join(dir, 'work'), addDirs: [] }, ledger, env, write: () => {}, factories: { tools: toolsStub, streamMessage: streamStub, memoryCli, prefetchPasses: () => [] } });
+  t.after(() => { try { r.stopKeepLedger(); ledger.close(); } catch { /* closed */ } });
+  return { r, calls };
+}
+async function ownerTurn(h) {
+  h.r.start();
+  h.r.handle({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'a private plan' }] } });
+  await sleep(5); await h.r.settled();
+}
+
+const writes = (h) => h.calls.filter((c) => ['ingest', 'tasks', 'push', 'apply'].includes(c.command));
+
+test('runner, TOPHAT_RUNNER_TRANSCRIPTS=0: nothing of a chat reaches the store, in any scope (the words ahead of the turn, the work item, the turn drain)', async (t) => {
+  const open = { TOPHAT_RUNNER_PUSH: undefined, TOPHAT_RUNNER_GOAL_HOOK: undefined };
+  // control: scopes off and the switch unset, the chat's words are ingested ahead of the turn and again by the drain
+  const control = runner(t, instance(t, { scopesOn: false }).env, 's-c-plain', 'c-plain', open);
+  await ownerTurn(control); await sleep(60);
+  assert.ok(writes(control).some((c) => c.command === 'ingest'), 'the control writes');
+  for (const [scopesOn, id] of [[false, 'c-plain'], [true, 'c-team'], [true, 'c-plain']]) {
+    const h = runner(t, instance(t, { scopesOn }).env, `s-${id}`, id, { ...open, TOPHAT_RUNNER_TRANSCRIPTS: '0' });
+    await ownerTurn(h); await sleep(60);
+    assert.deepEqual(h.calls.filter((c) => c.command !== 'search' && c.command !== 'read' && c.command !== 'status'), [], `${id}, scopes ${scopesOn ? 'on' : 'off'}: no store write and no drain`);
+  }
 });

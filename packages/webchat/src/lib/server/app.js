@@ -30,6 +30,7 @@ import { adapterFor } from './providers/contract.js';
 import { BEAT_MS, startLiveness } from './liveness.js';
 import { drainObservations, RETENTION_DAYS } from './interaction.js';
 import { agentsOwed } from './owed-work.js';
+import { createRemoteRuntimes, logDecision as remoteDecision } from './remote-runtime.js';
 import { runnerLedgerPath } from './translate.js';
 import { RETRY_SWEEP_MS, startRetryWakes, storeDeliver, storeProbe } from './retry-wakes.js';
 import { cdpEndpoint, closeConversationTabs, dueForSweep, openTabRegistry, openTabsDb, SWEEP_HOUR, sweepTabs, tabsDbPath }
@@ -360,7 +361,8 @@ function build() {
   if (!process.env.VITEST && !bootIsBuild()) startFolderDescriptions(() => store.conversations());
   const folderRouter = createRouter({
     store,
-    file: (id, workspace) => store.append(id, 'conversation.workspace', { workspace, auto: true }, { at: new Date().toISOString() })
+    file: (id, workspace) => store.append(id, 'conversation.workspace', { workspace, auto: true }, { at: new Date().toISOString() }),
+    onDecision: (entry) => remoteDecision(entry)
   });
   // Safety net under the per-message and per-turn routes (autoroute.js): a restart or a failed call
   // must not leave a routable chat unfiled for good.
@@ -376,8 +378,15 @@ function build() {
   // next server instead of ending them (runner.handoffAll / adoptHandoff). Only a real server does this,
   // and only with the relay script serve.mjs names; WEBCHAT_RELAYS=0 turns it off.
   const relays = relayConfig({ building });
-  const runner = createRunner({ store, defaultCwd: DEFAULT_CWD, liveChildren, beforeDispatch: createEvaluationCapture({ store }), onUserMessage: (id) => { if (!process.env.VITEST) folderRouter.schedule(id, 0); }, onTurnEnd: (id) => { titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); },
+  const onUserMessage = (id) => { if (!process.env.VITEST) folderRouter.schedule(id, 0); };
+  const onTurnEnd = (id) => { titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); };
+  const localRunner = createRunner({ store, defaultCwd: DEFAULT_CWD, liveChildren, beforeDispatch: createEvaluationCapture({ store }), onUserMessage, onTurnEnd,
     ...(relays ? { relaySpawnImpl: relaySpawner({ script: relays.script, dir: relays.dir }), handover: { path: relays.handover, shape: handoverShape(), accepts: acceptedHandoverShapes() } } : {}) });
+  // Chats whose host is a peer (hosts.js) are answered there and attached live into this log (remote-runtime.js);
+  // every other chat, and everything else the runner does, is the local runner unchanged.
+  const remoteRuntimes = createRemoteRuntimes({ store, onUserMessage, onTurnEnd });
+  const runner = remoteRuntimes.wrap(localRunner);
+  if (!process.env.VITEST && !building) remoteRuntimes.start();
   
   
   
@@ -538,7 +547,7 @@ function build() {
   
   
   const built = builtShapeDetail();
-  return { store, runner, auth, titler, folderRouter, splices, code: built.hash, codeFiles: built.files };
+  return { store, runner, remoteRuntimes, auth, titler, folderRouter, splices, code: built.hash, codeFiles: built.files };
 }
 
 const key = Symbol.for('tophat.webchat.app');
@@ -991,6 +1000,9 @@ export function applyAction(action, {
     case ACTIONS.WORKSPACE:
       // The catch-all's name (Inbox) files nothing: it is the unfiled set.
       store.append(id, 'conversation.workspace', { workspace: canonicalWorkspace(payload.workspace) }, { at });
+      break;
+    case ACTIONS.HOST:
+      store.append(id, 'conversation.host', { host: String(payload.host || '').trim() || null }, { at });
       break;
     case ACTIONS.DEFER:
       store.append(id, 'conversation.deferred', {

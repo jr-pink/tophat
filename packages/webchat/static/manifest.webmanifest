@@ -1,6 +1,7 @@
 {
   "name": "tophat chat",
   "short_name": "tophat",
+  "description": "A chat with an agent that remembers, running on your own machine.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f1012",

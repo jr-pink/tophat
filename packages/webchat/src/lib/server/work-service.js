@@ -38,10 +38,10 @@ export function agentTranscript(store, id, after) {
     else if (event.kind === 'message.user') rows.push({ ...base, role: 'user', text: c.text || '' });
     else if (event.kind === 'tool.started') {
       inputs.set(c.itemId, c.input == null ? '' : JSON.stringify(c.input));
-      rows.push({ ...base, role: 'tool', tool: c.tool || null });
+      rows.push({ ...base, role: 'tool', tool: c.tool || null, itemId: c.itemId || null });
     }
     else if (event.kind === 'tool.input_delta') inputs.set(c.itemId, (inputs.get(c.itemId) || '') + (c.partial || ''));
-    else if (event.kind === 'tool.completed') rows.push({ ...base, role: 'observation', tool: c.tool || null, input: inputs.get(c.itemId) || null, output: c.output, isError: c.isError });
+    else if (event.kind === 'tool.completed') rows.push({ ...base, role: 'observation', tool: c.tool || null, itemId: c.itemId || null, input: inputs.get(c.itemId) || null, output: c.output, isError: c.isError });
     else if (event.kind === 'run.completed') rows.push({ ...base, role: 'end', state: 'completed' });
     else if (event.kind === 'run.error') rows.push({ ...base, role: 'end', state: 'error', text: c.message || '' });
     else if (event.kind === 'run.cancelled') rows.push({ ...base, role: 'end', state: 'cancelled' });

@@ -30,6 +30,7 @@
     'conversation.set_archived': 'not archived',
     'conversation.set_aside': 'not set aside',
     'conversation.set_workspace': 'not moved to that workspace',
+    'conversation.set_host': 'not moved to that host',
     'conversation.set_deferred': 'not deferred',
     'conversation.set_read': 'not marked read',
     'conversation.set_settings': 'settings not saved',

@@ -3,9 +3,9 @@
 // Several routes here are doors for programs on this Mac rather than for his browser:
 // /api/inbound wakes a chat, /api/replies/projection reconciles the Beeper badge, /api/health is
 // what the deploy guard reads, and /api/agent and /api/state let a running agent touch its own chat
-// and his notes. Every one of them asks the same questions, and every one of them answered by hand:
-// the same three loopback literals in five files, with the same token read and timing-safe compare
-// copied in beside two of them.
+// and his notes. Every one of them asks the same questions, and until this module existed every one
+// of them answered by hand: the same three loopback literals in five files, with the same token read
+// and timing-safe compare copied in beside two of them.
 //
 // Five copies of an authorization rule is five places for it to drift, and the half that loosens is
 // the half nobody notices. The rule lives here:
@@ -27,9 +27,11 @@
 // chat. They differ in nothing else, and neither reads anything when the caller passes `expected` or
 // asks only about reach.
 //
-// /api/replies/projection and /api/inbound ask through this. /api/health (loopback only), /api/agent
-// and /api/state still carry their own copies; finishing that is the rest of this merge, and those
-// three are the only places that should ever grow one again.
+// /api/inbound, /api/replies/projection and /api/health ask through this; health passes no token,
+// because it is the deploy guard's probe and reveals nothing private, so loopback alone is its whole
+// gate. /api/agent and /api/state still carry their own copies of the three loopback literals and
+// the token compare; finishing that is the rest of this merge, and they are the only two places that
+// should ever grow one again.
 import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';

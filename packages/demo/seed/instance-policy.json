@@ -1,0 +1,14 @@
+{
+  "note": "What every demo instance file must carry, applied by `tophat-demo instance` (and on every update). Machine-specific values (paths, ports, PATH, keys, the token budget) stay in the instance file itself.",
+  "runner": {
+    "env": {
+      "TOPHAT_RUNNER_TOOLS_ALLOW": "memory_search,memory_read",
+      "TOPHAT_RUNNER_AGENTS": "0",
+      "TOPHAT_RUNNER_CHAT_TOOLS": "0",
+      "TOPHAT_RUNNER_GOAL_HOOK": "0",
+      "TOPHAT_RUNNER_INSTRUCTIONS_MAX_BYTES": "120000",
+      "TOPHAT_RUNNER_PROMPT_MODE": "public",
+      "TOPHAT_RUNNER_TRANSCRIPTS": "0"
+    }
+  }
+}

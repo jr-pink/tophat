@@ -1,0 +1,147 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: a small diagram in plain sans, one colour per scope */
+:root{--bg:#f4f6f8;--ink:#14191f;--dim:#65707c;--rule:#d5dbe1;--sheet:#fff;--you:#d55e00;--sam:#b4478a;--priya:#a77500;--team:#0072b2;--trip:#00855f;--ease:cubic-bezier(.2,.7,.2,1)}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1317;--ink:#e6ebf0;--dim:#8995a1;--rule:#28313a;--sheet:#151b21;--you:#ff8c42;--sam:#e7a1c8;--priya:#f0b429;--team:#56b4e9;--trip:#2fd1a0}}
+body{background:var(--bg);color:var(--ink);font:12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif}
+.art{flex:1;min-height:0;display:flex;flex-direction:column}
+.bar{flex:none;display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--rule)}
+.bar .l{color:var(--dim)}
+.seg{display:flex}
+.seg button{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--rule);margin-left:-1px;padding:3px 12px;cursor:pointer;transition:background .18s var(--ease),color .18s var(--ease)}
+.seg button:first-child{margin-left:0;border-radius:5px 0 0 5px}.seg button:last-child{border-radius:0 5px 5px 0}
+.seg button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink);position:relative}
+.seg button:focus-visible{outline:2px solid var(--team);outline-offset:1px;z-index:2;position:relative}
+.keys{margin-left:auto;color:var(--dim);white-space:nowrap}
+.main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr)}
+.gw{position:relative;min-width:0;min-height:0;border-right:1px solid var(--rule);display:flex;flex-direction:column}
+svg{flex:1;min-height:0;width:100%;display:block}
+.edge{fill:none;stroke-linecap:round;transition:opacity .22s var(--ease)}
+.edge.off{opacity:0}
+.node circle{fill:var(--bg);stroke:var(--ink);stroke-width:1.4;transition:opacity .22s var(--ease)}
+.node text{fill:var(--ink);font-size:9.5px;paint-order:stroke;stroke:var(--bg);stroke-width:3px;transition:opacity .22s var(--ease)}
+.node{cursor:pointer;transition:opacity .22s var(--ease)}.node.off{opacity:.18}.node.hub{opacity:0;pointer-events:none}.node.sel circle{fill:var(--ink)}.node.sel text{font-weight:700}
+#none{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 22px;color:var(--dim);opacity:0;pointer-events:none;transition:opacity .22s var(--ease)}
+#none.on{opacity:1}
+.leg{flex:none;display:flex;flex-wrap:wrap;gap:2px 11px;padding:0 10px 7px;font-size:10.5px;color:var(--dim)}
+.leg span{display:inline-flex;align-items:center;gap:5px;transition:opacity .22s var(--ease)}
+.leg i{display:inline-block;width:14px;height:0;border-top:2.4px solid}
+.leg span.off{opacity:.35;text-decoration:line-through}
+.pg{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--sheet)}
+.pg h3{margin:0;padding:9px 12px 2px;font:700 14px/1.25 Georgia,"Iowan Old Style",serif}
+.pg .sub{padding:0 12px 6px;color:var(--dim);font-size:10.5px}
+#rows{flex:1;min-height:0;overflow:hidden;padding:0 12px 6px}
+.r{display:grid;grid-template-columns:3px minmax(0,1fr);gap:0 8px;overflow:hidden;max-height:60px;opacity:1;margin-bottom:6px;transition:max-height .24s var(--ease),opacity .2s var(--ease),margin .24s var(--ease)}
+.r.out,.r.pre{max-height:0;opacity:0;margin-bottom:0}
+.r u{background:var(--c)}
+.r p{margin:0}.r p small{display:block;color:var(--dim);font-size:10px;margin-top:1px}
+.r.sealed{margin-bottom:3px}.r.sealed p{font:10.5px/1.4 ui-monospace,Menlo,monospace;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.r.sealed p small{display:inline!important;margin-left:8px;color:var(--ink)}
+.empty{color:var(--dim);padding:2px 0}
+@media (max-width:560px){
+  .keys{display:none}.bar{padding:6px 10px}.seg button{padding:3px 10px}
+  .main{grid-template-columns:1fr;grid-template-rows:minmax(0,.9fr) minmax(0,1.1fr)}
+  .gw{border-right:0;border-bottom:1px solid var(--rule)}
+  .leg{padding:0 8px 4px;gap:0 9px;font-size:10px}
+  .pg h3{padding:6px 10px 0;font-size:13px}.pg .sub{padding:0 10px 3px}#rows{padding:0 10px 4px}
+  .r{margin-bottom:4px;font-size:11px;line-height:1.3}.r p small{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style></head><body data-shots="sam|button[data-k=sam]|click;priya|button[data-k=priya]|click;hub|button[data-k=hub]|click">
+<figure>
+<div class="art">
+ <div class="bar"><span class="l">view as</span><div class="seg" id="seg" role="group" aria-label="whose perspective"></div><span class="keys" id="keys"></span></div>
+ <div class="main">
+  <div class="gw"><svg id="g" role="img" aria-label="entities joined by the notes that mention them"></svg><div id="none">the hub holds only sealed notes: no entities, no links</div><div class="leg" id="leg"></div></div>
+  <section class="pg"><h3 id="h"></h3><div class="sub" id="sub"></div><div id="rows" aria-live="polite"></div></section>
+ </div>
+</div>
+<figcaption><b>Fig. 5</b>The same twelve notes, drawn for four readers. A line takes the color of the scope its note was written into; switch the reader and the lines and the page for the selected entity change to what that reader's keys open.</figcaption>
+</figure>
+<script>
+const SCOPES={you:{label:'you',who:'you only'},sam:{label:'sam',who:'Sam only'},priya:{label:'priya',who:'Priya only'},team:{label:'team',who:'you, Sam, Priya'},trip:{label:'trip',who:'you, Priya'}};
+const READ={you:['you','team','trip'],sam:['sam','team'],priya:['priya','team','trip'],hub:[]};
+const WHO={you:'you',sam:'Sam',priya:'Priya',hub:'hub'};
+/* entity: name, then its place as fractions of the drawing (tall layout, flat layout) */
+const E={lisbon:['Lisbon trip',.5,.5,.45,.55],flights:['Flights',.17,.3,.1,.3],hotel:['Hotel',.83,.76,.9,.55],budget:['Budget',.5,.93,.7,.9],visa:['Visa',.83,.3,.75,.12],sam:['Sam',.17,.76,.1,.82],priya:['Priya',.5,.1,.32,.12]};
+/* note: id, scope, date, text, entities (the first two are the line's ends; every one gets the note on its page) */
+const NOTES=[
+ ['n1','team','11-02','Flights: land Mar 3, back Mar 9, one booking.',['lisbon','flights']],
+ ['n2','team','11-03','Hotel in Alfama, 6 nights, check-in after 3pm.',['lisbon','hotel']],
+ ['n3','team','11-04','Budget cap for the three of us: 3,000 euro.',['budget','lisbon']],
+ ['n4','you','11-04','My share is 1,100 euro; I would skip the nicer hotel.',['budget','lisbon','hotel']],
+ ['n5','sam','11-05','Cannot leave before Mar 5, work deadline.',['sam','lisbon']],
+ ['n6','trip','11-05','Priya takes the aisle seat; swap on the return.',['priya','flights']],
+ ['n7','priya','11-06','My passport expires Apr 12; renew before we book.',['visa','priya']],
+ ['n8','you','11-06','Ask the hotel for the sixth night free.',['hotel','budget']],
+ ['n9','team','11-07','No visa needed for stays under 90 days.',['visa','lisbon']],
+ ['n10','sam','11-07','Moving my flight to Mar 5, paying it myself.',['sam','flights']],
+ ['n11','trip','11-08','Surprise dinner for Sam\u2019s birthday on Mar 6.',['sam','lisbon','priya']],
+ ['n12','priya','11-08','Might add a day in Sintra; raise it after the budget is set.',['priya','lisbon']]
+];
+const NS='http://www.w3.org/2000/svg',svg=document.getElementById('g');
+const mk=(t,a,p)=>{const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);(p||svg).appendChild(e);return e};
+let who='you',sel='lisbon';
+const pairs={};NOTES.forEach(n=>{const k=[n[4][0],n[4][1]].sort().join('|');(pairs[k]=pairs[k]||[]).push(n)});
+const edgeEl={},nodeEl={},pos={};
+NOTES.forEach(n=>{edgeEl[n[0]]=mk('path',{class:'edge',stroke:`var(--${n[1]})`,'stroke-width':n[1]==='team'?2.6:2})});
+for(const [k,v] of Object.entries(E)){
+  const g=mk('g',{class:'node',tabindex:0,role:'button','aria-label':v[0]});mk('circle',{r:k==='lisbon'?7:5},g);
+  const t=mk('text',{'text-anchor':'middle'},g);t.textContent=v[0];
+  g.addEventListener('click',()=>{sel=k;render()});g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();sel=k;render()}});
+  nodeEl[k]=g;
+}
+/* geometry is recomputed from the real size, so the type stays 10px at any width */
+function place(){
+  const W=svg.clientWidth,H=svg.clientHeight;if(!W||!H)return;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const flat=W/H>1.7,px=flat?40:34,py=22;
+  for(const [k,v] of Object.entries(E)){const x=px+(flat?v[3]:v[1])*(W-2*px),y=py+(flat?v[4]:v[2])*(H-2*py);pos[k]=[x,y];
+    const g=nodeEl[k],c=g.firstChild,t=g.lastChild;c.setAttribute('cx',x);c.setAttribute('cy',y);t.setAttribute('x',x);t.setAttribute('y',y+(y>H-py-4&&k!=='lisbon'?16:-9))}
+  for(const list of Object.values(pairs))list.forEach((n,i)=>{
+    const a=pos[n[4][0]],b=pos[n[4][1]],off=(i-(list.length-1)/2)*16,mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2,dx=b[0]-a[0],dy=b[1]-a[1],L=Math.hypot(dx,dy)||1;
+    edgeEl[n[0]].setAttribute('d',`M${a[0]} ${a[1]}Q${mx-dy/L*off} ${my+dx/L*off} ${b[0]} ${b[1]}`)});
+}
+const seg=document.getElementById('seg');
+for(const k of Object.keys(READ)){const b=document.createElement('button');b.type='button';b.textContent=WHO[k];b.dataset.k=k;b.onclick=()=>{who=k;render()};seg.appendChild(b)}
+const leg=document.getElementById('leg'),legEl={};
+for(const [k,v] of Object.entries(SCOPES)){const s=document.createElement('span');s.title=v.who;s.innerHTML=`<i style="border-color:var(--${k})"></i>${v.label}`;leg.appendChild(s);legEl[k]=s}
+const hex=(id)=>{let s=0;for(const c of id)s=(s*31+c.charCodeAt(0))>>>0;let o='';for(let i=0;i<30;i++){s=(Math.imul(s,1103515245)+12345)>>>0;o+='0123456789abcdef'[s>>>24&15]}return o};
+const rows=document.getElementById('rows'),live=new Map();
+function row(key,color,html,cls){const r=document.createElement('div');r.className='r pre'+(cls?' '+cls:'');r.style.setProperty('--c',color);r.innerHTML='<u></u><p>'+html+'</p>';r.dataset.k=key;return r}
+function sync(want){
+  /* want: ordered [key, color, html, cls]; rows that stay are untouched, new ones open, gone ones close then leave */
+  const keys=new Set(want.map(w=>w[0]));
+  for(const [k,el] of live)if(!keys.has(k)){live.delete(k);el.classList.add('out');const rm=()=>el.remove();el.addEventListener('transitionend',e=>{if(e.propertyName==='max-height')rm()});setTimeout(rm,500)}
+  let prev=null;
+  for(const [k,c,h,cls] of want){let el=live.get(k);if(!el){el=row(k,c,h,cls);live.set(k,el);requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('pre')))}
+    const anchor=prev?prev.nextSibling:rows.firstChild;if(el.parentNode!==rows||el.previousSibling!==prev)rows.insertBefore(el,anchor);prev=el}
+}
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function render(){
+  const ok=new Set(READ[who]),hub=who==='hub';
+  document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.k===who));
+  document.getElementById('keys').textContent=hub?'holds no scope key':'keys: '+READ[who].join(', ');
+  const seen=new Set();
+  for(const n of NOTES){const v=ok.has(n[1]);edgeEl[n[0]].classList.toggle('off',!v);edgeEl[n[0]].style.pointerEvents='none';if(v)n[4].forEach(e=>seen.add(e))}
+  for(const [k,g] of Object.entries(nodeEl)){g.classList.toggle('hub',hub);g.classList.toggle('off',!hub&&!seen.has(k));g.classList.toggle('sel',!hub&&k===sel)}
+  document.getElementById('none').classList.toggle('on',hub);
+  for(const [k,s] of Object.entries(legEl))s.classList.toggle('off',!ok.has(k));
+  const h=document.getElementById('h'),sub=document.getElementById('sub');
+  if(hub){
+    h.textContent='sealed log';sub.textContent=NOTES.length+' actions, each tagged only with its group id';
+    const cap=matchMedia('(max-width:560px)').matches?6:12;
+    sync([...NOTES.slice(0,cap).map(n=>['h'+n[0],`var(--${n[1]})`,`${hex(n[0])}<small>${n[1]}</small>`,'sealed']),...(NOTES.length>cap?[['hmore','transparent',`${NOTES.length-cap} more`,'sealed']]:[])]);
+  }else{
+    const mine=NOTES.filter(n=>n[4].includes(sel)&&ok.has(n[1]));
+    h.textContent=E[sel][0];sub.textContent=mine.length?`derived from ${mine.length} note${mine.length>1?'s':''} readable as ${WHO[who]}`:`nothing readable as ${WHO[who]}`;
+    sync(mine.map(n=>[n[0],`var(--${n[1]})`,esc(n[3])+`<small>${n[2]} \u00b7 ${SCOPES[n[1]].label}</small>`,'']));
+  }
+}
+render();place();new ResizeObserver(place).observe(svg);
+</script></body></html>

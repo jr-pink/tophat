@@ -84,7 +84,9 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
     if (owed) {
       const known = new Set(owed.items.map((o) => o.id));
       let local = 0; let localMessages = 0;
-      for (const [id, action] of mine) if (!known.has(id)) { local += 1; if (action.op === ACTIONS.SEND) localMessages += 1; }
+      const byChat = { ...(owed.byConversation || {}) };
+      for (const [id, action] of mine) if (!known.has(id)) { local += 1; if (action.op === ACTIONS.SEND) { localMessages += 1; const cid = String(action.conversation_id ?? action.conversationId ?? ''); byChat[cid] = (byChat[cid] || 0) + 1; } }
+      status.unsentByConversation = byChat;
       if (local || owed.pending !== (status.queued || 0)) status.queued = owed.pending + local;
       if (localMessages || (owed.messages ?? 0) !== (status.unsentMessages || 0)) status.unsentMessages = (owed.messages ?? 0) + localMessages;
     }
@@ -226,6 +228,7 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
     archive: (id, archived) => dispatch(ACTIONS.ARCHIVE, id, { archived }),
     setAside: (id, aside) => dispatch(ACTIONS.ASIDE, id, { aside }),
     setWorkspace: (id, workspace) => dispatch(ACTIONS.WORKSPACE, id, { workspace: workspace || null }),
+    setHost: (id, host) => dispatch(ACTIONS.HOST, id, { host: host || null }),
     defer: (id, { until = null, condition = null } = {}) => dispatch(ACTIONS.DEFER, id, { until, condition }),
     touch: (id) => dispatch(ACTIONS.TOUCH, id, {}),
     markRead: (id, read = true, { mute = true } = {}) => dispatch(ACTIONS.READ, id, { read, mute, seenCursor: mute === false ? (state.cursor ?? null) : null }),

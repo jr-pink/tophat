@@ -11,6 +11,7 @@ import { spawnDurableWork, agentTranscript, deliverWorkResult } from '$lib/serve
 import { secretsDir } from '../../../lib/server/secrets.js';
 import { cleanTitle } from '$lib/core/arrival-title.js';
 import { canonicalWorkspace } from '$lib/core/workspaces.js';
+import { conversationEventStream, SSE_HEADERS } from '$lib/server/conversation-stream.js';
 
 const SECRETS = secretsDir();
 
@@ -202,6 +203,15 @@ export async function POST({ request, getClientAddress }) {
     if (!app.store.conversation(id)) return json({ error: `no conversation ${id}` }, { status: 404 });
     const interrupted = app.runner.interrupt(id, { cancelQueued: false });
     return json({ id, interrupted, phase: app.runner.phase(id) }, { headers: { 'cache-control': 'no-store' } });
+  }
+
+  // A peer attaching a chat that lives here: the chat's live events as the same frames a browser tab reads on /api/events
+  // (conversation-stream.js). Resumes from the store cursor `after`; the answer stays open until the caller disconnects.
+  if (op === 'events') {
+    const id = String(body.conversationId || '');
+    if (!app.store.conversation(id)) return json({ error: `no conversation ${id}` }, { status: 404 });
+    const { stream } = conversationEventStream({ store: app.store, id, after: body.after });
+    return new Response(stream, { headers: SSE_HEADERS });
   }
 
   if (op === 'read') {

@@ -8,7 +8,7 @@ import { remoteImageUrl } from '../core/rich-content.js';
 import { fromApp, syncWindow } from './week-sync.js';
 import {
   DELIVERY_EFFECTS, deliveryStep, initialDelivery, pendingUploadsOf,
-  unsentMessages, waitingUploadsByConversation
+  unsentMessages, unsentByConversation, waitingUploadsByConversation
 } from '../core/delivery.js';
 import { createEngineSession } from '../engine/session-host.js';
 import { engineSelected, isAppSession } from '../engine/flag.js';
@@ -413,6 +413,7 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
         archived: conversation.archived,
         aside: conversation.aside,
         workspace: conversation.workspace ?? null,
+        host: conversation.host ?? null,
         deferUntil: conversation.deferUntil,
         deferCondition: conversation.deferCondition,
         deferredAt: conversation.deferredAt,
@@ -1311,7 +1312,7 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
   
   
   function publishQueue() {
-    setStatus({ queued: delivery.outbox.length, unsentMessages: unsentMessages(delivery), waitingUploads: waitingUploadsByConversation(delivery) });
+    setStatus({ queued: delivery.outbox.length, unsentMessages: unsentMessages(delivery), unsentByConversation: unsentByConversation(delivery), waitingUploads: waitingUploadsByConversation(delivery) });
   }
 
   
@@ -1492,6 +1493,7 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
     archive: (conversationId, archived) => dispatch(ACTIONS.ARCHIVE, conversationId, { archived }),
     setAside: (conversationId, aside) => dispatch(ACTIONS.ASIDE, conversationId, { aside }),
     setWorkspace: (conversationId, workspace) => dispatch(ACTIONS.WORKSPACE, conversationId, { workspace: workspace || null }),
+    setHost: (conversationId, host) => dispatch(ACTIONS.HOST, conversationId, { host: host || null }),
     defer: (conversationId, { until = null, condition = null } = {}) =>
       dispatch(ACTIONS.DEFER, conversationId, { until, condition }),
     touch: (conversationId) => dispatch(ACTIONS.TOUCH, conversationId, {}),

@@ -1,14 +1,12 @@
-// Auto-routing: an unfiled chat is filed into the folder (workspace) it belongs in, after its first
-// turns.
+// Auto-routing: an unfiled chat is filed into the folder (workspace) it belongs in, after its first turns.
 //
-// Scope: a chat with no workspace and no workspace decision of his. A chat he created inside a folder
-// is already filed; a chat he moved or unfiled by hand (a conversation.workspace event without `auto`)
-// is his call and is never touched again. Routing tries on each of the first MAX_TURNS turn ends (a
-// wake chat often says what it is only after its first answer) and stops once it files. The turn gate
-// counts completed runs, not user messages: a chat where he sent four quick messages during its first
-// turn was skipped at that turn's end. The folders are the workspace names on chats plus any folder he
-// described by hand; a description is the folder's definition, titles are examples. The model may
-// answer none, which leaves the chat in Everything else. Every outcome is logged.
+// Scope: a chat with no workspace and no workspace decision of his. A chat he created inside a folder is already filed; a chat
+// he moved or unfiled by hand (a conversation.workspace event without `auto`) is his call and is never touched again. Routing
+// tries on each of the first MAX_TURNS turn ends (a wake chat often says what it is only after its first answer) and stops once
+// it files. The turn gate counts completed runs, not user messages: a chat where he sent four quick messages during its first
+// turn was skipped at that turn's end. The folders are the workspace names on chats plus any folder he described by hand; a
+// description is the folder's definition, titles are examples. The model may answer none, which leaves the chat in Everything
+// else. Every outcome is logged.
 //
 // Every link of the chain that left a chat unfiled, and what closed it:
 //   1. Only the first MAX_TURNS completed runs and 20 user messages were tried; a chat that said
@@ -21,16 +19,22 @@
 //      skipped for good (a notes-app chat in "upkeep"). The page marks the default
 //      (workspaceDefault) and defaultPlaced() lets the router move it.
 //
-// So the router never creates a folder and never files into the catch-all: it picks one of his
-// existing folders or leaves the chat unfiled, which the sidebar shows in Inbox. His descriptions are
-// his definitions and beat title similarity: a manual description is shown to the model as his
-// definition, a generated one only as a weak summary of what happens to be filed there.
+// So the router never creates a folder and never files into the catch-all: it picks one of his existing folders or leaves the
+// chat unfiled, which the sidebar shows in Inbox. His descriptions are his definitions and beat title similarity: a manual
+// description is shown to the model as his definition, a generated one only as a weak summary of what happens to be filed
+// there.
+//
+// Hosts (hosts.js): the same router also picks the machine a chat runs on, from the descriptions its owner wrote for the hosts
+// he opted into auto-routing. Only a host with a written description is ever offered, a pick is confirmed by a second call that
+// says yes only for work clearly covered by the description and free of anything personal, a host he chose by hand is never
+// overridden, and every decision is logged (onDecision, remote-routing.jsonl).
 //
 // refile() is the owner-triggered second pass after he edits descriptions: it asks again for the
 // chats the router filed (never one he filed or moved by hand) and files them where the current
 // descriptions say, or unfiles them.
 
 import { readAll } from './folder-descriptions.js';
+import { autoCandidates, listHosts } from './hosts.js';
 import { readSecret } from './auth.js';
 import { transcriptFor } from './autotitle.js';
 import { canonicalWorkspace } from '../core/workspaces.js';
@@ -135,6 +139,48 @@ export async function askForFolder({ title, transcript, folders }, { fetchImpl =
   return name;
 }
 
+const HOST_PROMPT = `You choose which machine (host) should run a new chat thread. The user lists his hosts, each with a description he wrote of which chats belong there.
+Reply with ONLY one of:
+  - the exact id of the one host whose description clearly covers the chat, or
+  - none
+none is the normal answer: the chat then runs on his own machine, which costs nothing. Pick a host only when what the chat is actually about is what its description says goes there.`;
+
+const HOST_CONFIRM_PROMPT = `A chat may be sent to a separate machine that other people can read. You are given the description its owner wrote of what belongs there, and the chat.
+Answer with exactly one word: yes or no.
+Answer yes only when the chat is clearly the work the description covers and contains nothing personal (private life, health, family, personal finances, friends). Anything else, or any doubt, is no.`;
+
+async function complete({ system, user, maxTokens, fetchImpl, apiKey }) {
+  if (!apiKey) throw new Error('no fast-model-api-key in the vault or TOPHAT_FAST_MODEL_API_KEY');
+  const response = await fetchImpl(ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: MODEL, max_completion_tokens: maxTokens, temperature: 0, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] })
+  });
+  if (!response.ok) throw new Error(`router model answered HTTP ${response.status}: ${String(await response.text().catch(() => '')).slice(0, 200)}`);
+  return String((await response.json()).choices?.[0]?.message?.content || '').trim();
+}
+
+/** The id of the host whose description covers the chat, or null. Candidates are hosts.js autoCandidates: described, opted in, reachable. */
+export async function askForHost({ title, transcript, hosts }, { fetchImpl = fetch, apiKey = readSecret('fast-model-api-key', 'TOPHAT_FAST_MODEL_API_KEY') } = {}) {
+  if (!transcript.trim() || !hosts.length) return null;
+  const listing = hosts.map((h) => `Host "${h.id}" (${h.label}): ${h.description}`).join('\n');
+  const reply = await complete({ system: HOST_PROMPT, user: `${listing}\n\nNew chat, titled "${title || '(untitled)'}":\n${transcript}`, maxTokens: 1500, fetchImpl, apiKey });
+  const cleaned = reply.replace(/^["'`\s]+|["'`\s.]+$/gu, '').toLowerCase();
+  return hosts.find((h) => h.id.toLowerCase() === cleaned)?.id || null;
+}
+
+/** The second call: does the description clearly cover this chat, with nothing personal in it. Any doubt is no. */
+export async function confirmHost({ title, transcript, host }, { fetchImpl = fetch, apiKey = readSecret('fast-model-api-key', 'TOPHAT_FAST_MODEL_API_KEY') } = {}) {
+  const reply = await complete({ system: HOST_CONFIRM_PROMPT, user: `Host description (written by its owner): ${host.description}\n\nChat titled "${title || '(untitled)'}":\n${transcript}`, maxTokens: 600, fetchImpl, apiKey });
+  return /^\W*yes\b/iu.test(reply);
+}
+
+/** Whether he chose this chat's host himself (a conversation.host event that is not the router's). */
+export function hostDecidedByOwner(store, id) {
+  for (const event of store.allConversationEvents(id)) if (event.kind === 'conversation.host' && !event.content?.auto) return true;
+  return false;
+}
+
 const sameFolder = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
 /** Whether the chat's folder is only provisional: the one the sidebar defaulted a new chat into, and
@@ -172,7 +218,7 @@ export function routerFiled(store, id) {
   return Boolean(last);
 }
 
-export function createRouter({ store, file, ask = askForFolder, delayMs = DELAY_MS, setTimeoutImpl = setTimeout, setIntervalImpl = setInterval, descriptions = readDescriptions }) {
+export function createRouter({ store, file, ask = askForFolder, hosts = () => listHosts(), fileHost = (id, host) => store.append(id, 'conversation.host', { host, auto: true }, { at: new Date().toISOString() }), askHost = askForHost, confirm = confirmHost, onDecision = () => {}, delayMs = DELAY_MS, setTimeoutImpl = setTimeout, setIntervalImpl = setInterval, descriptions = readDescriptions }) {
   const timers = new Map();
   const running = new Set();
   // Chats seen to hold a real folder: a filed chat costs one lookup per process, not a history scan per message.
@@ -185,6 +231,47 @@ export function createRouter({ store, file, ask = askForFolder, delayMs = DELAY_
   /** The first events of a chat are enough to see whether its folder was a default. */
   function createdAsDefault(id) {
     try { return store.conversationEvents(id, { after: 0, limit: 4 }).some((e) => e.kind === 'conversation.created' && e.content?.workspaceDefault); } catch { return true; }
+  }
+
+  // Chats whose host the router already decided for this many turns: a "none" is not asked again until the chat has another turn.
+  const hostDeclined = new Map();
+  const hostRunning = new Set();
+
+  /**
+   * Picks a host for a chat from the descriptions of the hosts he opted into auto-routing, and files it as an auto conversation.host
+   * event. Never for a chat whose host he chose, never without a candidate, never without the second call's yes. A chat that already
+   * has a host is left alone. Every decision that reached a model is logged.
+   */
+  async function routeHost(id) {
+    const conversation = store.conversation(id);
+    if (!conversation || conversation.sidechat || conversation.host || hostRunning.has(id)) return null;
+    if (hostDeclined.get(id) === (conversation.turns || 0)) return null;
+    const candidates = autoCandidates(hosts());
+    if (!candidates.length) return null;
+    if (hostDecidedByOwner(store, id)) return null;
+    const transcript = transcriptFor(store.conversationProse(id));
+    if (!transcript.trim()) return null;
+    hostRunning.add(id);
+    try {
+      const picked = await askHost({ title: conversation.title, transcript, hosts: candidates });
+      const host = picked ? candidates.find((h) => h.id === picked) : null;
+      let confirmed = false;
+      if (host) {
+        try { confirmed = await confirm({ title: conversation.title, transcript, host }); } catch (cause) { console.error(`[autoroute] ${id}: host confirmation failed:`, cause?.message || cause); }
+      }
+      const entry = { event: 'router-host', chat: id, candidates: candidates.map((h) => h.id), picked: picked || null, confirmed };
+      console.log(`[autoroute] ${JSON.stringify(entry)}`);
+      try { onDecision(entry); } catch { /* logging never blocks routing */ }
+      // He may have chosen a host while the model answered.
+      const now = store.conversation(id);
+      if (!now || now.host || hostDecidedByOwner(store, id)) return null;
+      if (!host || !confirmed) { hostDeclined.set(id, now.turns || 0); return null; }
+      fileHost(id, host.id);
+      return host.id;
+    } catch (cause) {
+      console.error(`[autoroute] ${id}: host routing failed:`, cause?.message || cause);
+      return null;
+    } finally { hostRunning.delete(id); }
   }
 
   async function route(id) {
@@ -260,6 +347,12 @@ export function createRouter({ store, file, ask = askForFolder, delayMs = DELAY_
         const result = await route(c.id);
         if (result) filed.push({ id: c.id, folder: result });
       }
+      // The host pass: chats active in the last day that have no host yet (routeHost asks nothing when no host is a candidate).
+      if (autoCandidates(hosts()).length) {
+        const recent = Date.now() - 24 * 60 * 60 * 1000;
+        const pending = store.conversations().filter((c) => !c.sidechat && !c.archived && !c.host && (c.turns || 0) > 0 && Date.parse(c.updatedAt || 0) > recent).slice(0, limit);
+        for (const c of pending) await routeHost(c.id);
+      }
     } catch (cause) {
       console.error('[autoroute] sweep failed:', cause?.message || cause);
     } finally {
@@ -332,12 +425,13 @@ export function createRouter({ store, file, ask = askForFolder, delayMs = DELAY_
 
   return {
     route,
+    routeHost,
     sweep,
     refile,
     unfileFolder,
     schedule(id, delay = delayMs) {
       clearTimeout(timers.get(id));
-      const timer = setTimeoutImpl(() => { timers.delete(id); Promise.resolve(route(id)).catch((cause) => console.error(`[autoroute] ${id}: failed:`, cause?.message || cause)); }, delay);
+      const timer = setTimeoutImpl(() => { timers.delete(id); Promise.resolve(route(id)).then(() => routeHost(id)).catch((cause) => console.error(`[autoroute] ${id}: failed:`, cause?.message || cause)); }, delay);
       timer?.unref?.();
       timers.set(id, timer);
     },

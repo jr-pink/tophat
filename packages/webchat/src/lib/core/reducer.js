@@ -34,6 +34,8 @@ function blankConversation(id, at) {
     // the archive) and deferred until an hour or a condition (its own tray above that).
     aside: false,
     workspace: null,
+    // The peer that runs the chat (hub device id, server/hosts.js); null is this machine.
+    host: null,
     deferUntil: null,
     deferCondition: null,
     deferredAt: null,
@@ -351,6 +353,9 @@ function applyEvent(draft, event) {
       break;
     case 'conversation.workspace':
       patchConversation(draft, id, at, { workspace: content.workspace || null });
+      break;
+    case 'conversation.host':
+      patchConversation(draft, id, at, { host: content.host || null });
       break;
     case 'conversation.deferred':
       patchConversation(draft, id, at, {
@@ -867,6 +872,7 @@ export function applyOptimistic(state, action) {
     action.op === 'conversation.set_archived' ? { archived: Boolean(action.payload.archived) } :
     action.op === 'conversation.set_aside' ? { aside: Boolean(action.payload.aside) } :
     action.op === 'conversation.set_workspace' ? { workspace: action.payload.workspace || null } :
+    action.op === 'conversation.set_host' ? { host: String(action.payload.host || '').trim() || null } :
     action.op === 'conversation.set_deferred' ? {
       deferUntil: action.payload.until || null,
       deferCondition: action.payload.condition || null,

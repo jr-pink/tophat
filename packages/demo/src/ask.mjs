@@ -5,17 +5,22 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Guests, COOKIE_NAME, scopeSettings } from './guests.mjs';
 
 const expand = (p) => (p && p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 
+// The instance runs with scopes on, so its API wants an account as well as the service token: this job is a guest account of its own (a session
+// in the same visitors database), its chats in its own personal scope like any visitor's.
 function instance(c) {
-  const inst = JSON.parse(readFileSync(c.instance, 'utf8'));
+  const { inst, registryFile, orgDomain } = scopeSettings(c);
+  const guests = new Guests(c, { registryFile, orgDomain });
+  const made = guests.create('127.0.0.1-ask');
   const secrets = expand(inst.paths?.secrets || path.join(expand(inst.paths?.config || `~/.config/tophat/${inst.name}`), 'secrets'));
-  return { model: inst.models?.chat?.model || null, url: `http://127.0.0.1:${inst.ports?.webchat ?? 4178}`, token: readFileSync(path.join(secrets, 'webchat-service-token'), 'utf8').trim() };
+  return { model: inst.models?.chat?.model || null, url: `http://127.0.0.1:${inst.ports?.webchat ?? 4178}`, cookie: `${COOKIE_NAME}=${made.token}`, token: readFileSync(path.join(secrets, 'webchat-service-token'), 'utf8').trim() };
 }
 
 async function agent(inst, body) {
-  const r = await fetch(`${inst.url}/api/agent`, { method: 'POST', headers: { authorization: `Bearer ${inst.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(`${inst.url}/api/agent`, { method: 'POST', headers: { cookie: inst.cookie, authorization: `Bearer ${inst.token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`agent ${body.op}: ${r.status} ${j.error || ''}`);
   return j;

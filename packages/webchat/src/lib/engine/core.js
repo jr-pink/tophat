@@ -22,7 +22,7 @@ import {
   applyOptimistic, emptyState, evictConversations, foldedItemCount, forgetConversation, hasSeen, setConversationScope,
   LIVE_RUN_STATES, markAllUnhydrated, markHydrated, mergeConversations, mergeSidebar, reconcileLiveness, reduceEvents, seenCount
 } from '../core/reducer.js';
-import { DELIVERY_EFFECTS, deliveryStep, initialDelivery, pendingUploadsOf, unsentMessages, waitingUploadsByConversation } from '../core/delivery.js';
+import { DELIVERY_EFFECTS, deliveryStep, initialDelivery, pendingUploadsOf, unsentMessages, unsentByConversation, waitingUploadsByConversation } from '../core/delivery.js';
 import { fromApp, syncWindow } from '../client/week-sync.js';
 import { remoteImageUrl } from '../core/rich-content.js';
 import { connection } from '../../../../runner/tools/quicklook-kit/lib/components.js';
@@ -188,7 +188,7 @@ export function createEngineCore({
     const reflects = state.cursor;
     return store.writeHeaders(durable.map((c) => ({
       id: c.id, title: c.title, preview: c.preview, pinned: c.pinned, archived: c.archived, aside: c.aside,
-      workspace: c.workspace ?? null, deferUntil: c.deferUntil, deferCondition: c.deferCondition, deferredAt: c.deferredAt,
+      workspace: c.workspace ?? null, host: c.host ?? null, deferUntil: c.deferUntil, deferCondition: c.deferCondition, deferredAt: c.deferredAt,
       createdAt: c.createdAt, updatedAt: c.updatedAt, activeAt: c.activeAt || c.updatedAt, lastOpened: c.lastOpened,
       opens: c.opens, turns: c.turns, toolCalls: c.toolCalls, parentId: c.parentId, sidechat: c.sidechat, automated: c.automated,
       settings: c.settings, sessionId: c.sessionId, notableCursor: c.notableCursor, readCursor: c.readCursor,
@@ -534,7 +534,7 @@ export function createEngineCore({
     if (owedMemo.delivery === delivery) return owedMemo.value;
     const items = delivery.outbox.map((a) => ({ id: a.id, op: a.op, conversationId: a.conversation_id, text: a.payload?.text ?? null }));
     const inflight = Object.values(delivery.inflight).map((id) => ({ id, since: inflightSince.get(id) ?? null }));
-    owedMemo = { delivery, value: { pending: items.length, messages: unsentMessages(delivery), armed: Object.keys(delivery.retryArmed).length, inflight, items } };
+    owedMemo = { delivery, value: { pending: items.length, messages: unsentMessages(delivery), byConversation: unsentByConversation(delivery), armed: Object.keys(delivery.retryArmed).length, inflight, items } };
     return owedMemo.value;
   }
   let storedIds = new Set();
@@ -580,7 +580,7 @@ export function createEngineCore({
       switch (e.type) {
         case DELIVERY_EFFECTS.PERSIST_OUTBOX: persistOutbox(); publishQueue(); break;
         case DELIVERY_EFFECTS.POST: inflightSince.set(e.action.id, Date.now()); posts.push(post(outgoing(e.action)).finally(() => inflightSince.delete(e.action.id))); break;
-        case DELIVERY_EFFECTS.ARM_RETRY: scheduleFlushRetry(); setStatus({ queued: delivery.outbox.length, unsentMessages: unsentMessages(delivery) }); break;
+        case DELIVERY_EFFECTS.ARM_RETRY: scheduleFlushRetry(); setStatus({ queued: delivery.outbox.length, unsentMessages: unsentMessages(delivery), unsentByConversation: unsentByConversation(delivery) }); break;
         case DELIVERY_EFFECTS.CLEAR_RETRY:
           if (retryTimer) { clearTimer(retryTimer); retryTimer = null; }
           if (Object.keys(delivery.retryArmed).length) scheduleFlushRetry();
@@ -594,7 +594,7 @@ export function createEngineCore({
     if (effects.some((e) => e.type === DELIVERY_EFFECTS.ARM_UPLOAD_PATIENCE || e.type === DELIVERY_EFFECTS.CLEAR_UPLOAD_PATIENCE)) publishQueue();
     return Promise.all(posts);
   }
-  function publishQueue() { setStatus({ queued: delivery.outbox.length, unsentMessages: unsentMessages(delivery), waitingUploads: waitingUploadsByConversation(delivery) }); }
+  function publishQueue() { setStatus({ queued: delivery.outbox.length, unsentMessages: unsentMessages(delivery), unsentByConversation: unsentByConversation(delivery), waitingUploads: waitingUploadsByConversation(delivery) }); }
   function outgoing(action) {
     if (!delivery.released.includes(action.id)) return action;
     const waiting = pendingUploadsOf(delivery, action).map((u) => (delivery.failedUploads.includes(u.id) ? { ...u, failed: true, error: uploadErrors.get(u.id) || 'the upload failed' } : u));

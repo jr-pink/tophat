@@ -7,9 +7,10 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readSecret } from './auth.js';
 import { canonicalWorkspace, normalizeWorkspace } from '../core/workspaces.js';
+import { webchatStorePath } from './paths.js';
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-const PATH = process.env.WEBCHAT_FOLDER_DESCRIPTIONS || join(homedir(), '.local', 'state', 'tophat', 'webchat', 'folder-descriptions.json');
+const PATH = webchatStorePath('folder-descriptions.json');
 const SEED = join(homedir(), '.config', 'tophat', 'folder-descriptions.json');
 const ENDPOINT = process.env.WEBCHAT_TITLE_ENDPOINT || '' + (process.env.TOPHAT_FAST_MODEL_ENDPOINT || '');
 const MODEL = process.env.WEBCHAT_TITLE_MODEL || 'gpt-oss-120b';
@@ -50,7 +51,8 @@ export function setManual(name, text, path = PATH, { at = null } = {}) {
   const when = at && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : new Date().toISOString();
   if (at && all[k]?.source === 'manual' && all[k].at > when) return all[k];
   // Clearing his text hands the folder back to the daily generator.
-  if (!clean) delete all[k]; else all[k] = { name: normalizeWorkspace(name), text: clean, source: 'manual', at: when };
+  if (!clean) delete all[k];
+  else all[k] = { name: normalizeWorkspace(name), text: clean, source: 'manual', at: when };
   writeAll(all, path);
   return all[k] || null;
 }
@@ -88,7 +90,8 @@ export async function refreshAuto(conversations, { ask = describe, path = PATH, 
   let changed = 0;
   // A generated description of a folder that has no chats now (or of the catch-all) is stale; his own stay.
   for (const [k, d] of Object.entries(all)) {
-    if (d?.source !== 'manual' && !folders.has(k)) { delete all[k]; changed += 1; }
+    if (d?.source === 'manual' || folders.has(k)) continue;
+    delete all[k]; changed += 1;
   }
   for (const [k, f] of folders) {
     if (all[k]?.source === 'manual') continue;

@@ -14,12 +14,15 @@
   import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, folderKey, folderTree, listWorkspaces, moveFolder, normalizeWorkspace, partitionByWorkspace } from '$lib/core/workspaces.js';
   import { sidebarDecl, openKey } from '$lib/core/sidebar-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
+  import HostMenu from './HostMenu.svelte';
+  import { hostState, refreshHosts } from '$lib/core/hosts.svelte.js';
 
   let {
     conversations = {},
     chatState = null,
     session = null,
     activeId = null,
+    openIds = [],
     onselect = () => {},
     onopenbeside = () => {},
     onnew = () => {},
@@ -64,6 +67,18 @@
     globalThis.addEventListener?.('online', again);
     return () => globalThis.removeEventListener?.('online', again);
   });
+  // The host menu (HostMenu.svelte): the peers a chat can run on, whether the router may pick each, and what to send there.
+  $effect(() => {
+    let stopped = false, timer = null;
+    const loop = async () => { await refreshHosts(); if (!stopped) timer = setTimeout(loop, 20_000); };
+    loop();
+    return () => { stopped = true; clearTimeout(timer); };
+  });
+  let hostMenuY = $state(null);
+  function openHostMenu(event) {
+    const box = event.currentTarget.getBoundingClientRect();
+    hostMenuY = box.bottom - rootEl.getBoundingClientRect().top + 4;
+  }
   let descEditing = $state(null);
   let descDraft = $state('');
   function editDesc(name) { descEditing = name; descDraft = descOf(name); }
@@ -392,7 +407,7 @@
       aria-label="Search chats"
     />
     <button class="search press focus-ring" onclick={() => { wsCreating = !wsCreating; moveFor = null; }} data-testid="new-workspace" title="New workspace" aria-label="New workspace"><Icon name="folder" /></button>
-    <button class="search press focus-ring" onclick={onsearch} data-testid="open-search" title="Search everything (⌘K)"><Icon name="search" /></button>
+    {#if hostState.list.length > 1}<button class="search press focus-ring" class:on={hostMenuY !== null} onclick={openHostMenu} data-testid="host-menu-button" title="Hosts: which machines chats run on" aria-label="Hosts" aria-haspopup="menu" aria-expanded={hostMenuY !== null}><Icon name="server" /></button>{/if}
   </div>
 
   {#if wsCreating}
@@ -545,6 +560,10 @@
           onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); moveFor = null; } }} />
       </form>
     </div>
+  {/if}
+
+  {#if hostMenuY !== null}
+    <HostMenu top={hostMenuY} onclose={() => (hostMenuY = null)} />
   {/if}
 
   {#if folderMenu}
@@ -708,6 +727,7 @@
       <a
         class="chat press focus-ring"
         class:active={row.id === activeId}
+        class:inpane={row.id !== activeId && openIds.includes(row.id)}
         class:sel={flat[selected]?.id === row.id}
         href="?chat={encodeURIComponent(row.id)}"
         onclick={(event) => rowClick(event, row.id)}
@@ -766,7 +786,7 @@
   .conn.offline { background: var(--warn); }
   .offline-note { font-size: 11px; color: var(--muted, #888); margin-left: 6px; letter-spacing: 0.02em; }
   header .icon-btn { display: none; }
-  .tools { display: flex; gap: 6px; padding: 4px 12px 8px; }
+  .tools { display: flex; align-items: stretch; gap: 6px; padding: 4px 12px 8px; }
   /* The trays themselves live in Tray.svelte; the sidebar only says where the stack sits and
      how much room it may take. */
   :global(.sidebar > .tray:last-of-type) { padding-bottom: env(safe-area-inset-bottom); }
@@ -788,6 +808,7 @@
   .filter:focus { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
   .search {
     width: 32px; flex: none;
+    display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--line);
     border-radius: 8px;
     color: var(--ink-dim);
@@ -808,6 +829,7 @@
   }
   .chat:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
   .chat.active { background: var(--accent-soft); }
+  .chat.inpane { background: color-mix(in srgb, var(--ink) 7%, transparent); }
   
   .chat.sel { background: color-mix(in srgb, var(--ink) 9%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
   .fork .chat { margin-left: 14px; width: calc(100% - 14px); }

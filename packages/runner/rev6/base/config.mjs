@@ -46,7 +46,9 @@ export function resolveConfig(raw, { home, configDir = path.join(home, '.config/
       workspaceDir: path.join(home, '.local/share/tophat/workspace'), ...raw.paths },
     install: { serviceLabelPrefix: 'io.tophat', webchatPort: 4178, productName: 'tophat', ...raw.install },
     rev5: { enabled: false, model: 'claude-opus-5-5', maxTokens: 16000, askRoot: null, searxngUrl: null,
-      instructionsFile: null, instructionsMaxBytes: null, cuaConfig: null, ...raw.rev5 },
+      instructionsFile: null, instructionsMaxBytes: null, cuaConfig: null,
+      // No default in code: the value lives only in config.json (rev6/pull/background.mjs backgroundMinGeneratingMs refuses without it).
+      backgroundTurnMinGeneratingMs: null, ...raw.rev5 },
     ingress: raw.ingress === undefined ? null : raw.ingress,
     heartbeat: { intervalSeconds: 300, engine: 'understanding', calls: 60, mode: 'gated', maxRecords: 200, maxInputChars: 60000,
       // No default in code: the value lives only in config.json (same as src/config.mjs); the heartbeat refuses to push without it.
@@ -102,6 +104,7 @@ export function validateRev5(r) {
   if (typeof r.model !== 'string' || !r.model) fail('rev5.model must be a model name');
   if (!Number.isSafeInteger(r.maxTokens) || r.maxTokens < 1000) fail('rev5.maxTokens must be an integer >= 1000');
   for (const key of ['askRoot', 'instructionsFile', 'cuaConfig']) if (!absOrNull(r[key] ?? null)) fail(`rev5.${key} must be an absolute path or null`);
+  if (r.backgroundTurnMinGeneratingMs !== null && (!Number.isSafeInteger(r.backgroundTurnMinGeneratingMs) || r.backgroundTurnMinGeneratingMs < 0)) fail('rev5.backgroundTurnMinGeneratingMs must be an integer (milliseconds) >= 0 or unset');
   if (r.searxngUrl !== null && !/^https?:\/\//.test(r.searxngUrl || '')) fail('rev5.searxngUrl must be an http(s) URL or null');
   // src/core/gmail-accounts.mjs derives the mail map.
   if (r.mailAccounts !== undefined && r.mailAccounts !== null) fail('rev5.mailAccounts is retired: the Gmail account list is config.json sources (kind "gmail", config.mailDir/email/stream)');

@@ -22,7 +22,7 @@ export const isIncognito = (env) => env?.TOPHAT_INCOGNITO === '1';
 export const INCOGNITO_TOOLS_OFF = Object.freeze(new Set(['task_update', 'memory_apply']));
 
 /** Memory CLI commands that only read. Anything else is refused in incognito. */
-const MEMORY_READS = new Set(['search', 'read', 'status']);
+const MEMORY_READS = new Set(['search', 'read', 'status', 'list']);
 
 /** null when the memory CLI may run `command` with `payload` here, else the refusal. */
 export function incognitoMemoryRefusal(command, payload, env) {

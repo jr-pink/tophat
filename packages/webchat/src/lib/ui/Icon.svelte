@@ -30,6 +30,8 @@
     message: 'M2.5 3.5h11v7h-6L4.5 13v-2.5h-2z',
     clock: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM8 5v3.2l2.2 1.6',
     folder: 'M2 4.5h4l1.5 2h6.5v6.5H2z',
+    // A rack of two units with their indicator lights: the host menu (the machines a chat can run on).
+    server: 'M2.5 2.5h11v4.5h-11zM2.5 9h11v4.5h-11zM4.8 4.75h.01M4.8 11.25h.01M8 4.75h4M8 11.25h4',
     key: 'M6 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM7.9 7.1 13.5 1.5M11.2 3.8l1.6 1.6',
     chevron: 'M6 3.5 10.5 8 6 12.5',
     'quote-in': 'M12 3v4.5A2.5 2.5 0 0 1 9.5 10H4M6.5 7.5 4 10l2.5 2.5',

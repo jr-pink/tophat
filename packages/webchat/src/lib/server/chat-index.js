@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS conversations (
   session_provider TEXT,
   aside         INTEGER NOT NULL DEFAULT 0,
   workspace     TEXT,
+  host          TEXT,
   defer_until   TEXT,
   defer_condition TEXT,
   deferred_at   TEXT
@@ -110,6 +111,9 @@ CREATE TRIGGER IF NOT EXISTS conversations_derived_delete BEFORE DELETE ON conve
 CREATE TRIGGER IF NOT EXISTS applied_derived_insert BEFORE INSERT ON applied_actions WHEN chat_writer() IS NOT 1 BEGIN SELECT RAISE(ABORT, 'derived chat index: written only by the chat log writer'); END;
 `;
 
+// Columns the table gained after its first version (the CREATE statement above has them for a new file): the peer that runs the chat.
+const ADDED_COLUMNS = [{ name: 'host', type: 'TEXT' }];
+
 const UPSERT_COLUMNS = CONVERSATION_COLUMNS.join(', ');
 const UPSERT_HOLES = CONVERSATION_COLUMNS.map(() => '?').join(', ');
 
@@ -126,6 +130,9 @@ export class ChatIndex {
       this.db.exec('PRAGMA synchronous = NORMAL');
       this.db.exec(`PRAGMA cache_size = -${cacheKb}`);
       this.db.exec(INDEX_SCHEMA);
+      // A column added to the conversation record after an index was first built: the CREATE above skips an existing table.
+      const have = new Set(this.db.prepare('PRAGMA table_info(conversations)').all().map((c) => c.name));
+      for (const column of ADDED_COLUMNS) if (!have.has(column.name)) this.db.exec(`ALTER TABLE conversations ADD COLUMN ${column.name} ${column.type}`);
       this.rows = new Map();          // conversation id -> record (cache of the table, this writer's)
       this.pos = new Map();           // conversation id -> { n, segment, offset }
       this.statements();

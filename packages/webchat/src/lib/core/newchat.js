@@ -39,3 +39,7 @@ export function reusableBlankChat({
   if (turns.length) return null;
   return lastCreatedId;
 }
+
+// Opening a chat in place ends the blank transient chat in another pane (it is dropped); an explicit split (split === true:
+// cmd-shift-enter, open-in-split) adds a pane and must not drop one, or the new pane looks like a replacement.
+export const releasesTransient = (split) => split !== true;

@@ -8,6 +8,8 @@ import { webchatStorePath } from '$lib/server/paths.js';
 import { hasRoom } from '$lib/server/mp.js';
 import { hasDoc } from '$lib/server/docs.js';
 import { scopeGate } from '$lib/server/scopes-gate.js';
+import { maskResponse, publicMode } from '$lib/server/home-mask.js';
+import { preloadBundle } from '$lib/core/shell-preload.js';
 import { DOC_PAGE_SHAPE, docToken, isPublicPath, roomToken } from '$lib/server/public-paths.js';
 
 // The feed listens to the stores from boot, so a write made before the first page subscribes is
@@ -68,12 +70,16 @@ export async function handle({ event, resolve }) {
   // skip its own echo; reads are never attributed, because a read that refreshes tasks writes
   // things the reading tab did not make.
   const origin = event.request.method === 'GET' ? null : event.request.headers.get('x-tophat-client');
-  const response = await withRoute(`${event.request.method} ${path}`, () => (origin ? withOrigin(origin, () => resolve(event)) : resolve(event)));
+  // The shell's bundle download starts with its stylesheet's, not after it (src/lib/core/shell-preload.js).
+  const resolveShell = () => resolve(event, { transformPageChunk: ({ html }) => preloadBundle(html) });
+  const response = await withRoute(`${event.request.method} ${path}`, () => (origin ? withOrigin(origin, resolveShell) : resolveShell()));
   if (response.headers.get('content-type')?.includes('text/html')) {
     response.headers.set('cache-control', 'no-store');
     response.headers.set('vary', 'cookie');
     // Early hints would preload chunks of a build this client may not be on.
     response.headers.delete('link');
   }
+  // An instance that serves strangers (public prompt mode) never tells a client where on the host's disk it runs.
+  if (path.startsWith('/api/') && publicMode()) return maskResponse(response);
   return response;
 }

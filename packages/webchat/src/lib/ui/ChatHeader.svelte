@@ -10,6 +10,7 @@
   import { backends, ensureBackends } from '$lib/core/backends.svelte.js';
   import { INCOGNITO_LABEL, isIncognito } from '$lib/core/incognito.js';
   import { placeMenu, shouldCollapse } from '$lib/core/menu-place.js';
+  import { hostState, refreshHosts } from '$lib/core/hosts.svelte.js';
 
   let {
     conversation = null,
@@ -22,6 +23,7 @@
     onsettings = () => {},
     onrename = () => {},
     onmovescope = () => {},
+    onhost = () => {},
     forkCount = 0
   } = $props();
 
@@ -49,7 +51,9 @@
   // An incognito chat (core/incognito.js) runs on the direct provider only and has nothing to share.
   const incognito = $derived(isIncognito(conversation?.id));
 
-  $effect(() => { ensureBackends(); ensureScopes(); });
+  $effect(() => { ensureBackends(); ensureScopes(); refreshHosts(); });
+  // The host dropdown: this machine and every hub peer, offered once there is a peer to choose (core/hosts.svelte.js).
+  const hostChoice = $derived(hostState.list.length > 1 && !incognito);
   const offered = $derived.by(() => {
     const current = settings.provider || providerOfModel(settings.model);
     const list = backends.providers.includes(current)
@@ -178,6 +182,23 @@
 {#snippet settingsControls(inMenu)}
   {#if inMenu && scopeOn}<div class="row" data-testid="more-scope"><span class="label">scope</span><span class="ctl"><ScopeBar {conversation} onmove={onmovescope} /></span></div>
   {:else if !inMenu}<ScopeBar {conversation} onmove={onmovescope} />{/if}
+
+  {#if hostChoice}
+    {#if inMenu}<span class="label row-label" aria-hidden="true">host</span>{/if}
+    <select
+      class="model focus-ring"
+      value={conversation?.host || ''}
+      onchange={(event) => onhost(event.currentTarget.value)}
+      aria-label="Host"
+      title="Which machine runs this chat"
+      data-testid={inMenu ? 'more-host' : 'host'}
+    >
+      {#each hostState.list as h (h.id)}
+        <option value={h.id} disabled={!h.configured}>{h.label}{h.local ? ' (this machine)' : ''}{!h.configured ? ' (no address)' : h.online === false ? ' (offline)' : ''}</option>
+      {/each}
+      {#if conversation?.host && !hostState.list.some((h) => h.id === conversation.host)}<option value={conversation.host}>{conversation.host}</option>{/if}
+    </select>
+  {/if}
 
   {#if inMenu}<span class="label row-label" aria-hidden="true">model</span>{/if}
   <select

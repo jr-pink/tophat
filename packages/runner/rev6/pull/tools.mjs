@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSyn
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { imageRef, viewableImage } from './context.mjs';
+import { imageRef, publicPrompt, viewableImage } from './context.mjs';
 import { localStamp, withLocalTimes } from '../base/clock.mjs';
 import { clip, cut } from '../base/text.mjs';
 import { memoryDb } from '../base/paths.mjs';
@@ -24,6 +24,7 @@ import { SEARCH_TOOL, unifiedSearch } from './unified-search.mjs';
 import { CHATS_TOOL, chatsTool } from '../../rev5/chats-tool.mjs';
 import { linkPeople } from './link.mjs';
 import { readerFailure, warmMemory, warmMemoryCall } from './memory-worker.mjs';
+import { LIST_DOC, LIST_PROPS, listCall } from '../base/memory-list.mjs';
 import { GROUPS_DOC, confineToScope, groupedApplyCall, scopedWriteError, wantsGroups } from '../base/memory-groups.mjs';
 import { runnerChatVerdict } from './chat-scope.mjs';
 import { scrubForStore } from '../../src/vault/scrub-store.mjs';
@@ -44,6 +45,8 @@ const SECRET_ENV = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|_FILE$|^S
 const DATA = JSON.parse(readFileSync(new URL('./tools.json', import.meta.url), 'utf8'));
 // memory_apply's groups field: its text lives once, in memory-groups.mjs, shared with rev5/tools.mjs.
 DATA.core.memory_apply.properties.groups = { type: 'array', items: { type: 'string' }, description: GROUPS_DOC };
+// memory_list sits right after memory_read; its text and properties live once, in memory-list.mjs, shared with rev5/tools.mjs.
+DATA.core = Object.fromEntries(Object.entries(DATA.core).flatMap(([k, v]) => (k === 'memory_read' ? [[k, v], ['memory_list', { description: LIST_DOC, properties: LIST_PROPS }]] : [[k, v]])));
 const prop = (p) => (typeof p !== 'string' ? p : { type: { s: 'string', i: 'integer', b: 'boolean' }[p[0]], description: p.slice(2) });
 const expand = (group, edit = (d) => d) => Object.entries(group).map(([name, t]) => ({ name, description: edit(t.description, name),
   input_schema: { type: 'object', properties: Object.fromEntries(Object.entries(t.properties).map(([k, v]) => [k, prop(typeof v === 'string' ? edit(v, name, k) : v)])), required: t.required || [], additionalProperties: false } }));
@@ -85,7 +88,7 @@ export function validateSpecs(specs) {
 // too).
 export const memoryDerivedAllowance = (input = {}) => (input.kind ? undefined : Math.max(5, Math.ceil(Number(input.limit ?? 10) / 2)));
 
-export const PARALLEL = new Set(['task_list', 'memory_status', 'memory_search', 'memory_read', 'read_file', 'read_document', 'list_files', 'search_files', 'source_search', 'web_search', 'web_open', 'web_find', 'job_status', 'job_wait', 'Agent', 'agent_wait', 'agent_list']);
+export const PARALLEL = new Set(['task_list', 'memory_status', 'memory_search', 'memory_read', 'memory_list', 'read_file', 'read_document', 'list_files', 'search_files', 'source_search', 'web_search', 'web_open', 'web_find', 'job_status', 'job_wait', 'Agent', 'agent_wait', 'agent_list']);
 /** Tools rev6 added; PARALLEL stays byte-equal to rev5's (fuzz.test.mjs). */
 export const PARALLEL_EXTRA = new Set(['search', 'chats']);
 export const MUTATING = new Set(['task_update', 'memory_apply', 'write_file', 'shell', 'mail_send', 'browser_acquire', 'browser_navigate', 'browser_click', 'browser_type', 'browser_release', 'credential_fill_login', 'credential_fill_totp']);
@@ -133,6 +136,14 @@ export function createFilesystem({ cwd, roots = [], env = process.env }) {
 }
 
 // ---- the memory store (rev5/cli.py).
+// In the public prompt mode a tool result never shows the home directory (an error trace names its files): it reads as `~`.
+export function withoutHome(result, home) {
+  if (!home || home === '/') return result;
+  const swap = (text) => (typeof text === 'string' ? text.split(home).join('~') : text);
+  if (typeof result?.content === 'string') return { ...result, content: swap(result.content) };
+  if (Array.isArray(result?.content)) return { ...result, content: result.content.map((b) => (b?.type === 'text' ? { ...b, text: swap(b.text) } : b)) };
+  return result;
+}
 export function memoryStore(env = process.env) {
   return { db: resolve(memoryDb(env)), installed: true, python: process.execPath, cli: join(REPO, 'store', 'cli.mjs'), cwd: REPO };
 }
@@ -174,12 +185,13 @@ export function memoryCli(command, payload, { env = process.env, timeoutMs = com
   payload = scrubForStore(payload ?? {}, { env, label: 'memory' }).value;
   // A batch that names groups is written by the Node store through the memory cloud (rev6/base/memory-groups.mjs).
   const grouped = command === 'apply' && wantsGroups(payload);
+  const listed = command === 'list';
   if (grouped && readOnly) return Promise.resolve({ ok: false, reason: 'refused', detail: 'read-only memory: a grouped apply writes' });
   if (warmWanted(command, env, oneShot)) {
     return warmMemoryCall({ store, env: trustedEnv(env), command, payload, timeoutMs, fallback: () => memoryCli(command, payload, { env, timeoutMs, readOnly, spawn: true }) });
   }
   return new Promise((done) => {
-    const [bin, argv, request] = grouped ? groupedApplyCall(store, payload, trustedEnv(env)) : [store.python, [store.cli, '--db', store.db, ...(readOnly ? ['--read-only'] : []), command], payload];
+    const [bin, argv, request] = listed ? listCall(store, payload, trustedEnv(env)) : grouped ? groupedApplyCall(store, payload, trustedEnv(env)) : [store.python, [store.cli, '--db', store.db, ...(readOnly ? ['--read-only'] : []), command], payload];
     const child = execFile(bin, argv, { cwd: store.cwd, env: trustedEnv(env), timeout: grouped ? Math.max(timeoutMs, GROUPED_MS) : timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
       let parsed = null;
       try { parsed = JSON.parse(stdout); } catch { /* not JSON */ }
@@ -352,6 +364,10 @@ export function createTools({ db, sessionId, cwd, roots = [], env = process.env,
   const tabs = (factories.tabs || createTabWatcher)({ db, env, sessionId });
   const foreground = new Set();
   let readOnly = permissionMode === 'plan', browserBundle = null;
+  // TOPHAT_RUNNER_TOOLS_ALLOW (off by default): a comma-separated list of the only tools this runner offers and runs. An instance that
+  // serves strangers (a public demo) names its few read-only tools here; every other tool is absent from the model's list and refused
+  // if called by name.
+  const toolAllowed = env.TOPHAT_RUNNER_TOOLS_ALLOW ? new Set(String(env.TOPHAT_RUNNER_TOOLS_ALLOW).split(',').map((n) => n.trim()).filter(Boolean)) : null;
   // TOPHAT_REV6_HARNESS=v2 (off by default): plain-text shell results, head+tail cuts with the whole output spilled
   // to a file, and the tool names the model reaches for routed (harness-v2.mjs; evidence in bench/README.md).
   const hf = harnessFeatures(env), v2Shell = hf.has('shell'), v2Clip = hf.has('clip'), v2Alias = hf.has('alias');
@@ -399,6 +415,7 @@ export function createTools({ db, sessionId, cwd, roots = [], env = process.env,
     credential_fill_totp: viaBrowser((b, i) => b.credentials.fillTotp({ lease: i.lease, handle: i.handle, otpSelector: i.otpSelector })),
     async memory_status() { return memoryCli('status', {}, { env }); },
     async memory_search(i) { const out = withLocalTimes(await memoryCli('search', { query: i.query, kind: i.kind, limit: i.limit ?? 10, derived: memoryDerivedAllowance(i), as_of: clock() }, { env }), env); return renderMemorySearch(out, env) ?? out; },
+    async memory_list(i) { const { entity, term, source, kinds, since, until, tz, order, limit, offset, chars } = i; const out = withLocalTimes(await memoryCli('list', { entity, term, source, kinds, since, until, tz, order, limit, offset, chars }, { env, readOnly: true }), env); return out; },
     async memory_read(i) { const budget = memoryReadBudget(i.budget); const out = withLocalTimes(await memoryCli('read', { kind: i.kind, id: i.id, nodes: i.nodes, budget, as_of: clock() }, { env }), env); return renderMemoryRead(out, env, { budget }) ?? out; },
     async memory_apply(i) {
       if ((i.changes?.work || []).some((w) => w.id && !w.id.startsWith('$') && !Number.isInteger(w.expected_version))) return { error: 'Existing work updates require expected_version. Read task_list, then use task_update.' };
@@ -463,6 +480,7 @@ export function createTools({ db, sessionId, cwd, roots = [], env = process.env,
   if (factories.handlers) Object.assign(handlers, factories.handlers);
 
   async function runUnscrubbed(name, input = {}, call = null) {
+    if (toolAllowed && !toolAllowed.has(name)) return { content: `${name} is not available in this instance`, isError: true };
     if (name.startsWith('mcp__cua_repl__')) {
       if (readOnly) return { content: 'Computer use refused in plan mode (read-only)', isError: true };
       try { return await tabs.around(() => cua.run(name, input)); } catch (error) { return { content: error.message, isError: true }; }
@@ -494,7 +512,8 @@ export function createTools({ db, sessionId, cwd, roots = [], env = process.env,
   const specList = () => [...cua.specs, ...(unified ? [SEARCH_TOOL] : []), ...coreSpecs().filter((spec) => !(unified && HIDDEN_BY_UNIFY.has(spec.name))).map(forUnify), CHATS_TOOL, ...(attachmentsConfigured(env) ? [readDocumentToolSpec()] : []), ...(askConfigured(env) && !unified ? [sourceSearchSpec()] : []),
     ...(messagesConfigured(env) ? [messagesToolSpec()] : []), ...(mailTools ? mailToolSpecs(env) : []), ...(web ? webToolSpecs() : []), ...(goals ? goalSpecs() : []), ...(chat ? chatSpecs() : []),
     ...(agents ? agentSpecs() : []), ...(browserConfigured(env) || browserFactory ? browserSpecs(env) : [])]
-    .filter((spec) => !(isIncognito(env) && INCOGNITO_TOOLS_OFF.has(spec.name)));
+    .filter((spec) => !(isIncognito(env) && INCOGNITO_TOOLS_OFF.has(spec.name)))
+    .filter((spec) => !toolAllowed || toolAllowed.has(spec.name));
   return {
     ready: () => cua.ready(), computerPrompt: () => cua.prompt(),
     get specs() { return describeTools(specList(), hf); },
@@ -502,6 +521,6 @@ export function createTools({ db, sessionId, cwd, roots = [], env = process.env,
     async closeBrowser() { cua.close(); if (browserBundle) { try { await browserBundle.browser.close(); } catch { /* already closed */ } browserBundle = null; } },
     setPermissionMode(mode) { readOnly = mode === 'plan'; },
     abortForeground() { for (const child of foreground) { child.interrupted = true; killGroup(child); } },
-    async run(name, input = {}, call = null) { return redactToolResult(await runUnscrubbed(name, input, call), secretIndex); },
+    async run(name, input = {}, call = null) { const result = redactToolResult(await runUnscrubbed(name, input, call), secretIndex); return publicPrompt(env) ? withoutHome(result, env.HOME || homedir()) : result; },
   };
 }
