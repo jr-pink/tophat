@@ -17,6 +17,8 @@
   import { sidebarDecl, openKey } from '$lib/core/sidebar-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
   import HostMenu from './HostMenu.svelte';
+  import InfoTip from './InfoTip.svelte';
+  import DescEditor from './DescEditor.svelte';
   import { hostState, refreshHosts } from '$lib/core/hosts.svelte.js';
   import { provideMenu, SEP } from '$lib/client/context-menu.js';
   import { createDeadlineFetch } from '../../../../runner/tools/docstore-kit/lib/engine/deadline.js';
@@ -107,19 +109,23 @@
     loop();
     return () => { stopped = true; clearTimeout(timer); };
   });
-  let hostMenuY = $state(null);
-  function openHostMenu(event) {
-    const box = event.currentTarget.getBoundingClientRect();
-    hostMenuY = box.bottom - rootEl.getBoundingClientRect().top + 4;
+  // Open state of the hosts dropdown and the description being edited are kit state (core/sidebar-state.js hostMenu,
+  // descAt, descDraft). A description edit folds down under its row and writes nothing until Save; an empty Save hands
+  // the folder back to the daily generator, and saving an auto-written one makes it his.
+  const openHostMenu = () => sb.dispatch('hostmenu.open', { open: !$sb.hostMenu });
+  const descEditing = $derived($sb.descAt?.startsWith('f:') ? $sb.descAt.slice(2) : null);
+  function editDesc(name) {
+    if (!name) return;
+    if (descEditing === name) { sb.dispatch('desc.close', {}); return; }
+    sb.dispatch('desc.open', { at: `f:${name}`, text: descOf(name) });
   }
-  let descEditing = $state(null);
-  let descDraft = $state('');
-  function editDesc(name) { descEditing = name; descDraft = descOf(name); }
   function saveDesc(name, text) {
-    descEditing = null;
+    sb.dispatch('desc.close', {});
+    listEl?.focus();
     descs = queueDescription(name, text);
     syncDescs();
   }
+  function cancelDesc() { sb.dispatch('desc.close', {}); listEl?.focus(); }
   // Folder drag: which folder is moving and where it would land ({ key, where }).
   let folderDrag = $state(null);
   let folderDrop = $state(null);
@@ -383,9 +389,20 @@
   const trayItems = $derived([...(deferredOpen ? deferredRows : []), ...(asideOpen ? asideRows : []), ...(archivedOpen ? archivedRows : [])]
     .filter((row) => searching || inFocus(row)).map((row) => ({ kind: 'chat', id: `c:${row.id}`, row, depth: 0, fork: false })));
   const navItems2 = $derived([...items.map((it) => (it.kind === 'chat' ? { ...it, id: `c:${it.id}` } : it)), ...trayItems]);
-  const cursor = $derived($sb.cursor);
+  // The cursor keys walk from: the explicit one (keys, folder click, multi-select), else the focused chat (Page's layout).
+  // Only the explicit one draws `.sel`; the focused chat draws `.active` from the layout, so one row is never marked twice.
+  const cursor = $derived($sb.cursor ?? (activeId ? `c:${activeId}` : null));
   let listEl = $state(null);
   let rootEl = $state(null);
+  // A chat gaining focus by any route (tab, search, ⌘1..9, split, link) takes the cursor off a chat row, so the `.sel` bar
+  // never stays on a row the focus left while `.active` marks another. Folder cursors are untouched.
+  let lastActive = activeId;
+  $effect(() => {
+    const now = activeId;
+    if (now === lastActive) return;
+    lastActive = now;
+    if ($sb.cursor?.startsWith('c:')) sb.dispatch('cursor.set', { addr: null });
+  });
 
   let lastFilter = '';
   $effect(() => {
@@ -414,7 +431,7 @@
   function activate() {
     const it = navItems2.find((x) => x.id === cursor) || navItems2.find((x) => x.kind === 'chat');
     if (!it) return false;
-    if (it.kind === 'chat') onselect(it.row.id); else setOpen(it.key, !it.open);
+    if (it.kind === 'chat') { sb.dispatch('cursor.set', { addr: null }); onselect(it.row.id); } else setOpen(it.key, !it.open);
     return true;
   }
   const NAV = { ArrowDown: 'down', ArrowUp: 'up', ArrowRight: 'right', ArrowLeft: 'left', Home: 'home', End: 'end' };
@@ -435,7 +452,8 @@
       if (a >= 0 && b >= 0) { sb.dispatch('selection.set', { addrs: ids.slice(Math.min(a, b), Math.max(a, b) + 1) }); return 'multi'; }
     }
     sb.dispatch('selection.set', { addrs: [] });
-    sb.dispatch('cursor.set', { addr });
+    // A chat opened by a plain click is the focused chat: the layout holds it, the cursor goes back to following it.
+    sb.dispatch('cursor.set', { addr: addr.startsWith('c:') ? null : addr });
     return 'one';
   }
   const chatOfAddr = (addr) => (addr?.startsWith('c:') ? conversations[addr.slice(2)] : null);
@@ -712,7 +730,12 @@
       aria-label="Search chats"
     />
     <button class="search press focus-ring" onclick={() => { moveFor = null; newFolder(); }} data-testid="new-workspace" title="New folder (inside the selected folder)" aria-label="New folder"><Icon name="folder" /></button>
-    {#if hostState.list.length > 1}<button class="search press focus-ring" class:on={hostMenuY !== null} onclick={openHostMenu} data-testid="host-menu-button" title="Hosts: which machines chats run on" aria-label="Hosts" aria-haspopup="menu" aria-expanded={hostMenuY !== null}><Icon name="server" /></button>{/if}
+    {#if hostState.list.length > 1}
+      <span class="hostwrap">
+        <button class="search press focus-ring" class:on={$sb.hostMenu} onclick={openHostMenu} data-testid="host-menu-button" title="Hosts" aria-label="Hosts" aria-haspopup="menu" aria-expanded={$sb.hostMenu}><Icon name="server" /></button>
+        {#if $sb.hostMenu}<HostMenu onclose={() => sb.dispatch('hostmenu.open', { open: false })} />{/if}
+      </span>
+    {/if}
   </div>
 
 
@@ -729,18 +752,18 @@
       {#each crumbs as k, i (k)}
         <span class="crumbsep" aria-hidden="true">›</span>
         {#if i === crumbs.length - 1}
-          <span class="crumb here" title={descOf(nameForKey(k)) || nameForKey(k)}>{nameForKey(k)}</span>
+          <span class="crumb here" title={nameForKey(k)}>{nameForKey(k)}</span>
           <span class="count">{focusCount}</span>
+          {#if descOf(nameForKey(k))}<InfoTip testid="crumb-info" label="Description of {nameForKey(k)}" text={descOf(nameForKey(k))} onclick={() => editDesc(workspace)} />{/if}
         {:else}
-          <button class="crumb press focus-ring" onclick={() => enter(nameForKey(k))} title={descOf(nameForKey(k)) || nameForKey(k)}>{nameForKey(k)}</button>
+          <button class="crumb press focus-ring" onclick={() => enter(nameForKey(k))} title={nameForKey(k)}>{nameForKey(k)}</button>
         {/if}
       {/each}
       <span class="crumbacts">
-        <button class="icon-btn press" onclick={() => editDesc(workspace)} title="Edit description" aria-label="Edit description"><Icon name="note" size={12} /></button>
         <button class="icon-btn press" onclick={() => newFolder(focusKey)} title="New subfolder" aria-label="New subfolder" data-testid="new-subfolder-here"><Icon name="plus" size={12} /></button>
       </span>
     </nav>
-    {#if descEditing === workspace}{@render descEditor(workspace)}{/if}
+    {#if descEditing === workspace}<div class="crumbedit">{@render descEditor(workspace)}</div>{/if}
   {/if}
 
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -763,7 +786,7 @@
       {/if}
     {/each}
     {#if !items.length}
-      <p class="empty">{filter ? 'No chat matches that.' : workspace ? 'Nothing in this folder yet. New chats you start here land in it.' : 'No chats yet.'}</p>
+      <p class="empty">{filter ? 'No chat matches that.' : workspace ? 'Empty' : 'No chats yet.'}</p>
     {/if}
   </div>
 
@@ -831,10 +854,6 @@
     </div>
   {/if}
 
-  {#if hostMenuY !== null}
-    <HostMenu top={hostMenuY} onclose={() => (hostMenuY = null)} />
-  {/if}
-
   {#if folderMenu}
     {@const sibs = folderSiblings(folderMenu)}
     {@const at = sibs.indexOf(folderMenu)}
@@ -871,18 +890,8 @@
   {/if}
 
   {#snippet descEditor(name)}
-    {@const key = folderKey(name)}
-    <form class="wsdescedit" data-testid="description-editor" onsubmit={(event) => { event.preventDefault(); saveDesc(name, descDraft); }}>
-      <label for="desc-{key.replace(/[^a-z0-9]+/g, '-')}">What belongs in {name} <span class="wsdescsrc">{descSource(name) === 'manual' ? '(your words; the router treats this as the definition)' : descSource(name) === 'auto' ? '(auto-written; saving makes it yours)' : '(none yet)'}</span></label>
-      <!-- svelte-ignore a11y_autofocus -->
-      <textarea id="desc-{key.replace(/[^a-z0-9]+/g, '-')}" class="filter focus-ring" rows="4" maxlength="300" bind:value={descDraft} autofocus data-testid="description-text"
-        onkeydown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); descEditing = null; } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); saveDesc(name, descDraft); } }}></textarea>
-      <div class="wsdescbtns">
-        <button type="submit" class="press" data-testid="description-save">Save</button>
-        <button type="button" class="press" onclick={() => (descEditing = null)}>Cancel</button>
-        {#if descSource(name) === 'manual'}<button type="button" class="press" onclick={() => saveDesc(name, '')} title="Hand the folder back to the daily generator" data-testid="description-reset">Back to auto</button>{/if}
-      </div>
-    </form>
+    <DescEditor value={$sb.descDraft} label="Description of {name}" oninput={(text) => sb.dispatch('desc.draft', { text })}
+      onsave={(text) => saveDesc(name, text)} oncancel={cancelDesc} />
   {/snippet}
 
 
@@ -927,7 +936,7 @@
         ondragover={(e) => { if (folderDrag) folderDragOver(e, key); else dragOver(e, key); }}
         ondragleave={() => { dropTarget = undefined; if (folderDrop?.key === key) folderDrop = null; }}
         ondrop={(e) => { if (folderDrag) folderDropOn(e, key); else dropOn(e, name); }}
-        title={(name ? descOf(name) : 'Chats that are in no folder') || 'Double-click to make this folder the root. Drag to reorder, or onto the middle of another folder to put it inside'}>
+>
         {#if wsRenaming === name && name}
           <form class="wsrename" onsubmit={(event) => { event.preventDefault(); renameWorkspace(name, event.currentTarget.elements[0].value); }}>
             <!-- svelte-ignore a11y_autofocus -->
@@ -939,27 +948,27 @@
           <button class="wstoggle press" tabindex="-1" onclick={(e) => { if (pick(item.id, e) === 'multi') return; if (e.altKey) setOpenDeep(key, !item.open); else setOpen(key, !item.open); }}
             ondblclick={() => { if (name) enter(name); }}
             aria-expanded={item.open} data-testid={key === UNFILED ? 'toggle-everything-else' : 'toggle-workspace'}>
-            <span class="caret" class:down={item.open} class:none={!item.hasChildren}><Icon name="chevron" size={11} /></span>
+            <span class="caret" class:down={item.open} class:none={!item.hasChildren && key !== UNFILED}><Icon name="chevron" size={11} /></span>
             <Icon name={name ? (item.open ? 'folder-open' : 'folder') : 'tray'} size={12} />
             <span class="wsname">{name ?? CATCHALL_LABEL}</span>
             {#if item.archivedOwn}<span class="archtag" data-testid="archived-marker">archived</span>{:else if item.archived}<span class="archtag">in archived</span>{/if}
             {#if item.count}<span class="count">{item.count}</span>{/if}
             {#if item.live}<span class="dot unread-dot" title="live or unread inside"></span>{/if}
           </button>
+          {#if name && descOf(name)}<span class="wsinfo"><InfoTip testid="folder-info" label="Description of {name}" text={descOf(name)} onclick={() => editDesc(name)} /></span>{/if}
           <span class="wsacts">
             {#if name}
               <button class="icon-btn press" tabindex="-1" onclick={() => newFolder(key)} title="New subfolder" aria-label="New subfolder" data-testid="new-subfolder"><Icon name="plus" size={12} /></button>
-              <button class="icon-btn press" tabindex="-1" onclick={() => editDesc(name)} title="Edit description" aria-label="Edit description" data-testid="edit-description"><Icon name="note" size={12} /></button>
               <button class="icon-btn press" tabindex="-1" onclick={() => startRename(name)} title="Rename" aria-label="Rename workspace" data-testid="rename-workspace"><Icon name="write" size={12} /></button>
             {/if}
             <button class="icon-btn press" tabindex="-1" onclick={(e) => openFolderMenu(e, key)} title="Move folder" aria-label="Move folder" data-testid="move-folder"><Icon name="more" size={12} /></button>
             {#if name}
-              <button class="icon-btn press" tabindex="-1" onclick={() => enter(name)} title="Focus: make {name} the root and hide everything else (or double-click it)" aria-label="Focus folder" data-testid="enter-workspace"><Icon name="focus" size={12} /></button>
+              <button class="icon-btn press" tabindex="-1" onclick={() => enter(name)} title="Focus folder" aria-label="Focus folder" data-testid="enter-workspace"><Icon name="focus" size={12} /></button>
             {/if}
           </span>
         {/if}
       </div>
-      {#if name && descEditing === name}{@render descEditor(name)}{/if}
+      {#if name && descEditing === name}<div class="wsdescedit">{@render descEditor(name)}</div>{/if}
     </div>
   {/snippet}
 
@@ -1024,7 +1033,7 @@
         class="chat press focus-ring"
         class:active={row.id === activeId}
         class:inpane={row.id !== activeId && openIds.includes(row.id)}
-        class:sel={cursor === `c:${row.id}`} class:picked={isSel(`c:${row.id}`) && selected.size > 1}
+        class:sel={$sb.cursor === `c:${row.id}`} class:picked={isSel(`c:${row.id}`) && selected.size > 1}
         href="?chat={encodeURIComponent(row.id)}"
         onclick={(event) => rowClick(event, row.id)}
         data-testid="chat-row"
@@ -1126,10 +1135,10 @@
     color: inherit; text-decoration: none; cursor: pointer;
   }
   .chat:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
-  .chat.active { background: var(--accent-soft); }
-  .chat.inpane { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+  .chat.active { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .chat.inpane { background: color-mix(in srgb, var(--accent) 20%, transparent); }
   
-  .chat.sel { background: color-mix(in srgb, var(--ink) 9%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .chat.sel { background: color-mix(in srgb, var(--accent) 7%, transparent); }
   .fork .chat { margin-left: 14px; width: calc(100% - 14px); }
   .branch { color: var(--ink-faint); font-size: 12px; flex: none; }
   .text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -1183,7 +1192,7 @@
   .wsgroup, .group, .wsnew.sub { --indent: 12px; padding-left: calc(var(--depth, 0) * var(--indent));
     background-image: repeating-linear-gradient(to right, transparent 0 7px, var(--line-soft, var(--line)) 7px 8px, transparent 8px var(--indent));
     background-size: calc(var(--depth, 0) * var(--indent)) 100%; background-repeat: no-repeat; }
-  .wshead.sel { background: color-mix(in srgb, var(--ink) 9%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+  .wshead.sel { background: color-mix(in srgb, var(--accent) 7%, transparent); }
   .list:focus { outline: none; }
   .list:focus-visible .sel { box-shadow: inset 0 0 0 1px var(--accent); }
   .caret.none { visibility: hidden; }
@@ -1220,14 +1229,13 @@
   .wsacts .icon-btn { width: 22px; height: 22px; }
   .wsrename { flex: 1; padding: 3px 4px; display: flex; }
   .wsbody { padding-left: 10px; }
-  .wsdesc { display: block; width: 100%; text-align: left; margin: 0 0 2px; padding: 0 8px 3px 30px; border: 0; background: none; color: var(--ink-faint); font: inherit; font-size: 11.5px; line-height: 1.3; cursor: text; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .wsdesc[data-source='auto'] { font-style: italic; }
-  .wsdescedit { display: flex; flex-direction: column; gap: 5px; margin: 2px 4px 6px 10px; }
-  .wsdescedit label { font-size: 11.5px; color: var(--ink-soft, var(--ink-faint)); }
-  .wsdescsrc { color: var(--ink-faint); }
-  .wsdescedit textarea { resize: vertical; min-height: 64px; font-size: 12.5px; line-height: 1.35; }
-  .wsdescbtns { display: flex; gap: 6px; }
-  .wsdescbtns button { padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line-soft); background: none; color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
+  .wsdescedit { margin: 2px 4px 6px 22px; }
+  .crumbedit { margin: 0 12px 8px; }
+  .wsinfo { display: flex; opacity: 0; }
+  .wshead:hover .wsinfo, .wshead.sel .wsinfo, .wshead:focus-within .wsinfo, .wsinfo:has(:focus-visible) { opacity: 1; }
+  @media (hover: none) { .wsinfo { opacity: 1; } }
+  .crumbs :global(.info) { width: 20px; height: 20px; opacity: 0.8; }
+  .hostwrap { position: relative; display: flex; }
   .wsinner { margin: 0 0 4px; }
   .wshead[draggable='true'] { cursor: grab; }
   .wshead.dragging { opacity: 0.45; }

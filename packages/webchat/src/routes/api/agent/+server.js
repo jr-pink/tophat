@@ -149,7 +149,8 @@ export async function POST({ request, getClientAddress }) {
     
     
     const cursor = app.store.cursor();
-    const { injected } = app.runner.send(id, text, { display: text });
+    const display = typeof body.display === 'string' && body.display.trim() ? body.display.trim() : text;
+    const { injected } = app.runner.send(id, text, { display });
     return json({ id, injected, cursor }, { headers: { 'cache-control': 'no-store' } });
   }
 
@@ -191,7 +192,7 @@ export async function POST({ request, getClientAddress }) {
     app.store.ensureConversation(id, { at, cwd, settings, title, parentId, source: probe ? 'deployment-probe' : 'agent' });
     app.store.append(id, 'conversation.created', { title, settings, cwd }, { at });
     const cursor = app.store.cursor();
-    app.runner.send(id, prompt, { display: prompt });
+    app.runner.send(id, prompt, { display: typeof body.display === 'string' && body.display.trim() ? body.display.trim() : prompt });
     return json({ id, provider: settings.provider, model: settings.model, cursor }, { headers: { 'cache-control': 'no-store' } });
   }
 

@@ -1,6 +1,9 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, setContext } from 'svelte';
   import Markdown from './Markdown.svelte';
+  import Message from './Message.svelte';
+  import ToolRun from './ToolRun.svelte';
+  import { groupToolRuns } from '$lib/core/toolruns.js';
   import { conversationItems } from '$lib/core/reducer.js';
   import { readDraft, writeDraft } from '$lib/core/attachments.js';
   import { followDecision } from '$lib/core/follow.js';
@@ -25,6 +28,8 @@
     actions = null
   } = $props();
 
+  // folds (tool runs, thinking) are kept per side chat in the disclosure store, as the main transcript keeps them per chat
+  setContext('artifact-conversation', () => thread.id);
   let field = $state(null);
   let text = $state('');
   let body = $state(null);
@@ -33,6 +38,8 @@
   const items = $derived(conversationItems(chatState, thread.id).filter((item) => !item.agentId));
   const turns = $derived(items.filter((item) => item.type === 'user' || item.type === 'assistant'));
   const tools = $derived(items.filter((item) => item.type === 'tool'));
+  // a side chat renders like the main chat: the same message and tool-run components, tool calls folded into runs the same way
+  const rows = $derived(groupToolRuns(items.filter((item) => ['user', 'assistant', 'tool', 'thinking'].includes(item.type))));
   const running = $derived(['queued', 'starting', 'thinking', 'running'].includes(thread.runState));
   const quote = $derived(String(thread.sidechat?.quote || '').replace(/\s+/gu, ' ').trim());
 
@@ -187,6 +194,13 @@
   </header>
 
   <div class="body" bind:this={body} onscroll={bodyScrolled} data-testid="sidechat-body">
+    {#if !comments}
+      {#each rows as row (row.id)}
+        <div class="srow">
+          {#if row.type === 'toolrun'}<ToolRun run={row} />{:else}<Message item={row} />{/if}
+        </div>
+      {/each}
+    {:else}
     {#each turns as item (item.id)}
       {#if item.type === 'user' && comments}
         <div class="remark" data-testid="comment" data-comment={item.id}>
@@ -204,9 +218,6 @@
         </div>
       {/if}
     {/each}
-    {#if tools.length}
-      
-      <p class="tools" data-testid="sidechat-tools">{tools.length} tool call{tools.length === 1 ? '' : 's'}</p>
     {/if}
     {#if running && !turns.some((item) => item.type === 'assistant' && item.streaming)}
       <p class="working" data-testid="sidechat-working"><span class="dot"></span> working…</p>
@@ -301,6 +312,8 @@
   .reply { margin: 0 0 9px; font-size: 12.5px; line-height: 1.5; color: var(--ink-dim); }
   .reply :global(p) { margin: 0 0 0.55em; }
   .reply :global(pre) { font-size: 11px; }
+  .srow { margin: 0 0 6px; font-size: 13.5px; }
+  .srow :global(.row) { padding-left: 0; padding-right: 0; }
   .tools, .working { margin: 0 0 8px; font-size: 11px; color: var(--ink-faint); font-family: var(--mono); }
   .working { display: flex; align-items: center; gap: 6px; }
   .dot {

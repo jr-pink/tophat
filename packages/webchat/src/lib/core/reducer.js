@@ -354,9 +354,18 @@ function applyEvent(draft, event) {
     case 'conversation.workspace':
       patchConversation(draft, id, at, { workspace: content.workspace || null });
       break;
-    case 'conversation.host':
-      patchConversation(draft, id, at, { host: content.host || null });
+    case 'conversation.host': {
+      // A change of machine is a row of its own, a rule across the transcript naming the host the chat moved to.
+      const before = draft.conversations?.[id]?.host || null;
+      const after = content.host || null;
+      if (before !== after) {
+        upsert(draft, id, `host-${event.cursor ?? event.event_id ?? at}`,
+          { type: 'hostswitch', at, cursor: event.cursor, agentId: null, from: before, to: after, auto: content.auto === true },
+          (item) => item);
+      }
+      patchConversation(draft, id, at, { host: after });
       break;
+    }
     case 'conversation.deferred':
       patchConversation(draft, id, at, {
         deferUntil: content.until || null,

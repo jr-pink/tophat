@@ -19,7 +19,9 @@ import { readLegacyLocal } from './migrate.js';
 function defaultConnect(options = {}) {
   return connectEngine({
     name: 'tophat-chat',
-    shared: () => new SharedWorker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'tophat-chat-engine' }),
+    // a page may name its own engine worker (globalThis.__chatEngineWorker, set before the app boots): the public demo uses a fresh name per load so a
+    // worker that outlived the last page (and its cursor over a cache the page just wiped) is never reused
+    shared: () => new SharedWorker(new URL('./worker.js', import.meta.url), { type: 'module', name: globalThis.__chatEngineWorker || 'tophat-chat-engine' }),
     dedicated: () => new Worker(new URL('./worker.js', import.meta.url), { type: 'module', name: 'tophat-chat-engine' }),
     local: () => makeChatServer(options.serverOptions || {}),
     ...options

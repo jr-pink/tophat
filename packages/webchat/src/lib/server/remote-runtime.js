@@ -18,6 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { webchatStorePath } from './paths.js';
 import { loadRuntimes } from './hosts.js';
+import { SEED_CLOSE, seedMarker, unseeded } from '../core/automated-event.js';
 
 const TWINS = () => webchatStorePath('remote-twins.json');
 const DECISIONS = () => webchatStorePath('remote-routing.jsonl');
@@ -48,7 +49,7 @@ export function seedTranscript(events, { after = 0, exclude = null, cap = SEED_C
     if (e.cursor <= after) continue;
     const c = e.content || {};
     if (exclude && c.itemId === exclude) continue;
-    if (e.kind === 'message.user' && c.text) lines.push(`Owner: ${String(c.text).trim()}`);
+    if (e.kind === 'message.user' && c.text) { const own = unseeded(c.text); if (own) lines.push(`Owner: ${own}`); }
     else if (e.kind === 'assistant.message' && c.text && !c.agentId) lines.push(`Assistant: ${String(c.text).trim()}`);
   }
   let text = lines.join('\n\n');
@@ -59,7 +60,7 @@ export function seedTranscript(events, { after = 0, exclude = null, cap = SEED_C
 /** The message as sent to the runtime that has not seen part of the chat: the missed transcript first, then the message. */
 export function withSeed(seed, wire, where) {
   if (!seed) return wire;
-  return `[Earlier in this chat, which ran ${where}. Background only; the owner's new message follows the marker.]\n${seed}\n[End of earlier transcript.]\n\n${wire}`;
+  return `${seedMarker(where)}\n${seed}\n${SEED_CLOSE}\n\n${wire}`;
 }
 
 /** Splits a server-sent stream into its JSON frames: feed(text) returns the frames completed so far, keeping any partial one. */
@@ -248,11 +249,11 @@ export function createRemoteRuntimes({
       const item = twin.pending[0];
       try {
         if (!twin.remoteId) {
-          const out = await call(twin.runtime, { op: 'spawn', prompt: item.text, title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
+          const out = await call(twin.runtime, { op: 'spawn', prompt: item.text, display: item.display, title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
           twin.remoteId = out.id;
           twin.cursor = Number(out.cursor) || 0; // the host's cursor before it ran the prompt: the stream starts there
         } else {
-          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: item.text });
+          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: item.text, display: item.display });
         }
       } catch (cause) {
         if (cause.offline) { noteOffline(id, twin, cause); return; }
@@ -440,6 +441,8 @@ export function createRemoteRuntimes({
           return { queued: false, injected: false };
         }
         // Back on this machine after remote turns: the local run has not seen them, so the missed transcript goes first.
+        // The runner sees the seeded text.
+        options = { ...options, display: options.display ?? text };
         if (twin && twin.localSeen != null) {
           const seed = seedTranscript(store.allConversationEvents(id), { after: twin.localSeen, exclude: options.itemId });
           if (seed) { text = withSeed(seed, text, `on ${labelOf(twin.runtime)}`); decide({ event: 'return-local', chat: id, runtime: twin.runtime, seededChars: seed.length }); }

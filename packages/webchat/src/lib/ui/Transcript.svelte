@@ -4,6 +4,7 @@
   import { cubicOut } from 'svelte/easing';
   import Activity from './Activity.svelte';
   import CompactionCard from './CompactionCard.svelte';
+  import HostSwitchRule from './HostSwitchRule.svelte';
   import PaceCard from './PaceCard.svelte';
   import HookCard from './HookCard.svelte';
   import Message from './Message.svelte';
@@ -345,6 +346,7 @@
     if (item.type === 'toolrun') return 34;
     if (item.type === 'hook') return 36;
     if (item.type === 'compaction') return 24;
+    if (item.type === 'hostswitch') return 30;
     if (item.type === 'pace') return 42;
     return 50; 
   }
@@ -753,6 +755,8 @@
               {/each}
             {/snippet}
           </HookCard>
+        {:else if item.type === 'hostswitch'}
+          <HostSwitchRule {item} />
         {:else if item.type === 'compaction'}
           <CompactionCard
             {item}

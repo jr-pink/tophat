@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { openStoreForScript } from '../../webchat/src/lib/server/store.js';
 import { normalizeSettings } from '../../webchat/src/lib/core/contract.js';
+import { FIGURES } from './answer.mjs';
 
 export const OPENER_ID = (guest) => `opener-${guest.slice(0, 10)}`;
 /** The nth intro chat of a guest: the first is OPENER_ID, a replayed intro is `<OPENER_ID>-<n>` (the chat it replaces is archived). */
@@ -20,8 +21,10 @@ export function openerGenOf(guest, id) {
 }
 
 /** The chat definitions: seed/chats.json, with each `slot` chat's transcript taken from the cached real turn (skipped when none is cached yet). */
-export function loadTemplates({ file, cacheDir, slots = [] }) {
-  const defs = JSON.parse(readFileSync(file, 'utf8')).chats;
+export function loadTemplates({ file, cacheDir, slots = [], widgetsDir = '' }) {
+  // a `<!-- figure:NAME -->` line in a seed message is the same figure the landing answer places (answer.mjs FIGURES): an image-style line the app renders as the live widget
+  const fig = (t) => (typeof t === 'string' && widgetsDir ? t.replace(/^<!--\s*figure:([\w-]+)\s*-->[ \t]*$/gm, (_, n) => (FIGURES[n] ? `![${FIGURES[n][1]}](${path.join(widgetsDir, FIGURES[n][0])})` : '')) : t);
+  const defs = JSON.parse(readFileSync(file, 'utf8')).chats.map((d) => (d.messages ? { ...d, messages: d.messages.map((m) => ({ ...m, text: fig(m.text) })) } : d));
   const out = [];
   for (const d of defs) {
     if (!d.slot) { out.push(d); continue; }

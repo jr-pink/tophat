@@ -270,6 +270,9 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
   async function routeHost(id) {
     const conversation = store.conversation(id);
     if (!conversation || conversation.sidechat || conversation.host || hostRunning.has(id)) return null;
+    // A host is picked for a brand-new chat only, on its first message; a chat past its first turn stays where it runs, whatever the
+    // sweep or a later message would say.
+    if ((conversation.turns || 0) > 1) return null;
     if (hostDeclined.get(id) === (conversation.turns || 0)) return null;
     const candidates = autoCandidates(hosts());
     if (!candidates.length) return null;
@@ -375,7 +378,7 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
       // The host pass: chats active in the last day that have no host yet (routeHost asks nothing when no host is a candidate).
       if (autoCandidates(hosts()).length) {
         const recent = Date.now() - 24 * 60 * 60 * 1000;
-        const pending = store.conversations().filter((c) => !c.sidechat && !c.archived && !c.host && (c.turns || 0) > 0 && Date.parse(c.updatedAt || 0) > recent).slice(0, limit);
+        const pending = store.conversations().filter((c) => !c.sidechat && !c.archived && !c.host && (c.turns || 0) === 1 && Date.parse(c.updatedAt || 0) > recent).slice(0, limit);
         for (const c of pending) await routeHost(c.id);
       }
     } catch (cause) {

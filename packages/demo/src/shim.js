@@ -111,8 +111,12 @@
   }
   const typedVisual = (v, typed, total) => {
     v.msg.textContent = typed;
-    if (typed.length >= total - 7) v.send.classList.add('on'); // the send button fades in over the last word
-    v.caret.classList.remove('idle'); clearTimeout(v.idle); v.idle = setTimeout(() => v.caret.classList.add('idle'), 450);
+    // the button is part of the line, already there at the end of the full text; the typed text slides left under the fixed caret and the caret runs into it
+    if (v.full == null) { const probe = v.msg.cloneNode(); probe.textContent = total; v.msg.parentNode.appendChild(probe); probe.style.visibility = 'hidden'; v.full = probe.getBoundingClientRect().width; probe.remove(); }
+    // an invisible textbox behind the line: the button sits at a fixed distance from the text's LEFT anchor (twice the full line's width), so it moves left exactly as the text grows and the caret only meets it at the end
+    v.send.style.left = (2 * v.full - v.msg.getBoundingClientRect().width) + 'px';
+    if (typed.length >= total.length - 5) v.send.classList.add('on'); // a slow fade over the last words
+    v.caret.classList.remove('idle'); clearTimeout(v.idle); v.idle = setTimeout(() => v.caret.classList.add('idle'), 250);
   };
   const bezier = (x1, y1, x2, y2) => (t) => {
     if (t <= 0) return 0; if (t >= 1) return 1;
@@ -146,6 +150,7 @@
   function flyVisual(v, text) {
     const o = v.o, vw = root.clientWidth;
     v.send.animate([{ transform: 'scale(1)' }, { transform: 'scale(.8)', offset: .45 }, { transform: 'scale(1)' }], { duration: 260, easing: 'ease-out' });
+    v.caret.style.visibility = 'hidden'; // the message leaves the flex line: the caret would re-centre for a frame
     root.classList.add('demo-intro-out'); root.classList.remove('demo-intro'); o.classList.add('out'); // the page under the overlay is the app's own again (no forced black body) as the overlay's black fades o.style.pointerEvents = 'none';
     const r = v.msg.getBoundingClientRect(), mcs = getComputedStyle(v.msg), fs = parseFloat(mcs.fontSize) || 40, font = { fontFamily: mcs.fontFamily, fontSize: mcs.fontSize, fontWeight: mcs.fontWeight, fontStyle: mcs.fontStyle, letterSpacing: mcs.letterSpacing }; // read before it leaves the line: out of .line it would inherit the page's 16px and the words would shrink inside a bubble sized for the big line (the "font size scales wrong in flight" report)
     // the target: the real message if the app has drawn it (same box, so the hand-over is exact), else where it will sit (top right of the transcript)
@@ -155,9 +160,9 @@
     if (!br || !(br.width > 0) || br.bottom < 0 || br.top > innerHeight) br = null;
     const padY = 9 / k, padX = 13 / k; // Message.svelte's bubble padding at the line's size
     const w = br ? br.width / k : r.width + 2 * padX, h = br ? br.height / k : r.height * 0.82 + 2 * padY;
-    const P0 = { x: r.left - padX, y: r.top + r.height / 2 - h / 2 }, P1 = br ? { x: br.left, y: br.top } : { x: root.clientWidth - 28 - w * k, y: 72 };
+    const P0 = { x: r.left - padX - (1 / k - 1), y: r.top + r.height / 2 - h / 2 }, P1 = br ? { x: br.left, y: br.top } : { x: root.clientWidth - 28 - w * k, y: 72 };
     // the message leaves the line (its caret and send button go) and flies on its own, from exactly where its words are
-    Object.assign(v.msg.style, font, { position: 'fixed', left: '0', top: '0', margin: '0', boxSizing: 'border-box', width: w + 'px', height: h + 'px', padding: `${padY}px ${padX}px`, borderRadius: `${14 / k}px ${14 / k}px ${4 / k}px ${14 / k}px`, borderWidth: 1 / k + 'px', lineHeight: (h - 2 * padY) + 'px', transformOrigin: '0 0', transform: `translate(${P0.x}px,${P0.y}px)` });
+    Object.assign(v.msg.style, font, { position: 'fixed', left: '0', top: '0', right: 'auto', margin: '0', boxSizing: 'border-box', width: w + 'px', height: h + 'px', padding: `${padY}px ${padX}px`, borderRadius: `${14 / k}px ${14 / k}px ${4 / k}px ${14 / k}px`, borderWidth: 1 / k + 'px', lineHeight: (h - 2 * padY) + 'px', transformOrigin: '0 0', transform: `translate(${P0.x}px,${P0.y}px)` });
     o.appendChild(v.msg);
     v.msg.classList.add('bubble');
     v.msg.animate(flightFrames(P0, P1, k, vw), { duration: FLIGHT_MS, easing: 'linear', fill: 'forwards' });
@@ -168,6 +173,13 @@
     for (const el of [o.querySelector('.bg'), o.querySelector('.stars')]) el.animate([{ opacity: 1 }, { opacity: 0 }], { delay: landAt, duration: IN_MS, easing: 'ease-out', fill: 'forwards', composite: 'replace' });
     // the flying copy hands over to the real message (under it by then), then the overlay is gone
     const handover = v.msg.animate([{ opacity: 1 }, { opacity: 0 }], { delay: FLIGHT_MS + IN_MS - 150, duration: 200, easing: 'linear', fill: 'forwards', composite: 'add' });
+    // the end keyframe lands on the real message: when the flight ends, if the app has drawn it somewhere other than where we aimed, glide the last pixels onto it before the hand-over
+    setTimeout(() => {
+      const re = [...document.querySelectorAll('[data-testid="user-text"]')].find((e) => e.textContent.trim() === text.trim()), b = re && re.getBoundingClientRect();
+      if (!b || !(b.width > 0) || b.bottom < 0 || b.top > innerHeight || (Math.abs(b.left - P1.x) < 1 && Math.abs(b.top - P1.y) < 1 && Math.abs(b.width - w * k) < 1)) return;
+      const s2 = b.width / w;
+      v.msg.animate([{ transform: `translate(${P1.x}px,${P1.y}px) scale(${k})` }, { transform: `translate(${b.left}px,${b.top}px) scale(${s2})` }], { duration: 140, easing: 'ease-out', fill: 'forwards' });
+    }, FLIGHT_MS);
     handover.finished.then(cleanupVisual, cleanupVisual);
     v.timer = setTimeout(cleanupVisual, FLIGHT_MS + IN_MS + 1500); // a backstop only
   }
@@ -180,10 +192,9 @@
       due += gaps[typed.length] * 0.6;
       const wait = due - performance.now(); if (wait > 0) await pause(wait);
       if (visual !== v || visitorActed || failed) return;
-      typed += ch; typedVisual(v, typed, text.length);
+      typed += ch; typedVisual(v, typed, text);
     }
-    v.send.classList.add('on');
-    await pause(420);
+    await pause(1700);
     if (visual !== v || visitorActed || failed) return;
     flyVisual(v, text);
   }

@@ -156,7 +156,9 @@
     const id = session.newConversationId();
     if (seed) writeDraft(id, seed);
     const label = String(anchor.quote).replace(/\s+/gu, ' ').trim().slice(0, 48);
-    session.fork(id, { parentId: conversationId, title: `↳ ${label}`, sidechat: anchor });
+    // a side chat is a quick margin question: the parent's model on the fast path at low effort
+    const settings = { ...($state.snapshot(conversation?.settings) || {}), fastMode: true, reasoningEffort: 'low' };
+    session.fork(id, { parentId: conversationId, title: `↳ ${label}`, sidechat: anchor, settings });
     const leaving = rail.focused;
     rail = focusThread(rail, id);
     autofocusThread = id;

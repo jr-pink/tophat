@@ -64,6 +64,8 @@ export function listHosts({ file = FILE(), peers = hubPeers(), self = selfDevice
   for (const p of peers) {
     if (p.id === self) continue;
     const v = all[p.id] || {};
+    // A hub device this instance holds no address for cannot run a chat: it is not offered.
+    if (!(v.url && v.tokenFile)) continue;
     out.push({ id: p.id, label: String(v.label || p.id), user: p.user, local: false, configured: Boolean(v.url && v.tokenFile),
       description: String(v.description || ''), auto: v.auto === true, at: v.at || null });
   }

@@ -194,7 +194,7 @@
       data-testid={inMenu ? 'more-host' : 'host'}
     >
       {#each hostState.list as h (h.id)}
-        <option value={h.id} disabled={!h.configured}>{h.label}{h.local ? ' (this machine)' : ''}{!h.configured ? ' (no address)' : h.online === false ? ' (offline)' : ''}</option>
+        <option value={h.id} disabled={!h.configured}>{h.label}{!h.configured ? ' (no address)' : h.online === false ? ' (offline)' : ''}</option>
       {/each}
       {#if conversation?.host && !hostState.list.some((h) => h.id === conversation.host)}<option value={conversation.host}>{conversation.host}</option>{/if}
     </select>

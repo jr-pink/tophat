@@ -12,6 +12,27 @@ import { arrivalTitle } from './arrival-title.js';
 
 export const SUMMARY_MAX = 90;
 
+// The transcript a runtime missed (remote-runtime.js withSeed) goes in front of his message on the wire only.
+const SEED_OPEN = /^\s*\[Earlier in this chat, which ran ([^\]]*?)\. Background only; the owner's new message follows the marker\.\]\n?/u;
+export const SEED_CLOSE = '[End of earlier transcript.]';
+export const seedMarker = (where) => `[Earlier in this chat, which ran ${where}. Background only; the owner's new message follows the marker.]`;
+
+/** {where, seed, message} for a seeded owner message (nested seeds peeled to his last words), else null. Never throws. */
+export function seededMessage(text) {
+  const raw = String(text ?? '');
+  const m = raw.match(SEED_OPEN);
+  if (!m) return null;
+  const end = raw.lastIndexOf(SEED_CLOSE);
+  if (end < 0) return null;
+  return { where: m[1], seed: raw.slice(m[0].length, raw.indexOf(SEED_CLOSE, m[0].length)).trim(), message: raw.slice(end + SEED_CLOSE.length).trim() };
+}
+
+/** A stored owner message without any seed wrapper. */
+export function unseeded(text) {
+  const s = seededMessage(text);
+  return s ? s.message : String(text ?? '').trim();
+}
+
 const LABEL = /^\s*\[\s*Automated\s+(event|notice)\b([^\]]*)\]?/iu;
 const FROM = /^\s*from\s+(?:the\s+)?(.*?)\s*(?:\(([^)]*)\))?\s*(?:[;,.]|$)/iu;
 

@@ -80,7 +80,7 @@ export async function serve(c) {
 
   // A guest's starter chats: written when the guest is made (seed-chats.mjs: stable ids per definition, so seeding again writes nothing).
   const fresh = (guest) => {
-    const templates = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots });
+    const templates = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots, widgetsDir });
     seedGuest(store, { guest, scope: scopeOf(guest), templates, model, cwd: workspace });
   };
   // Starter rows nobody can see any more: retired versions, and the whole seed of a guest whose session has expired (their own chats stay).
@@ -138,7 +138,7 @@ export async function serve(c) {
    */
   const ensureOpener = (session, id) => {
     if (ro.prepare('SELECT 1 FROM conversations WHERE id=?').get(id)) return;
-    const template = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots }).find((t) => t.opener);
+    const template = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots, widgetsDir }).find((t) => t.opener);
     seedOpener(store, { id, template, scope: scopeOf(session.id), model: OPENER_MODEL, autoModel: true, cwd: expand(inst.paths.workspace || path.join(stateDir, 'workspace')) });
   };
   /** Idempotent and uncounted: a played intro is replaced by a new empty one, and every other intro chat of the guest is retired from their list. Returns the live intro chat's id. */
@@ -147,11 +147,14 @@ export async function serve(c) {
     const cur = openerOf(session);
     const next = hasUserMessage(cur) ? OPENER_GEN_ID(session.id, (openerGenOf(session.id, cur) || 0) + 1) : cur;
     ensureOpener(session, next);
-    // every earlier intro chat leaves the guest's list (played, kept talking in, or archived): the sidebar holds one intro, the live one
+    pruneIntros(session, next);
+    return next;
+  };
+  /** The intro chat is not kept: replaying it drops every earlier one from the guest's list with the app's own drop marker, so the sidebar only ever holds the live one. */
+  const pruneIntros = (session, keep) => {
     const at = new Date().toISOString();
     for (const r of ro.prepare('SELECT id FROM conversations WHERE scope=? AND id LIKE ?').all(scopeOf(session.id), `${OPENER_ID(session.id)}%`))
-      if (r.id !== next && openerGenOf(session.id, r.id) !== null) retire(store, r.id, at);
-    return next;
+      if (r.id !== keep && openerGenOf(session.id, r.id) !== null) retire(store, r.id, at);
   };
 
   // The files the opener answer shows, as the app asks for them (RichContent: /api/file?path=<path>&raw=1&conversation=<chat>), in answer order.
@@ -390,7 +393,7 @@ export async function serve(c) {
           if (action.payload?.settings && openerGenOf(session.id, String(action.conversation_id || '')) !== null) action.payload.settings = { ...action.payload.settings, model: OPENER_MODEL, autoModel: true };
           // the intro chat is created by the page with no folder: file it in the folder seed/chats.json gives the opener (personal assistant project), not the Inbox
           if (action.op === 'conversation.create' && openerGenOf(session.id, String(action.conversation_id || '')) !== null && !action.payload?.workspace) {
-            const workspace = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots }).find((t) => t.opener)?.workspace;
+            const workspace = loadTemplates({ file: path.join(DEMO, 'seed/chats.json'), cacheDir: c.cache, slots: c.slots, widgetsDir }).find((t) => t.opener)?.workspace;
             if (workspace) action = { ...action, payload: { ...action.payload, workspace } };
           }
           const own = action.conversation_id ? ro.prepare('SELECT scope FROM conversations WHERE id=?').get(action.conversation_id) : null;

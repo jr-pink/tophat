@@ -1,8 +1,3 @@
-<script module>
-  import { SvelteSet } from 'svelte/reactivity';
-  const opened = new SvelteSet();
-</script>
-
 <script>
   import Markdown from './Markdown.svelte';
   import ToolCard from './ToolCard.svelte';
@@ -13,7 +8,8 @@
   import { getContext } from 'svelte';
   import VideoPlayer from './VideoPlayer.svelte';
   import { attachedVideos } from '../core/rich-content.js';
-  import { automatedEvent } from '../core/automated-event.js';
+  import { automatedEvent, seededMessage } from '../core/automated-event.js';
+  import { useFolds } from './disclosure.svelte.js';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
 
@@ -25,10 +21,17 @@
 
   // An automated event (push plane, goal retry timer, watchers) is one muted line on the left, closed by
   // default; the block opens on a click. Pure client render of the stored text, so it works offline. The
-  // opened ids live at module level so a remount (virtualised list, streaming re-render) keeps what he opened.
-  const event = $derived(item.type === 'user' ? automatedEvent(item.text) : null);
-  const eventOpen = $derived(event ? opened.has(item.id) : false);
-  const toggleEvent = () => { if (opened.has(item.id)) opened.delete(item.id); else opened.add(item.id); };
+  // open state lives in the fold store (disclosure.svelte.js), scoped by chat, so a remount or reload keeps what he opened.
+  const folds = useFolds();
+  // A seeded row (an older store wrote the missed transcript into his message) folds the seed as an event above his bubble.
+  const seeded = $derived(item.type === 'user' ? seededMessage(item.text) : null);
+  const userText = $derived(seeded ? seeded.message : item.text);
+  const event = $derived(item.type === 'user' && !seeded ? automatedEvent(item.text) : null);
+  const seedLabel = $derived(seeded ? `Automated event: Earlier transcript (ran ${seeded.where})` : '');
+  const seedOpen = $derived(seeded ? folds.isOpen('seed', item.id) : false);
+  const toggleSeed = () => folds.toggle('seed', item.id);
+  const eventOpen = $derived(event ? folds.isOpen('event', item.id) : false);
+  const toggleEvent = () => folds.toggle('event', item.id);
 
   let hovering = $state(false);
   let tapped = $state(false);
@@ -84,7 +87,19 @@
     {/if}
   </div>
 {:else if item.type === 'user'}
-  
+  {#if seeded}
+    <div class="row event" data-item={`${item.id}:seed`} data-role="user" data-automated="true" data-open={seedOpen ? 'true' : 'false'}>
+      <button type="button" class="event-head focus-ring" aria-expanded={seedOpen} aria-label={seedOpen ? `Collapse: ${seedLabel}` : `Expand: ${seedLabel}`}
+        title={seedLabel} data-testid="seed-toggle" onclick={toggleSeed}>
+        <span class="event-chev" class:open={seedOpen} aria-hidden="true">›</span>
+        <span class="event-label">{seedLabel}</span>
+      </button>
+      {#if seedOpen}
+        <div class="event-body" data-testid="seed-text" transition:slide={{ duration: 180, easing: cubicOut }}>{seeded.seed}</div>
+      {/if}
+    </div>
+  {/if}
+
   <div
     class="row user"
     class:incoming
@@ -95,7 +110,7 @@
     onmouseleave={() => (hovering = false)}
     onpointerdown={tapStamp}
   >
-    <div class="bubble" class:queued={item.queued} data-testid="user-text">{item.text}</div>
+    <div class="bubble" class:queued={item.queued} data-testid="user-text">{userText}</div>
     {#if videos.length}<div class="attached-video"><VideoPlayer items={videos.map((v) => ({ title: v.title, url: withConversation(v.url) }))} /></div>{/if}
     
     <div class="rowtools">

@@ -204,8 +204,6 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
     resumeInterrupted,
     interruptedCount: () => interrupted.length,
     async spawn({ description, prompt, model: wanted, wait = false, check_in_seconds: checkIn, kind, expected_minutes: expected }, callId) {
-      const total = q('SELECT COUNT(*) AS n FROM agents WHERE parent_session = ?').get(parentSessionId).n;
-      if (total >= limits.perConversation) return { error: `this conversation already spawned ${total} subagents (limit ${limits.perConversation})` };
       if (runningCount() >= limits.concurrent) return { error: `${runningCount()} subagents are already running (limit ${limits.concurrent}); wait for one with agent_wait or cancel one` };
       if (!prompt || !description) return { error: 'description and prompt are required' };
       const id = `agent_${randomUUID().slice(0, 8)}`, session = `${parentSessionId}/agent/${id}`;

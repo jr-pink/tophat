@@ -1,5 +1,5 @@
 {
- "note": "The chats every visitor starts with: 10 rows in four folders, in the sidebar's order (healthhh 2, personal assistant project 2 beside the intro chat, tophat 4, curiosity / collection 1), Inbox empty. Folder order and which folders start open are set in src/guest-reset.js (the sidebar's own device state); this file holds the chats. Every chat here is frozen: written below, the same for every visitor, never changed per visitor (a visitor who types into one continues in a fork of their own; src/seed-chats.mjs). `read: true` marks a chat the visitor has already read; without it the chat starts unread (a dot). The one live chat is `weekly`: its `slot` takes the assistant's answer from the demo's cached real turn (demo.json slots), which is re-run daily, and `prompt` replaces the cached user message with a casual wording of the same question. The opener is the empty chat the page opens on and the scripted intro plays in; it sits in the personal assistant project folder. Fictional or about tophat itself, except the encyclopedia cave answer, which is the owner's own memory with the friend unnamed. Folder names are the chats' `workspace`.",
+ "note": "The chats every visitor starts with: 9 rows in four folders, in the sidebar's order (healthhh 2, personal assistant project: the intro chat alone, tophat 4, curiosity / collection 2), Inbox empty. Folder order and which folders start open are set in src/guest-reset.js (the sidebar's own device state); this file holds the chats. Every chat here is frozen: written below, the same for every visitor, never changed per visitor (a visitor who types into one continues in a fork of their own; src/seed-chats.mjs). `read: true` marks a chat the visitor has already read; without it the chat starts unread (a dot). The one live chat is `weekly`: its `slot` takes the assistant's answer from the demo's cached real turn (demo.json slots), which is re-run daily, and `prompt` replaces the cached user message with a casual wording of the same question. The opener is the empty chat the page opens on and the scripted intro plays in; it sits in the personal assistant project folder. Fictional or about tophat itself, except the encyclopedia cave answer, which is the owner's own memory with the friend unnamed. Folder names are the chats' `workspace`.",
  "chats": [
   {
    "id": "opener",
@@ -17,24 +17,24 @@
   },
   {
    "id": "bench",
-   "title": "mem bench results",
+   "title": "how does the memory bench work",
    "workspace": "tophat",
    "messages": [
     {
      "role": "user",
-     "text": "how did we do on the memory bench again"
+     "text": "how does the memory bench work"
     },
     {
      "role": "assistant",
-     "text": "Two charts, same questions for every system, same answering model for the memory systems.\n\n**2a, the hardest 15 questions in LongMemEval-S** (a public benchmark: about 115k tokens of chat history per question, picked because published systems often miss them, scored with the benchmark's own judge prompts):\n\n- all in context (baseline): 9/15\n- tophat: 8/15\n- Wiki notes (Haiku 5.5): 7/15\n- Mem0 OSS (Opus 5.5): 6/15, Wiki notes (Opus 5.5): 6/15\n- Mem0 OSS (Haiku 5.5): 4/15\n\ntophat's 7 misses: 3 multi-session, 2 abstention, 1 preference, 1 temporal-reasoning.\n\n**2b, real traces:** 99 questions about one person's messages, workouts, sleep and code history, buried in about 300k tokens (7,326 events), against three chat-assistant services that answer with their own models:\n\n- tophat: 96/99\n- Grok Bot: 93/99\n- Instinct: 83/99\n- Meta Muse: 81/99\n\nPutting the whole haystack in context also scores 96/99, so tophat matches it here. Its 3 misses: 1 single-fact, 2 multi-session.\n\nTwo caveats. The 99-question set is ours, so read 2b as a regression test, not an independent ranking. And 2a has only 15 questions, so one question is about 7 points, and tophat is one question behind full context there."
+     "text": "Every memory system gets the same questions, the same answering agent and the same grader. Only the memory differs.\n\n- **Memory built first.** Each system reads the whole haystack (the chat history or event stream) the way it normally would and builds its store. Tophat starts from an empty store for every question, and the live store is never opened.\n- **One answering agent for everyone.** The same model and the same loop (up to 8 tool calls: search, plus read where the system has it), then an answer. So a better score reflects better memory, not a better prompt or a bigger model.\n- **One grader.** A separate model labels each answer right or wrong. On LongMemEval it uses the benchmark's official judge prompts, copied verbatim.\n- **A ceiling to compare against.** \"All in context\" puts the whole haystack in the prompt, with no memory system at all. It shows what the answering model can do when nothing is lost.\n\nThere are two sets of questions. **2a** is the 15 hardest questions in LongMemEval-S, a public benchmark with about 115k tokens of chat history per question. The questions were chosen before any system ran: the ones published systems most often miss, spread across all seven question types. **2b** is 99 questions about one person's real messages, workouts, sleep and code history, buried in 7,326 events (about 300k tokens)."
     },
     {
      "role": "user",
-     "text": "why does it do ok then, if search is not embeddings"
+     "text": "why should i trust the numbers"
     },
     {
      "role": "assistant",
-     "text": "Four things, as far as we can tell: facts are stored as entities and links instead of loose text, every note cites the raw record it came from, search is full text with rank fusion across sources, and context for the turn is prefetched before the model starts. We have not run an ablation that proves which of those matters most, so treat that as the design reasoning, not a measured result."
+     "text": "Mostly because the comparison is controlled and everything about it is on disk:\n\n- **The questions were fixed in advance** by a seeded rule over other people's published results, not picked after seeing how tophat did.\n- **Answer, model and grader are held fixed**, so systems can't win on prompting. The official judge prompts are used where they exist.\n- **No leaks.** Tool results never show which sessions hold the answer, and each question gets a fresh store.\n- **Every row is kept:** the answer, the judge's label, the full tool trace and the cost per question. Every harness bug found along the way is logged with what was re-run.\n- **Other systems run on their own defaults** (Mem0, Zep/Graphiti, Letta, agentmemory, Supermemory), and any deviation, such as local embeddings where the default needs an OpenAI key, is written next to the result.\n\nWhere it is weaker:\n\n- **Small n.** 2a has 15 questions, so one question is about 7 points. Treat differences of one or two questions as noise; reruns of the same system moved by one.\n- **2b is our own set**, written by us about one person. Read it as a regression test, not an independent ranking.\n- **The grader is a model** and occasionally misjudges, mostly on preference questions and disputed answers.\n- **Tophat's embedding search was off for every run**, so these are full-text-search numbers."
     }
    ]
   },
@@ -65,7 +65,7 @@
     },
     {
      "role": "assistant",
-     "text": "The memory has **14 entities**: the `tophat` project plus 13 `@tophat-md/*` packages (linknotes, push, sources, retrieval, pull, tools, upkeep, verify, groups, viewer, deploy, runner, webchat). I didn't get an exact note count. My note search capped at 50 hits, and every hit so far is from the `tophat-docs` source, mostly `docs/instances.md` and the README.\n\nHow they connect: the viewer draws entities as nodes and each note as a hyperedge over the entities it cites. From the docs, the packages hang off the `tophat` project, and notes link things like `@tophat-md/push` to the store and the sources. I haven't checked the exact link set, so I can't give you an edge count.\n\nThe graph itself is `tophat graph --config FILE`, served at localhost:4179/graph. I can't open it from this chat."
+     "text": "Here it is, drawn from the memory as it stands now: each dot is an entity, and two entities are linked when notes mention both. Bigger dots are mentioned by more notes.\n\n<!-- figure:memory-graph -->\n\nThe project itself is left out of the picture, because every note mentions it and it would tie everything to one hub."
     }
    ],
    "read": true
@@ -110,33 +110,9 @@
    "read": true
   },
   {
-   "id": "mom",
-   "title": "call mom sunday",
-   "workspace": "personal assistant project",
-   "messages": [
-    {
-     "role": "user",
-     "text": "remind me to call mom sunday"
-    },
-    {
-     "role": "assistant",
-     "text": "Done: a reminder for Sunday at 10:00 am to call your mom. If a different time suits better, say so and I will move it.\n\nDo you want me to add anything to it, like something you wanted to bring up?"
-    },
-    {
-     "role": "user",
-     "text": "yeah ask about the garden"
-    },
-    {
-     "role": "assistant",
-     "text": "Added: \"Call mom, ask about the garden.\" It will show up Sunday at 10:00 am."
-    }
-   ],
-   "read": true
-  },
-  {
    "id": "values",
    "title": "values study",
-   "workspace": "personal assistant project",
+   "workspace": "curiosity / collection",
    "messages": [
     {
      "role": "user",

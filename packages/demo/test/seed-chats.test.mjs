@@ -39,36 +39,36 @@ const noDuplicateTitles = (rows) => {
 };
 const seed = (store, guest, tpls, now) => seedGuest(store, { guest, scope: scopeOf(guest), templates: tpls, model: 'claude-haiku-5-5', now });
 
-test('the seed definition is 9 chats in four folders, the intro chat in the personal assistant project folder', () => {
+test('the seed definition is 8 chats in three folders plus the intro chat, the intro chat in the personal assistant project folder', () => {
   const { dir } = fixture();
   try {
     const t = templates(dir);
-    assert.equal(t.filter((x) => !x.opener).length, 9);
+    assert.equal(t.filter((x) => !x.opener).length, 8);
     const by = {};
     for (const x of t.filter((y) => !y.opener)) by[x.workspace] = (by[x.workspace] || 0) + 1;
-    assert.deepEqual(by, { healthhh: 2, 'personal assistant project': 2, tophat: 4, 'curiosity / collection': 1 });
+    assert.deepEqual(by, { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
     assert.equal(t.find((x) => x.opener).workspace, 'personal assistant project', 'the intro chat is in the personal assistant project folder, not the Inbox');
     assert.deepEqual(t.filter((x) => x.workspace === 'tophat').map((x) => x.title).sort(),
-      ['current memory graph', 'how sharing works', 'mem bench results', 'whats new this week']);
+      ['current memory graph', 'how does the memory bench work', 'how sharing works', 'whats new this week']);
     // frozen: every chat but the live one carries its own transcript in the definition
     assert.deepEqual(JSON.parse(JSON.stringify(t)).filter((x) => !x.opener && !x.messages?.length), []);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('seeding twice writes nothing the second time: 9 chats, no duplicate titles in a folder, identical ids', () => {
+test('seeding twice writes nothing the second time: 8 chats, no duplicate titles in a folder, identical ids', () => {
   const { dir } = fixture(); const store = openStore(path.join(dir, 'events.sqlite'));
   try {
     const t = templates(dir), now = Date.parse('2026-11-10T12:00:00Z');
     const first = seed(store, GUEST, t, now);
-    assert.equal(first.created, 9);
+    assert.equal(first.created, 8);
     const before = listed(store, GUEST), cursor = store.cursor();
     const second = seed(store, GUEST, t, now + 3_600_000);
-    assert.deepEqual(second, { created: 0, retired: 0, kept: 9 });
+    assert.deepEqual(second, { created: 0, retired: 0, kept: 8 });
     assert.equal(store.cursor(), cursor, 'no event written');
     const after = listed(store, GUEST);
     assert.deepEqual(after.map((r) => r.id).sort(), before.map((r) => r.id).sort());
-    assert.deepEqual(folders(after), { healthhh: 2, 'personal assistant project': 2, tophat: 4, 'curiosity / collection': 1 });
-    assert.equal(after.filter((r) => !r.side).length, 9);
+    assert.deepEqual(folders(after), { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
+    assert.equal(after.filter((r) => !r.side).length, 8);
     noDuplicateTitles(after);
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -85,7 +85,7 @@ test('a release: old versions and dropped chats are retired with the drop marker
     }
     seed(store, GUEST, t, now);
     const mid = listed(store, GUEST);
-    assert.equal(mid.filter((r) => !r.side).length, 9, 'the old rows are out of the guest\'s scope');
+    assert.equal(mid.filter((r) => !r.side).length, 8, 'the old rows are out of the guest\'s scope');
     assert.ok(!mid.some((r) => r.id.startsWith('rrf-') && !/-[0-9a-f]{8}-/.test(r.id)), 'old side chat gone too');
     assert.equal(store.conversation(`rrf-${short}`).scope, SEED_RETIRED_SCOPE);
     const marker = store.conversationEvents(`rrf-${short}`).find((e) => e.kind === 'conversation.meta' && e.content.scopeMove);
@@ -93,14 +93,14 @@ test('a release: old versions and dropped chats are retired with the drop marker
     // then a later release edits one chat and the live chat's answer changes
     const t2 = templates(dir, 'a newer weekly answer').map((x) => (x.id === 'bench' ? { ...x, title: 'mem bench, new numbers' } : x));
     const r = seed(store, GUEST, t2, now + 86_400_000);
-    assert.deepEqual([r.created, r.retired, r.kept], [2, 2, 7]);
+    assert.deepEqual([r.created, r.retired, r.kept], [2, 2, 6]);
     const after = listed(store, GUEST);
-    assert.equal(after.filter((x) => !x.side).length, 9);
-    assert.deepEqual(folders(after), { healthhh: 2, 'personal assistant project': 2, tophat: 4, 'curiosity / collection': 1 });
+    assert.equal(after.filter((x) => !x.side).length, 8);
+    assert.deepEqual(folders(after), { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
     noDuplicateTitles(after);
-    assert.ok(!after.some((x) => x.title === 'mem bench results'));
+    assert.ok(!after.some((x) => x.title === 'how does the memory bench work'));
     // and a third pass on the same release changes nothing
-    assert.deepEqual(seed(store, GUEST, t2, now + 2 * 86_400_000), { created: 0, retired: 0, kept: 9 });
+    assert.deepEqual(seed(store, GUEST, t2, now + 2 * 86_400_000), { created: 0, retired: 0, kept: 8 });
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -129,7 +129,7 @@ test('a message to a starter chat forks it: the seed row is not written to, the 
     seedOpener(store, { id: `opener-${GUEST.slice(0, 10)}`, template: t.find((x) => x.opener), scope: scopeOf(GUEST), model: 'claude-haiku-5-5', now });
     const rows = listed(store, GUEST);
     assert.equal(rows.find((r) => r.id.startsWith('opener-')).workspace, 'personal assistant project');
-    assert.deepEqual(folders(rows), { healthhh: 2, 'personal assistant project': 2, tophat: 4, 'curiosity / collection': 1 });
+    assert.deepEqual(folders(rows), { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
     const src = seedRowsOf(store, { scope: scopeOf(GUEST), guest: GUEST }).find((id) => id.startsWith('bench-'));
     const before = store.conversationEvents(src).map((e) => e.cursor);
     const forkId = forkIdOf(src, GUEST);
@@ -137,7 +137,7 @@ test('a message to a starter chat forks it: the seed row is not written to, the 
     store.append(forkId, 'message.user', { itemId: 'u-new', text: 'and now?' });
     forkSeedChat(store, { sourceId: src, forkId, scope: scopeOf(GUEST) }); // a retried message lands in the same fork
     assert.deepEqual(store.conversationEvents(src).map((e) => e.cursor), before, 'the seed chat is unchanged');
-    assert.equal(store.conversation(forkId).title, 'mem bench results');
+    assert.equal(store.conversation(forkId).title, 'how does the memory bench work');
     const copied = store.conversationEvents(forkId).filter((e) => e.kind === 'message.user' || e.kind === 'assistant.message');
     assert.equal(copied.length, store.conversationEvents(src).filter((e) => e.kind === 'message.user' || e.kind === 'assistant.message').length + 1);
     const created = store.conversationEvents(forkId).find((e) => e.kind === 'conversation.created').content;
@@ -145,7 +145,7 @@ test('a message to a starter chat forks it: the seed row is not written to, the 
     // a re-seed and a release leave the fork alone, and it is not a starter chat
     seed(store, GUEST, t, now + 1e6);
     assert.ok(store.conversation(forkId) && store.conversation(forkId).scope === scopeOf(GUEST) && !isSeedId(forkId, GUEST));
-    assert.equal(plannedSeed(t, GUEST).size, 9);
+    assert.equal(plannedSeed(t, GUEST).size, 8);
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -158,8 +158,8 @@ test('read state: a chat marked read is read through its last message, the rest 
     for (const id of store.conversationIdsInScope(scopeOf(GUEST))) state[store.conversation(id).title] = unreadOf(store.conversation(id)) ? 'unread' : 'read';
     assert.deepEqual(state, {
       'switch to dumbbell bench?': 'unread', 'pistol squat progression': 'read',
-      'call mom sunday': 'read', 'values study': 'unread',
-      'whats new this week': 'unread', 'mem bench results': 'unread', 'how sharing works': 'read', 'current memory graph': 'read',
+      'values study': 'unread',
+      'whats new this week': 'unread', 'how does the memory bench work': 'unread', 'how sharing works': 'read', 'current memory graph': 'read',
       'encyclopedia cave, what was that place': 'read'
     });
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
@@ -169,8 +169,10 @@ test('the guest-reset script lays the folders out in the seed\'s order, health a
   const src = readFileSync(path.join(DEMO, 'src/guest-reset.js'), 'utf8');
   const ls = new Map();
   const doc = { cookie: 'demo_guest=abc123' };
-  const storage = { get length() { return ls.size; }, key: (i) => [...ls.keys()][i], getItem: (k) => ls.get(k) ?? null, setItem: (k, v) => ls.set(k, String(v)), removeItem: (k) => ls.delete(k) };
-  new Function('localStorage', 'document', 'indexedDB', src)(storage, doc, { deleteDatabase() {} });
+  const storage = { get length() { return ls.size; }, key: (i) => [...ls.keys()][i], getItem: (k) => ls.get(k) ?? null, setItem: (k, v) => ls.set(k, String(v)), removeItem: (k) => ls.delete(k), clear: () => ls.clear() };
+  ls.set('qk:old-chat-cache', 'x');
+  new Function('localStorage', 'document', 'indexedDB', 'window', 'navigator', src)(storage, doc, { deleteDatabase() {} }, {}, {});
+  assert.equal(ls.get('qk:old-chat-cache'), undefined, 'every load starts from nothing');
   const rec = JSON.parse(ls.get('tophat-workspaces:chats'));
   assert.deepEqual(rec.names, ['healthhh', 'personal assistant project', 'tophat', 'curiosity / collection']);
   assert.deepEqual(rec.layout.order.slice(0, 4), rec.names);

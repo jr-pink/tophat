@@ -42,6 +42,12 @@ export const sidebarDecl = declare({
     // set, for right-click actions on all of them. A one-line result of a sidebar action (a re-sort's moves), shown under
     // the tools; never saved.
     notice: scratch(null),
+    // The description being edited (a fold-down under its row with Save and Cancel; nothing is written until Save): its
+    // address, 'f:<folder name>' or 'h:<host id>', and the draft. Never saved: a reload drops an unsaved edit, as Cancel does.
+    descAt: field(null, (v) => (typeof v === 'string' && v.length <= 300 ? v : null), { ephemeral: true }),
+    descDraft: field('', (v) => (typeof v === 'string' ? v.slice(0, 300) : ''), { ephemeral: true }),
+    // The hosts dropdown under its button in the tools row is open. Never saved.
+    hostMenu: field(false, Boolean, { ephemeral: true }),
     selection: field([], (v) => (Array.isArray(v) ? [...new Set(v.filter((a) => typeof a === 'string' && a.length <= 300))].slice(0, 500) : []))
   },
   // The keys the hand-written version used (workspaces.js readLocal, the main-folded flag, the width).
@@ -79,7 +85,19 @@ export const sidebarDecl = declare({
     'rename.at': set('renaming', 'key'),
     'clip.set': set('clip', 'addr'),
     'selection.set': set('selection', 'addrs'),
-    'notice.set': set('notice', 'text')
+    'notice.set': set('notice', 'text'),
+    'desc.open': (s, { at, text } = {}) => {
+      const descAt = typeof at === 'string' && at.length <= 300 ? at : null;
+      const descDraft = descAt && typeof text === 'string' ? text.slice(0, 300) : '';
+      return s.descAt === descAt && s.descDraft === descDraft ? s : { ...s, descAt, descDraft };
+    },
+    'desc.draft': (s, { text } = {}) => {
+      if (!s.descAt) return s;
+      const descDraft = typeof text === 'string' ? text.slice(0, 300) : '';
+      return s.descDraft === descDraft ? s : { ...s, descDraft };
+    },
+    'desc.close': (s) => (s.descAt === null && s.descDraft === '' ? s : { ...s, descAt: null, descDraft: '' }),
+    'hostmenu.open': set('hostMenu', 'open')
   }
 });
 
