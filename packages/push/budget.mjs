@@ -23,9 +23,18 @@ export function check({ stateDir, budget, price, now, inTok, maxOut }) {
   if (spent + estimate > budget.dailyUsd) throw new BudgetError(`daily model budget ${budget.dailyUsd} USD: spent ${spent.toFixed(4)}, this call could cost ${estimate.toFixed(4)}`);
   return { estimate, spent };
 }
+/** What a call cost: the endpoint's own billed figure when it reports one (provider_cost_usd), else usage at the configured
+ *  prices, with cached input at cachedInputPerMTok when the price names one. */
+export function callCost(price, usage = {}) {
+  if (typeof usage?.provider_cost_usd === 'number' && Number.isFinite(usage.provider_cost_usd)) return usage.provider_cost_usd;
+  if (!price) return 0;
+  const inTok = usage?.input_tokens ?? 0, outTok = usage?.output_tokens ?? 0;
+  const cached = Number.isFinite(price.cachedInputPerMTok) ? Math.min(inTok, usage?.cached_input_tokens ?? 0) : 0;
+  return cost(price, inTok - cached, outTok) + (cached * (price.cachedInputPerMTok || 0)) / 1e6;
+}
 export function record({ stateDir, now, provider, model, usage, price }) {
   const inTok = usage?.input_tokens ?? 0, outTok = usage?.output_tokens ?? 0;
-  const usd = price ? cost(price, inTok, outTok) : 0;
+  const usd = callCost(price, usage);
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   fs.appendFileSync(ledgerFile(stateDir), JSON.stringify({ at: now, provider, model, input_tokens: inTok, output_tokens: outTok, usd }) + '\n', { mode: 0o600 });
   return usd;

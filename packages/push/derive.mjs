@@ -4,8 +4,20 @@
 // derived page of every entity touched is refreshed. Works against any MemoryStore backend.
 import { readFileSync } from 'node:fs';
 import { check, record } from './budget.mjs';
+import { resolveModel } from './presets.mjs';
 
 export const PROMPT = readFileSync(new URL('./prompts/derive.txt', import.meta.url), 'utf8');
+
+// A model-keyed appendix: prompts/appendix/<name>.txt is appended to the prompt when the intake runs on that model, where
+// <name> is the entry's `appendix` (false for none) or else its model id without a provider prefix. Rules tuned for one
+// model reach only that model; every other model gets the prompt unchanged.
+const APPENDIX_DIR = new URL('./prompts/appendix/', import.meta.url);
+export function appendixFor(model = {}) {
+  const name = model.appendix === false ? '' : String(model.appendix || model.model || '').split('/').pop();
+  if (!name || !/^[\w.-]+$/.test(name)) return '';
+  try { return readFileSync(new URL(`${name}.txt`, APPENDIX_DIR), 'utf8').trim(); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; }
+}
+export function promptFor(model = {}) { const extra = appendixFor(resolveModel(model)); return extra ? `${PROMPT.trimEnd()}\n\n${extra}\n` : PROMPT; }
 const NAMES = /\b[A-Z][\p{L}'-]+(?: [A-Z][\p{L}'-]+)*\b/gu;
 
 /** Candidate entities for a set of records: search the store for the capitalized terms they contain. */
@@ -55,10 +67,11 @@ export async function deriveOnce(store, provider, cfg, { now = new Date().toISOS
   const pending = await store.pending({ pusher: cfg.id, limit: cfg.batch ?? 40 });
   if (!pending.length) return { records: 0 };
   const packet = { records: pending.map((r, i) => ({ ...r, code: `R${i + 1}` })), candidates: await candidatesFor(store, pending) };
-  const user = packetText(packet, cfg.maxRecordChars ?? 4000), maxTokens = cfg.model?.maxTokens ?? 4000;
-  check({ stateDir: cfg.stateDir, budget: cfg.budget, price: cfg.model?.price, now, inTok: Math.ceil((PROMPT.length + user.length) / 4), maxOut: maxTokens });
-  const reply = await provider.complete({ system: PROMPT, user, packet, maxTokens });
-  const usd = record({ stateDir: cfg.stateDir, now, provider: cfg.model?.provider, model: reply.model, usage: reply.usage, price: cfg.model?.price });
+  const model = resolveModel(cfg.model || {}), system = promptFor(model);
+  const user = packetText(packet, cfg.maxRecordChars ?? 4000), maxTokens = model.maxTokens ?? 4000;
+  check({ stateDir: cfg.stateDir, budget: cfg.budget, price: model.price, now, inTok: Math.ceil((system.length + user.length) / 4), maxOut: maxTokens });
+  const reply = await provider.complete({ system, user, packet, maxTokens });
+  const usd = record({ stateDir: cfg.stateDir, now, provider: model.provider, model: reply.model, usage: reply.usage, price: model.price });
   const changes = translate(reply.text, packet);
   const ids = pending.map((r) => r.id);
   const res = await store.apply(changes, { scopes: cfg.scopes, sourceRefs: ids, ackRaw: ids, batchId: `push-${cfg.id}-${ids[0]}-${ids.length}` });

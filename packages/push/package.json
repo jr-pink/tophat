@@ -14,7 +14,8 @@
   "exports": {
     ".": "./index.mjs",
     "./providers": "./providers.mjs",
-    "./derive": "./derive.mjs"
+    "./derive": "./derive.mjs",
+    "./presets": "./presets.mjs"
   },
   "dependencies": {
     "@tophat-md/sources": "1.0.0",

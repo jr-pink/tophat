@@ -10,7 +10,8 @@ import { deriveOnce } from './derive.mjs';
 import { makeProvider } from './providers.mjs';
 
 export { registerProvider, providerNames, makeProvider } from './providers.mjs';
-export { deriveOnce, translate, candidatesFor, PROMPT } from './derive.mjs';
+export { deriveOnce, translate, candidatesFor, PROMPT, promptFor, appendixFor } from './derive.mjs';
+export { MODEL_PRESETS, resolveModel } from './presets.mjs';
 export { BudgetError, spentOn } from './budget.mjs';
 
 /**
