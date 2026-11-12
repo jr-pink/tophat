@@ -27,7 +27,7 @@ import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
 import { gesture } from '../../../../runner/tools/docstore-kit/lib/components.js';
 import { ulid } from '../../../../runner/tools/docstore-kit/lib/engine/ulid.js';
 import { field, scratch, set, on, reset } from '../../../../runner/tools/docstore-kit/lib/schema.js';
-import { initial, activate, openBeside, openFor, focusPanel, closePanel, addPanel, movePanel, togglePanel, resizeTo, prune, closeTab, activateTab, moveTab, openTab, keepTabs, keepPreview } from './panels.js';
+import { MIN_WIDTH, initial, activate, openBeside, openFor, focusPanel, closePanel, addPanel, movePanel, togglePanel, resizeTo, prune, closeTab, activateTab, moveTab, openTab, keepTabs, keepPreview, zoomPanel } from './panels.js';
 import { LAYOUT_KEY, LAYOUT_VERSION, parseLayout, serializeLayout, upgradeLayout } from './panel-store.js';
 
 const EMPTY = initial(null);
@@ -69,6 +69,8 @@ export const panesDecl = declare({
     'pane.move': on('layout', (l, { id, to }) => { const at = l.keys.indexOf(id); return at < 0 || !Number.isInteger(to) ? l : movePanel(l, at, to - at); }),
     'pane.toggle': on('layout', (l, { index }) => togglePanel(l, index)),
     'pane.set': on('layout', (l, { id, size }) => resizeTo(l, l.keys.indexOf(id), size)),
+    // Ctrl-Q z: the group alone open (on) or its neighbours unfolded again (off); core/panels.js zoomPanel.
+    'pane.zoom': on('layout', (l, { id, on } = {}) => zoomPanel(l, l.keys.indexOf(id), on === true)),
     'pane.drop': on('layout', (l, { ids }) => (Array.isArray(ids) ? prune(l, (id) => !ids.includes(id)) : l)),
     'tab.open': on('layout', (l, p) => openTab(l, p?.group, p?.chat, p?.at, { preview: p?.preview === true })),
     'tab.keepPreview': on('layout', (l, p) => keepPreview(l, p?.group, p?.chat)),
@@ -103,6 +105,22 @@ export const panesComp = {
     split: (s, { chat } = {}) => (typeof chat === 'string' && chat && s.layout.panels.length ? ['pane.add', { id: ulid(), chat, after: s.layout.keys[s.layout.focused] }] : null),
     move: (s, { index, delta } = {}) => (at(s, index) && Number.isInteger(delta) ? ['pane.move', { id: at(s, index), to: index + delta }] : null),
     resizeBy: (s, { index, delta } = {}) => (at(s, index) && Number.isFinite(delta) ? ['pane.set', { id: at(s, index), size: s.layout.widths[index] + delta }] : null),
+    // The keyboard's resize: resizeBy that stops at the narrowest width, where a drag folds the pane to a rail and the
+    // keyboard focus would go with it.
+    resizeStep: (s, { index, delta } = {}) => {
+      if (!at(s, index) || !at(s, index + 1) || !Number.isFinite(delta)) return null;
+      if (s.layout.collapsed[index] || s.layout.collapsed[index + 1]) return null;
+      const pair = s.layout.widths[index] + s.layout.widths[index + 1];
+      return ['pane.set', { id: at(s, index), size: Math.min(pair - MIN_WIDTH, Math.max(MIN_WIDTH, s.layout.widths[index] + delta)) }];
+    },
+    // Ctrl-Q z toggles: the focused group alone when another is open, else its rails unfolded. One group: nothing.
+    zoom: (s) => {
+      const f = s.layout.focused;
+      if (!at(s, f)) return null;
+      const othersOpen = s.layout.collapsed.some((shut, i) => i !== f && !shut);
+      if (othersOpen) return ['pane.zoom', { id: at(s, f), on: true }];
+      return s.layout.collapsed.some(Boolean) ? ['pane.zoom', { id: at(s, f), on: false }] : null;
+    },
     close: (s, { index } = {}) => (at(s, index) ? ['pane.remove', { id: at(s, index) }] : null),
     // The tab beside the active one in the focused group, wrapping (Ctrl-Tab, Cmd-Option-Arrow). One tab: nothing to do.
     nextTab: (s) => cycle(s, 1),

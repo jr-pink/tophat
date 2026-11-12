@@ -32,6 +32,7 @@ import { drainObservations, RETENTION_DAYS } from './interaction.js';
 import { agentsOwed } from './owed-work.js';
 import { createRemoteRuntimes, logDecision as remoteDecision } from './remote-runtime.js';
 import { runnerLedgerPath } from './translate.js';
+import { installClaudeFallback } from './claude-fallback.js';
 import { RETRY_SWEEP_MS, startRetryWakes, storeDeliver, storeProbe } from './retry-wakes.js';
 import { cdpEndpoint, closeConversationTabs, dueForSweep, openTabRegistry, openTabsDb, SWEEP_HOUR, sweepTabs, tabsDbPath }
   from '../../../../runner/rev5/cua-tabs.mjs';
@@ -540,6 +541,9 @@ function build() {
     if (event.kind === 'run.completed') splices.commit(event.conversation_id);
     else if (event.kind === 'run.error' || event.kind === 'run.cancelled') splices.drop(event.conversation_id);
   });
+  // A claude turn the account's usage limit ended carries on in codex, when the instance turns that on. Main
+  // store only: incognito chats never move.
+  installClaudeFallback({ store, runner });
 
   
   

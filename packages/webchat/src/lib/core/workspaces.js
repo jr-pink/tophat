@@ -239,17 +239,20 @@ export function pathTo(tree, key) {
   return out;
 }
 
-// A folder's own chats are listed directly under it, above its subfolders (no 'Misc' group: 2026-11-11 22:31 PST, 'there should be
-// some chats that aren't FAQ that are above faq in tophat. instead of in misc'). miscKey is kept for saved open-state keys.
+// Misc. Misc is virtual, never stored: a folder that has subfolders draws a last child row 'Misc' that holds the chats filed
+// directly in that folder, so those chats sit apart from the subfolders; a folder with no subfolders shows its chats directly.
+// Its open state is the kit's `open` flag under miscKey(folder).
 export const MISC_LABEL = 'Misc';
 export const miscKey = (folder) => `misc:${folder}`;
 
 /** Visible rows, depth first. `focus` is the folder made primary (its subtree only, nothing else shown); null shows the whole
- * tree with Inbox as one top-level node. `isOpen(key)` says which folders are expanded. A search lists every matching chat
- * flat. Inside a folder: its own chats first (ranked), each followed by its forks, then its subfolders (his order). Folder archive: `isArchived(key)` is a folder's own flag;
- * an archived folder and its subtree are not drawn unless `showArchived`, when they draw dimmed (`archived` on the row;
- * `archivedOwn` when it is the flagged folder itself). Nothing about parent, order or membership changes, so clearing the
- * flag restores exactly what was there.
+ * tree with Inbox as one top-level node. `isOpen(key)` says which folders are expanded. A search lists every matching chat flat.
+ * Inside a folder: subfolders first (his order), then its chats (ranked), each followed by its forks; a folder with subfolders
+ * puts its own chats under a last 'misc' row instead. `inlineOwn` lists a folder's own chats directly under it, above its
+ * subfolders, with no Misc row; off by default. Folder archive: `isArchived(key)` is a folder's own flag; an archived folder and
+ * its subtree are not drawn unless `showArchived`, when they draw dimmed (`archived` on the row; `archivedOwn` when it is the
+ * flagged folder itself). Nothing about parent, order or membership changes, so clearing the flag restores exactly what was
+ * there.
  */
 export function explorerRows(rows, { names = [], layout = emptyLayout(), focus = null, isOpen = () => false, searching = false, newIn = null, isArchived = () => false, showArchived = false, inlineOwn = false } = {}) {
   const out = [];
@@ -277,7 +280,10 @@ export function explorerRows(rows, { names = [], layout = emptyLayout(), focus =
   // A folder's own chats: directly under it, or, when it has subfolders, under its last 'misc' row.
   const pushOwn = (k, depth, dim) => {
     const own = members.get(k) || [];
-    pushChats(own, depth, dim);
+    if (inlineOwn || k === UNFILED || !subs(k).length) { pushChats(own, depth, dim); return; }
+    const open = isOpen(miscKey(k));
+    out.push({ kind: 'misc', id: miscKey(k), key: miscKey(k), parent: k, name: MISC_LABEL, depth, count: own.length, open, hasChildren: own.length > 0, live: !open && own.some(live), archived: dim });
+    if (open) pushChats(own, depth + 1, dim);
   };
   // A folder being created is an editable row, first among the children of the folder it goes in.
   const walk = (parentKey, depth, dim) => {
@@ -289,7 +295,9 @@ export function explorerRows(rows, { names = [], layout = emptyLayout(), focus =
       const mine = k !== UNFILED && isArchived(k), gone = dim || mine;
       out.push({ kind: 'folder', id: `f:${k}`, key: k, name: k === UNFILED ? null : nameOf.get(k) ?? null, depth, count: own.length, open,
         hasChildren: own.length > 0 || subs(k).length > 0, live: !open && subtreeLive(k), archived: gone, archivedOwn: mine });
-      if (open || newIn === k) { pushOwn(k, depth + 1, gone); walk(k, depth + 1, gone); }
+      if (open || newIn === k) {
+        if (inlineOwn) { pushOwn(k, depth + 1, gone); walk(k, depth + 1, gone); } else { walk(k, depth + 1, gone); pushOwn(k, depth + 1, gone); }
+      }
     }
   };
   const root = focus ? folderKey(focus) : ROOT;

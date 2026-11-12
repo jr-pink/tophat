@@ -12,6 +12,14 @@ const CLAUDE_BIN = process.env.WEBCHAT_CLAUDE_BIN || 'claude';
 
 const CONTROL_TIMEOUT_MS = Number(process.env.WEBCHAT_CONTROL_TIMEOUT_MS || 10_000);
 
+// The CLI looks for a slash command (/compact, a skill) in the last text block of a message only, so with the clock
+// line after it /compact went to the model as a question. A command goes alone. /var/log is not one: the name ends
+// at a space or the end of the text.
+const SLASH_COMMAND = /^\/[\w:-]+(?=\s|$)/;
+export function isSlashCommand(text) {
+  return typeof text === 'string' && SLASH_COMMAND.test(text);
+}
+
 function modelArg(settings) {
   return settings.model;
 }
@@ -123,7 +131,7 @@ export function makeClaudeAdapter({ id = 'claude', bin = CLAUDE_BIN, envExtra = 
       if (!stdin || stdin.destroyed || stdin.writableEnded) throw new Error('the child has no usable stdin');
       stdin.write(`${JSON.stringify({
         type: 'user',
-        message: { role: 'user', content: [{ type: 'text', text }, ...(clockContext ? [{ type: 'text', text: clockContext }] : [])] }
+        message: { role: 'user', content: isSlashCommand(text) ? text : [{ type: 'text', text }, ...(clockContext ? [{ type: 'text', text: clockContext }] : [])] }
       })}\n`);
       return true;
     },

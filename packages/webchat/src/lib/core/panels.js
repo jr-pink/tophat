@@ -309,6 +309,29 @@ export function expand(state, index) {
 }
 
 
+// Zoom, tmux's z: `on` leaves group `index` the only open one, every other folded to a rail, and focuses it; off
+// unfolds the rails nearest it (up to MAX_OPEN open) at even widths. Absolute: a repeat finds it so. The panes are one
+// row of columns, so a rail is the only way to set a pane aside; zoom is folding the rest.
+export function zoomPanel(state, index, on) {
+  if (!isPanel(state, index)) return state;
+  if (on) {
+    let next = expand(state, index);
+    for (let at = 0; at < next.panels.length; at += 1) if (at !== index) next = collapse(next, at);
+    return next.focused === index ? next : { ...next, focused: index };
+  }
+  const collapsed = [...state.collapsed];
+  collapsed[index] = false;
+  let open = openCount(collapsed);
+  const nearest = state.panels.map((_, at) => at).sort((a, b) => Math.abs(a - index) - Math.abs(b - index) || a - b);
+  for (const at of nearest) {
+    if (open >= MAX_OPEN) break;
+    if (collapsed[at]) { collapsed[at] = false; open += 1; }
+  }
+  if (collapsed.every((shut, at) => shut === state.collapsed[at])) return state.focused === index ? state : { ...state, focused: index };
+  return { ...state, collapsed, widths: normalised(collapsed.map((shut) => (shut ? 0 : 1)), collapsed), focused: index };
+}
+
+
 export function togglePanel(state, index) {
   if (!isPanel(state, index)) return state;
   return state.collapsed[index] ? expand(state, index) : focusPanel(state, index);

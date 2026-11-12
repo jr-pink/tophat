@@ -11,6 +11,7 @@
   import { INCOGNITO_LABEL, isIncognito } from '$lib/core/incognito.js';
   import { placeMenu, shouldCollapse } from '$lib/core/menu-place.js';
   import { hostState, refreshHosts } from '$lib/core/hosts.svelte.js';
+  import { chordHint } from '$lib/core/keys.js';
 
   let {
     conversation = null,
@@ -31,11 +32,16 @@
   let draft = $state('');
   let menuOpen = $state(false);
 
+  // Each item shows its Ctrl-Q chord.
   const paneItems = $derived(pane ? [
-    { id: 'duplicate', label: 'Duplicate', disabled: pane.count >= pane.max },
-    { id: 'left', label: 'Move left', disabled: pane.index <= 0 },
-    { id: 'right', label: 'Move right', disabled: pane.index >= pane.count - 1 },
-    { id: 'close', label: 'Close pane', disabled: pane.count <= 1 }
+    { id: 'duplicate', label: 'Duplicate', kbd: chordHint('split-tab'), disabled: pane.count >= pane.max },
+    { id: 'left', label: 'Move left', kbd: chordHint('move-left'), disabled: pane.index <= 0 },
+    { id: 'right', label: 'Move right', kbd: chordHint('move-right'), disabled: pane.index >= pane.count - 1 },
+    { id: 'tab-to-pane', label: 'Move tab to new pane', kbd: chordHint('tab-to-pane'), disabled: (pane.tabs ?? 1) < 2 || pane.count >= pane.max },
+    { id: 'pane-to-tabs', label: 'Join tabs into neighbour', kbd: chordHint('pane-to-tabs'), disabled: pane.count <= 1 },
+    { id: 'zoom', label: pane.zoomed ? 'Unzoom' : 'Zoom', kbd: chordHint('zoom'), disabled: pane.count <= 1 },
+    { id: 'close-tab', label: 'Close tab', kbd: chordHint('close-tab') },
+    { id: 'close', label: 'Close pane', kbd: chordHint('close'), disabled: pane.count <= 1 }
   ] : []);
 
   // With one pane open, move left, move right and close pane are all dead, so
@@ -341,7 +347,7 @@
     </div>
   {/if}
   {#if onclosepane}
-    <button class="icon-btn press focus-ring" onclick={onclosepane} title="Close this split" aria-label="Close split" data-testid="close-pane"><Icon name="close" /></button>
+    <button class="icon-btn press focus-ring" onclick={onclosepane} title="Close this split ({chordHint('close')})" aria-label="Close split" data-testid="close-pane"><Icon name="close" /></button>
   {/if}
   </div>
 </header>

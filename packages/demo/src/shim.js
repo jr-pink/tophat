@@ -307,7 +307,10 @@
     // camera: the message bar centred and scaled to fill most of the width, set before the page is shown
     const bar = field.closest('form') || field.parentElement || field, r = bar.getBoundingClientRect(), vw = innerWidth, vh = innerHeight;
     const k = 1 + (Math.max(ZOOM.minScale, Math.min(ZOOM.maxScale, (vw * ZOOM.fill) / Math.max(1, r.width))) - 1) * ZOOM.depth; // depth 0.5: half the zoom that would fill the width
-    const cx = r.left + r.width / 2, cy = r.top + r.height / 2, from = `translate(${vw / 2 - cx}px, ${vh / 2 - cy}px) scale(${k})`;
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    // crop: centred on the bar, but when the zoomed bar is wider than the screen slide the crop left so its right end (the send button) stays 12px inside the edge
+    const tx = Math.min(vw / 2 - cx, vw - 12 - cx - (k * r.width) / 2);
+    const from = `translate(${tx}px, ${vh / 2 - cy}px) scale(${k})`;
     const b = document.body; b.style.transformOrigin = `${cx}px ${cy}px`; b.style.transform = from;
     root.classList.add('demo-zoomed');
     await pause(ZOOM.hold);

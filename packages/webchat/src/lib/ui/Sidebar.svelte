@@ -9,7 +9,7 @@
   import DeferSheet from './DeferSheet.svelte';
   import { groupForks, rankConversations, trayCounts } from '$lib/core/recency.js';
   import { deferLabel } from '$lib/core/defer.js';
-  import { CACHED_LIMIT, mergeResults, searchCachedChats, searchStages } from '$lib/core/search.js';
+  import { CACHED_LIMIT, mergeResults, rankByHits, searchCachedChats, searchStages } from '$lib/core/search.js';
   import { isListDown, isListUp } from '$lib/core/keys.js';
   import { listedConversations, stableListing } from '$lib/core/transient.js';
   // what the host page keeps out of the lists (core/transient.js unlistedByHost); none on the owner's own app
@@ -357,13 +357,15 @@
     return lastListed;
   });
 
-  const ordering = $derived(groupForks(rankConversations(listed, { now, match })));
+  // While a search is typed the rows follow the search's own ranking (exact, prefix, substring, smart), not
+  // recency; with no search `hits` is empty and nothing changes.
+  const ordering = $derived(groupForks(rankByHits(rankConversations(listed, { now, match }), hits)));
   // A shut tray is only counted; its rows are ranked when it is open or a search may open it.
   const searchingTrays = $derived(Boolean(filter.trim()));
   const trays = $derived(trayCounts(listed, { now, match }));
-  const archivedRows = $derived(archivedOpen || searchingTrays ? rankConversations(listed, { now, match, onlyArchived: true }) : []);
-  const asideRows = $derived(asideOpen || searchingTrays ? rankConversations(listed, { now, match, onlyAside: true }) : []);
-  const deferredRows = $derived(deferredOpen || searchingTrays ? rankConversations(listed, { now, match, onlyDeferred: true }) : []);
+  const archivedRows = $derived(archivedOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyArchived: true }), hits) : []);
+  const asideRows = $derived(asideOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyAside: true }), hits) : []);
+  const deferredRows = $derived(deferredOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyDeferred: true }), hits) : []);
   let rows = $state([]);
   $effect(() => {
     const next = ordering;
@@ -388,7 +390,7 @@
   const inFocus = (row) => !focusKey || inSubtree(row, workspace, tree);
   // Demo page only: tophat.md's reset script sets this so a folder's own chats sit directly under it, above its subfolders, with no Misc row.
   const demoInlineOwn = typeof localStorage !== 'undefined' && localStorage.getItem('tophat-demo-inline-own') === '1';
-  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived , inlineOwn: demoInlineOwn }));
+  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived, inlineOwn: demoInlineOwn }));
   const focusCount = $derived(focusKey ? rows.filter((row) => canonicalWorkspace(row.workspace) && folderKey(canonicalWorkspace(row.workspace)) === focusKey).length : 0);
   // Keyboard order follows what is on screen: the tree, then the open trays.
   const trayItems = $derived([...(deferredOpen ? deferredRows : []), ...(asideOpen ? asideRows : []), ...(archivedOpen ? archivedRows : [])]
@@ -577,7 +579,7 @@
     pick(addr);
     return [
       { id: 'open', label: 'Open', keys: '↩', run: () => onselect(id) },
-      { id: 'open-side', label: 'Open to the Side', run: () => onopenbeside(id) },
+      { id: 'open-side', label: 'Open to the Side', keys: '⌃↩', run: () => onopenbeside(id) },
       SEP,
       { id: 'move', label: 'Move to Folder', children: moveMenu([addr]) },
       { id: 'resort', label: 'Re-sort with Descriptions', run: () => resort([addr], { label: c.title || 'this chat' }) },
@@ -644,6 +646,10 @@
     if (mod && event.key.toLowerCase() === 'x' && cursor) return hit(() => sb.dispatch('clip.set', { addr: cursor }));
     if (mod && event.key.toLowerCase() === 'v' && $sb.clip) return hit(() => paste(it?.kind === 'misc' ? it.parent : it?.kind === 'folder' ? it.key : (it?.kind === 'chat' && canonicalWorkspace(it.row.workspace) ? folderKey(canonicalWorkspace(it.row.workspace)) : focusKey ?? UNFILED)));
     if (mod && event.key.toLowerCase() === 'a') return hit(() => sb.dispatch('selection.set', { addrs: navItems2.map((x) => x.id) }));
+    // ⌃↩ opens the cursor's chat in a new pane beside the focused one, as the row's split button does (tophat#4).
+    if (event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && it?.kind === 'chat') {
+      return hit(() => { sb.dispatch('cursor.set', { addr: null }); onopenbeside(it.row.id); });
+    }
     if (mod || event.altKey) return;
     if (event.key === 'Enter' || event.key === 'F2') {
       if (it?.kind === 'folder' && it.key !== UNFILED) return hit(() => startRename(nameForKey(it.key)));
@@ -662,6 +668,15 @@
       for (let s = 1; s <= n; s += 1) { const x = navItems2[(at + s + n) % n]; if (labelOf(x).toLowerCase().startsWith(k)) return hit(() => sb.dispatch('cursor.set', { addr: x.id })); }
     }
   }
+
+  // Escape from a pane, or Ctrl-Q Tab, puts the keyboard here: the tree, its cursor on the open chat's row (a null cursor
+  // follows the focused chat). From there the explorer keys walk (↑ ↓), ↩ opens the chat as a plain click does (the
+  // preview tab) and ⌃↩ opens it in a pane beside.
+  export function focusList() {
+    if ($sb.cursor?.startsWith('c:')) sb.dispatch('cursor.set', { addr: null });
+    listEl?.focus({ preventScroll: true });
+  }
+  export const hasListFocus = () => Boolean(listEl && globalThis.document?.activeElement === listEl);
 
   function filterKeydown(event) {
     if (isListDown(event)) { event.preventDefault(); treeStep('down'); return; }
@@ -1035,7 +1050,7 @@
           <button
             class="icon-btn press"
             onclick={() => onopenbeside(row.id)}
-            title="Open in new pane"
+            title="Open in new pane (⌃↵)"
             aria-label="Open in new pane"
             data-testid="open-pane"
           ><Icon name="split" size={13} /></button>

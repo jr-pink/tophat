@@ -77,7 +77,7 @@
       }}
       onauxclick={() => onclose()}
       data-testid="{prefix}-{item.id}"
-    >{item.label}</a>
+    >{item.label}{#if item.kbd}<kbd>{item.kbd}</kbd>{/if}</a>
     {:else}
     <button
       class="item"
@@ -87,7 +87,7 @@
       onmouseenter={() => { if (!item.disabled) cursor = index; }}
       onclick={() => onpick(item.id)}
       data-testid="{prefix}-{item.id}"
-    >{item.label}</button>
+    >{item.label}{#if item.kbd}<kbd>{item.kbd}</kbd>{/if}</button>
     {/if}
   {/each}
 </div>
@@ -119,4 +119,6 @@
   .menu.up { top: auto; bottom: calc(100% + 4px); }
   .item.sel:not(:disabled) { background: color-mix(in srgb, var(--ink) 9%, transparent); }
   .item:disabled { color: var(--ink-faint); cursor: default; }
+  /* An item's shortcut, after its label, as in the chat header's menu. */
+  .item kbd { float: right; margin-left: 14px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
 </style>

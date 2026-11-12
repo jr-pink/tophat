@@ -17,6 +17,7 @@
   import VoiceOrb from '../services/voice/ui/VoiceOrb.svelte';
   import SideThread from './SideThread.svelte';
   import SideThreads from './SideThreads.svelte';
+  import { isOpen, toggleOpen } from './disclosure.svelte.js';
   import { conversationItems, forksOf, sidechatsOf } from '$lib/core/reducer.js';
   import { bottomIsAbout, unreadOf } from '$lib/core/rowstate.js';
   import { busyStretch, isLive } from '$lib/core/activity.js';
@@ -29,6 +30,7 @@
   import { emptyGroups, paintRanges, rangeFor, textIndex } from '$lib/client/reader-dom.js';
   import { isIncognito } from '$lib/core/incognito.js';
   import { prefsDecl } from '$lib/core/prefs-state.js';
+  import { findDecl } from '$lib/core/find-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
 
   let {
@@ -59,7 +61,12 @@
     conversationId,
     hydrated: Boolean(chatState.conversations[conversationId]?.hydrated)
   }));
-  let finding = $state(false);
+  // Find in chat is kit state (core/find-state.js): open, query, current match and the history-loading status, per chat, so
+  // a reload or a second pane on the same chat reads the same thing and nothing here can drift from it.
+  const findStore = uiApp().use(findDecl);
+  const finding = $derived(Boolean(conversationId && $findStore.open[conversationId]));
+  const findStatus = $derived(conversationId ? $findStore.status[conversationId] : undefined);
+  const setFinding = (open) => { if (conversationId) findStore.dispatch('find.open', { chat: conversationId, open }); };
   let composer = $state(null);
   let notesOpen = $state(false);
   let highlightItemId = $state(null);
@@ -754,6 +761,43 @@
     dismissedRejects = dismiss(dismissedRejects, entry);
   }
 
+  // Find and select-all cover the whole chat, not only the newest page it opened with, so the earlier pages are fetched
+  // first. False when the server could not give all of them (offline, an error): what is loaded is then all they cover.
+  async function loadWholeChat(id, wanted) {
+    for (let more = session.canLoadEarlier?.(id); more && wanted(); ) {
+      const page = await session.loadEarlier(id);
+      if (page.offline || (page.more && !page.loaded)) return false;
+      more = page.more;
+    }
+    return true;
+  }
+  const hydratedChat = $derived(Boolean(conversation?.hydrated));
+  $effect(() => {
+    if (!finding || !hydratedChat) return;
+    const id = conversationId;
+    let wanted = true;
+    // Find covers the whole chat: the earlier pages are fetched first, the status in the store.
+    untrack(() => findStore.dispatch('find.status', { chat: id, status: 'loading' }));
+    loadWholeChat(id, () => wanted).then((whole) => {
+      if (!wanted) return;
+      findStore.dispatch('find.status', { chat: id, status: whole ? 'whole' : 'partial' });
+    });
+    return () => { wanted = false; if (findStore.get().status[id] === 'loading') findStore.dispatch('find.status', { chat: id, status: null }); };
+  });
+
+  // A match inside a tool call, a subagent or a thinking block is shown, not just the header it folds under: its card
+  // opens through the fold store (disclosure.svelte.js), as a click would, and stays open.
+  const FOLD_OF = { tool: 'card', agent: 'agent', thinking: 'thinking' };
+  function showMatch(match) {
+    if (!match) { highlightItemId = null; return; }
+    const item = items.find((entry) => entry.id === match.itemId);
+    for (const [kind, id] of [['agent', item?.agentId], [FOLD_OF[item?.type], item?.id]]) {
+      if (kind && id && !isOpen(conversationId, kind, id)) toggleOpen(conversationId, kind, id);
+    }
+    highlightItemId = item?.agentId || match.itemId;
+    scrollToItemId = highlightItemId;
+  }
+
   let jumpedSeq = $state(0);
   $effect(() => {
     if (!jump || jump.conversationId !== conversationId || jump.seq === jumpedSeq) return;
@@ -899,8 +943,31 @@
   // Voice preferences are declared once (core/prefs-state.js) and hydrated before this component's first render.
   const prefs = uiApp().use(prefsDecl);
 
-  export function openFind() { finding = true; }
+  export function openFind() { setFinding(true); }
   export function focusComposer() { composer?.focus(); }
+  /** ⌘A away from a text field: this chat's whole transcript, rather than everything on the page (tophat-md/tophat#5). */
+  export async function selectTranscript() {
+    const id = conversationId;
+    await loadWholeChat(id, () => id === conversationId);
+    await tick();
+    const column = paneEl?.querySelector('[data-testid="transcript"] .column');
+    if (!column || id !== conversationId) return;
+    const range = document.createRange();
+    range.selectNodeContents(column);
+    document.getSelection()?.removeAllRanges();
+    document.getSelection()?.addRange(range);
+  }
+  // Ctrl-Shift-U / Ctrl-Shift-D: half a screen up or down, wherever the keyboard is (tophat-md/tophat#4).
+  export function scrollTranscript(direction) {
+    const scroller = transcriptEl();
+    scroller?.scrollBy({ top: direction * scroller.clientHeight / 2 });
+  }
+  // Ctrl-C on a Mac: the Stop button, when there is a turn to stop.
+  export function stop() {
+    if (!running) return false;
+    session.interrupt(conversationId);
+    return true;
+  }
   
   export function openVoice() { voiceOrb?.openFromTap(); }
 
@@ -1033,7 +1100,7 @@
     {pane}
     {onpane}
     {onclosepane}
-    onfind={() => (finding = !finding)}
+    onfind={() => setFinding(!finding)}
     onfork={() => fork(null)}
     onsettings={(patch) => {
       const next = { ...conversation?.settings, ...patch };
@@ -1049,8 +1116,16 @@
     {#if finding}
       <FindBar
         {items}
-        onjump={(match) => { highlightItemId = match.itemId; scrollToItemId = match.itemId; }}
-        onclose={() => { finding = false; highlightItemId = null; }}
+        tools={$prefs.find.tools}
+        loading={findStatus === 'loading'}
+        partial={findStatus === 'partial'}
+        query={$findStore.query[conversationId] ?? ''}
+        index={$findStore.index[conversationId] ?? 0}
+        onquery={(text) => findStore.dispatch('find.query', { chat: conversationId, text })}
+        onindex={(index) => findStore.dispatch('find.index', { chat: conversationId, index })}
+        ontools={(tools) => prefs.dispatch('find.set', { tools })}
+        onjump={showMatch}
+        onclose={() => { setFinding(false); highlightItemId = null; }}
       />
     {/if}
     

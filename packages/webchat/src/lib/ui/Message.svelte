@@ -144,6 +144,9 @@
   <div class="row" class:highlight data-item={item.id}><ToolCard {item} {onpath} /></div>
 {:else if item.type === 'agent'}
   <div class="row" class:highlight data-item={item.id}><AgentCard {item} children={agentChildren} {onpath} /></div>
+{:else if item.type === 'error' && item.recovered}
+  <!-- A failure another provider answered for (server/claude-fallback.js): a note, with the original words on hover. -->
+  <div class="row notice" data-item={item.id} data-role="notice" title={item.text || null}>{item.recovered}</div>
 {:else if item.type === 'error'}
   <div class="row error" data-item={item.id} data-role="error">{item.text}</div>
 {/if}
@@ -203,6 +206,7 @@
   }
   .stamp.float { position: absolute; right: 0; bottom: -12px; line-height: 12px; }
   .stamp.float.left { right: calc(100% + 8px); bottom: 0; line-height: 15px; }
+  .notice { font-size: 11.5px; color: var(--ink-faint); margin: 6px 0; }
   .error {
     color: var(--warn);
     border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);

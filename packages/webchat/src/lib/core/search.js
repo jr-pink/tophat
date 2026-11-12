@@ -13,11 +13,16 @@ function haystackOf(item) {
   return entry;
 }
 
-export function searchWithinChat(items, query) {
+// What find reads with tool calls left out: the user's and the assistant's own messages, not the tool calls, their
+// output, thinking, or anything a subagent said (tophat-md/tophat#5).
+const isMessage = (item) => (item.type === 'user' || item.type === 'assistant') && !item.agentId;
+
+export function searchWithinChat(items, query, { tools = true } = {}) {
   const needle = query.trim().toLowerCase();
   if (!needle) return [];
   const matches = [];
   for (const item of items) {
+    if (!tools && !isMessage(item)) continue;
     const { text: haystack, lower } = haystackOf(item);
     let at = lower.indexOf(needle);
     while (at !== -1) {
@@ -137,6 +142,13 @@ export function mergeResults(serverResults, cachedResults) {
   for (const result of cachedResults) byId.set(result.conversationId, result);
   for (const result of serverResults) byId.set(result.conversationId, { ...byId.get(result.conversationId), ...result, offline: false });
   return [...byId.values()].sort((a, b) => (b.score || 0) - (a.score || 0));
+}
+
+/** The rows a search matched, in the order the search ranked them rather than by recency (tophat-md/tophat#5). */
+export function rankByHits(rows, hits) {
+  if (!hits?.length) return rows;
+  const place = new Map(hits.map((hit, index) => [hit.conversationId, index]));
+  return [...rows].sort((a, b) => (place.get(a.id) ?? hits.length) - (place.get(b.id) ?? hits.length));
 }
 
 function rowOf(conversation, kind) {

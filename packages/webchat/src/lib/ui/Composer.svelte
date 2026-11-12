@@ -6,7 +6,7 @@
   import { PAD_SEC } from '$lib/services/voice/core/alternatives.js';
   import { fitReplacement, phraseForRange, wordRangeAt } from '$lib/services/voice/core/tapword.js';
   import { readSpans, writeSpans } from '$lib/services/voice/client/dictated-spans.js';
-  import { isMod } from '$lib/core/keys.js';
+  import { isMod, isApple } from '$lib/core/keys.js';
   import { waited } from '$lib/core/waiting.js';
   import { isIncognito } from '$lib/core/incognito.js';
 
@@ -886,7 +886,8 @@
       event.preventDefault();
       submit();
     }
-    if (event.key === 'Escape' && running) oninterrupt();
+    // Taken, so the page does not also move the keyboard to the chat list (tophat-md/tophat#4).
+    if (event.key === 'Escape' && running) { event.preventDefault(); oninterrupt(); }
   }
 
   $effect(() => { if (autofocus && field) field.focus(); });
@@ -955,7 +956,7 @@
         </span>
       {/if}
       {#if running}
-        <button class="interrupt press focus-ring" onclick={oninterrupt} data-testid="interrupt" title="Stop (Esc): stops everything this chat is doing, background work included">
+        <button class="interrupt press focus-ring" onclick={oninterrupt} data-testid="interrupt" title={`Stop (${isApple() ? 'Esc or ⌃C' : 'Esc'}): stops everything this chat is doing, background work included`}>
           <span class="stop"></span> stop
         </button>
       {/if}

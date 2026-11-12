@@ -245,6 +245,11 @@ export function emptyContext() {
 
 const SUBAGENT_TOOLS = new Set(['Task', 'Agent']);
 
+// What the CLI puts on the assistant message it writes in the model's place when the account is at its limit
+// (`error` on a stream-json assistant message), and the words it uses, for a CLI that does not say.
+const LIMIT_ERRORS = new Set(['rate_limit', 'billing_error']);
+const LIMIT_TEXT = /\bhit your (?:[\w'’]+ )*(?:limit|budget)\b|\busage limit reached\b/iu;
+
 function agentIdOf(msg) {
   return msg.parent_tool_use_id || null;
 }
@@ -537,6 +542,13 @@ export function translate(ctx, msg) {
       ? raw.filter((part) => part && typeof part === 'object')
       : typeof raw === 'string' && raw ? [{ type: 'text', text: raw }] : [];
     const messageId = msg.message?.id || msg.uuid;
+    // A limit is said twice, as this message and as the turn's error result with the same text. It is held until the
+    // result, so the chat shows it once, as the error. The field exists only while one is held (never in emptyContext),
+    // so the handover structure (code-shape.js) is unchanged.
+    if (!agentIdOf(msg) && LIMIT_ERRORS.has(msg.error)) {
+      next.limitReply = { itemId: `${messageId}:0`, text: textOf(content) };
+      return { ctx: next, events };
+    }
     
     
     
@@ -655,10 +667,19 @@ export function translate(ctx, msg) {
     
     
     const aborted = ['aborted_streaming', 'interrupted', 'cancelled'].includes(msg.terminal_reason);
+    const failed = !aborted && (msg.is_error || msg.subtype === 'error_during_execution');
+    const held = next.limitReply;
+    if (held) delete next.limitReply;
+    if (held && !(failed && msg.result === held.text)) {
+      events.push({ kind: 'assistant.message', content: { itemId: held.itemId, text: held.text, agentId: null } });
+    }
     if (aborted) {
       events.push({ kind: 'run.cancelled', content: { reason: msg.terminal_reason } });
-    } else if (msg.is_error || msg.subtype === 'error_during_execution') {
-      events.push({ kind: 'run.error', content: { message: msg.result || msg.error || 'The run failed.' } });
+    } else if (failed) {
+      const message = msg.result || msg.error || 'The run failed.';
+      // Marked so the server can carry the turn on in another provider (claude-fallback.js).
+      const limit = Boolean(held) || msg.api_error_status === 429 || LIMIT_TEXT.test(message);
+      events.push({ kind: 'run.error', content: { message, ...(limit ? { limit: true } : {}) } });
     } else {
       events.push({
         kind: 'run.completed',

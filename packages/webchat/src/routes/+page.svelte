@@ -23,7 +23,11 @@
   import { languageOf, warmTokens } from '$lib/core/highlight.js';
   import { groupForks, rankConversations } from '$lib/core/recency.js';
   import { nextAfterArchive } from '$lib/core/archive-select.js';
-  import { isMod, isMacTextBinding } from '$lib/core/keys.js';
+  import { isMod, isMacTextBinding, isPanePrefix, isStopShortcut, paneChord, transcriptScroll, PANE_CHORDS, chordHint, isApple } from '$lib/core/keys.js';
+  import { keyboardDecl } from '$lib/core/keyboard-state.js';
+  import { findDecl } from '$lib/core/find-state.js';
+  import { prefsDecl } from '$lib/core/prefs-state.js';
+  import { provideMenu, SEP } from '$lib/client/context-menu.js';
   import { SEEN_KEY, startsSidebarHidden } from '$lib/core/window-start.js';
   import { resizeDrag, SIDEBAR_MIN_PX, SIDEBAR_MAX_PX, SIDEBAR_DEFAULT_PX } from '$lib/core/sidebar-resize.js';
   import UndoBar from '$lib/ui/UndoBar.svelte';
@@ -97,6 +101,11 @@
   let quicklookError = $state(null);
   let wide = $state(true);
   let paneRefs = $state([]);
+  let sidebarRef = $state(null);
+  // The keyboard modes (Ctrl-Q waiting for its second key, the chord list) are kit state (core/keyboard-state.js).
+  const keyboardStore = uiApp().use(keyboardDecl);
+  const panePrefix = $derived(Boolean($keyboardStore.prefix));
+  const chordHelp = $derived($keyboardStore.help);
   
   
   
@@ -219,6 +228,11 @@
   }
 
   onMount(() => {
+    // Read-only views of the page's kit states, for the e2e specs to compare the store with what is drawn (never written through).
+    window.__webchatKit = {
+      panes: () => paneStore.get(), keyboard: () => keyboardStore.get(), sidebar: () => sidebarStore.get(),
+      find: () => uiApp().use(findDecl).get(), prefs: () => uiApp().use(prefsDecl).get()
+    };
     try {
       const seen = sessionStorage.getItem(SEEN_KEY) === '1';
       sessionStorage.setItem(SEEN_KEY, '1');
@@ -294,6 +308,8 @@
     window.addEventListener('pointermove', archivePointer);
     window.addEventListener('pointerdown', clearArchivePointer, true);
     window.addEventListener('blur', clearArchivePointer);
+    window.addEventListener('keydown', paneChordShortcut, true);
+    window.addEventListener('blur', clearPanePrefix);
     window.addEventListener('keydown', archiveShortcut, true);
     window.addEventListener('keydown', paneNavShortcut, true);
     window.addEventListener('keydown', tabShortcut, true);
@@ -321,6 +337,9 @@
       window.removeEventListener('pointermove', archivePointer);
       window.removeEventListener('pointerdown', clearArchivePointer, true);
       window.removeEventListener('blur', clearArchivePointer);
+      window.removeEventListener('keydown', paneChordShortcut, true);
+      window.removeEventListener('blur', clearPanePrefix);
+      clearPanePrefix();
       window.removeEventListener('keydown', archiveShortcut, true);
       window.removeEventListener('keydown', paneNavShortcut, true);
       window.removeEventListener('keydown', tabShortcut, true);
@@ -421,7 +440,11 @@
     hoveredChat = event.target.closest?.('[data-testid="sidebar"] [data-chat]')?.dataset.chat || null;
     if (hoveredChat) { lastHoveredChat = hoveredChat; lastHoveredAt = Date.now(); }
   }
-  function clearArchivePointer() { hoveredChat = null; }
+  function clearArchivePointer(event) {
+    hoveredChat = null;
+    // A press anywhere outside the chord list puts it away.
+    if (keyboardStore.get().help && !event?.target?.closest?.('[data-testid="chord-help"]')) keyboardStore.dispatch('help.set', { open: false });
+  }
 
   // Archiving the chat on screen leaves the pane holding something he has put away, so selection
   // moves on by itself: to the row his mouse was just over, else to the next chat down the
@@ -462,8 +485,22 @@
 
   function archiveShortcut(event) {
     if (MODIFIER_KEYS.has(event.key)) return;
+    // Ctrl-Enter opens the chat under the pointer beside the focused pane, as its row's "Open in new pane" does. The
+    // explorer tree takes it for its own cursor row (Sidebar treeKeydown); a text field keeps its own Enter, so a draft is
+    // never sent away.
+    if (event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && !event.isComposing
+        && !searching && !quicklook && !insideModal(event.target) && !typingInAField(event.target)
+        && !event.target?.closest?.('[data-testid="chat-list"]') && hoveredChat) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (!event.repeat) openFork(hoveredChat);
+      hoveredChat = null;
+      return;
+    }
     const command = event.metaKey && !event.ctrlKey && !event.altKey;
-    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && hoveredChat;
+    // Plain E is for the row under the pointer, never for text: in the composer or any other field it is a letter.
+    const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && hoveredChat
+      && !typingInAField(event.target);
     if (event.key.toLowerCase() === 'e' && (command || plain) && !event.isComposing
         && !searching && !quicklook && !insideModal(event.target)) {
       const id = hoveredChat || activeId;
@@ -508,6 +545,118 @@
     tick().then(() => paneRefs[to]?.focusComposer());
   }
 
+  // Ctrl-Q, then one key, works the panes and their tabs as a tmux prefix does. The key after the prefix is always taken, so
+  // it never lands in the composer; the hint bar shows while it waits and it lapses after three seconds. The mode is kit
+  // state (keyboard-state.js).
+  let panePrefixTimer = 0;
+  let armSeq = 0;
+  function clearPanePrefix() {
+    clearTimeout(panePrefixTimer);
+    if (keyboardStore.get().prefix) keyboardStore.dispatch('prefix.clear', {});
+  }
+  function armPanePrefix() {
+    const id = `k${Date.now().toString(36)}-${(armSeq += 1)}`;
+    keyboardStore.dispatch('prefix.arm', { id });
+    clearTimeout(panePrefixTimer);
+    panePrefixTimer = setTimeout(() => keyboardStore.dispatch('prefix.clear', { id }), 3000);
+  }
+
+  // The group beside `at` that its tabs join (Ctrl-Q j): the open one to the left, else the one to the right.
+  function joinTarget(at) {
+    for (const index of [at - 1, at + 1]) if (index >= 0 && index < layout.panels.length) return index;
+    return null;
+  }
+  // Every tab of the focused group moved into its neighbour, the active one last so it stays the one shown; the group,
+  // left empty, closes (core/panels.js moveTab). Each move is one absolute tab.move.
+  function joinTabs(at) {
+    const to = joinTarget(at);
+    if (to === null) return;
+    const from = layout.keys[at];
+    const target = layout.keys[to];
+    const active = layout.panels[at];
+    const tabs = [...layout.tabs[at].filter((chat) => chat !== active), active];
+    for (const chat of tabs) pane('tab.move', { chat, from, to: target, index: (layout.tabs[layout.keys.indexOf(target)] ?? []).length });
+    settlePanes();
+  }
+
+  function runPaneChord({ chord, n }) {
+    const at = layout.focused;
+    const group = layout.keys[at];
+    const chat = layout.panels[at];
+    if (chord === 'help') { keyboardStore.dispatch('help.set', { open: !keyboardStore.get().help }); return; }
+    if (chord === 'split') return newChat({ split: true });
+    if (chord === 'new') return newChat();
+    if (chord === 'search') { searching = true; return; }
+    if (chord === 'cycle-list') {
+      if (wide && sidebarShown && !sidebarRef?.hasListFocus?.()) { sidebarRef?.focusList?.(); return; }
+      tick().then(() => paneRefs[layout.focused]?.focusComposer());
+      return;
+    }
+    if (chord === 'split-tab') splitActiveTab();
+    if (chord === 'close' && layout.panels.length > 1) closePane(at);
+    if (chord === 'close-tab' && group && chat) closeTab(group, chat);
+    if (chord === 'next') focusPane(paneNeighbour(layout, 1) ?? layout.collapsed.indexOf(false));
+    if (chord === 'focus-n' && n >= 1 && n <= layout.panels.length) {
+      if (layout.collapsed[n - 1]) openRail(n - 1); else focusPane(n - 1);
+    }
+    if (chord === 'focus-left' || chord === 'focus-right') {
+      const to = paneNeighbour(layout, chord === 'focus-left' ? -1 : 1);
+      if (to !== null) focusPane(to);
+    }
+    if (chord === 'next-tab') desktopCommands.next();
+    if (chord === 'prev-tab') desktopCommands.prev();
+    if (chord === 'move-left' || chord === 'move-right') paneAction(at, chord === 'move-left' ? 'left' : 'right');
+    if (chord === 'tab-to-pane' && group && chat) tabCommands.moveToNewGroup(group, chat);
+    if (chord === 'pane-to-tabs') joinTabs(at);
+    if (chord === 'zoom') { paneGesture(paneStore, 'zoom'); settlePanes(); }
+    // tmux's resize: Shift-H moves the focused pane's right divider left, or its left one for the last pane.
+    if (chord === 'resize-left' || chord === 'resize-right') {
+      paneGesture(paneStore, 'resizeStep', { index: at < layout.panels.length - 1 ? at : at - 1, delta: chord === 'resize-left' ? -0.05 : 0.05 });
+    }
+    // The pane focused afterwards takes the keyboard, as Ctrl-H and Ctrl-L leave it. A close can leave the focus on a
+    // folded pane (a rail), which has no composer: the nearest open pane takes it instead.
+    if (layout.panels.length && layout.collapsed[layout.focused]) focusPane(paneNeighbour(layout, 1) ?? paneNeighbour(layout, -1) ?? layout.collapsed.indexOf(false));
+    if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
+  }
+
+  // The prefix, its second key, Ctrl-Shift-U / Ctrl-Shift-D and a Mac's Ctrl-C, in the capture phase ahead of every other
+  // key handler: they work from inside the composer, and the key after the prefix never reaches anything else.
+  function paneChordShortcut(event) {
+    if (keyboardStore.get().prefix && !MODIFIER_KEYS.has(event.key)) {
+      clearPanePrefix();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const chord = paneChord(event);
+      if (chord && !event.isComposing && !searching && !quicklook && !insideModal(event.target)) runPaneChord(chord);
+      return;
+    }
+    // The chord list is open: Escape (or any key that is not a chord) puts it away.
+    if (keyboardStore.get().help && !MODIFIER_KEYS.has(event.key) && !isPanePrefix(event)) {
+      keyboardStore.dispatch('help.set', { open: false });
+      if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    }
+    if (searching || quicklook || insideModal(event.target) || event.isComposing) return;
+    if (isPanePrefix(event)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      armPanePrefix();
+      return;
+    }
+    // Ctrl-Shift-U / Ctrl-Shift-D scroll the focused transcript from the composer too, the draft and caret untouched.
+    const scroll = transcriptScroll(event);
+    if (scroll) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      paneRefs[layout.focused]?.scrollTranscript?.(scroll);
+      return;
+    }
+    // Ctrl-C on a Mac stops the focused chat's turn, through the Stop button's path; with nothing running the key is left alone.
+    if (isStopShortcut(event) && !event.repeat && paneRefs[layout.focused]?.stop?.()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }
+
   function shortcuts(event) {
     if (pushToTalk(event)) return;
     if (!isSpaceKey(event)) paneRefs[layout.focused]?.pushToTalkOther?.(event);
@@ -516,6 +665,14 @@
     const key = event.key.toLowerCase();
     if (meta && key === 'k') { event.preventDefault(); searching = true; return; }
     if (meta && key === 'f') { event.preventDefault(); paneRefs[layout.focused]?.openFind(); return; }
+    // ⌘A away from a text field selects the focused chat's whole transcript, not the sidebar, header and composer with
+    // it. The explorer tree keeps its own ⌘A (select every row; it stops the event first).
+    if (meta && key === 'a' && !event.shiftKey && !event.altKey && !event.defaultPrevented && !typingInAField(event.target)
+        && !searching && !quicklook && !insideModal(event.target)) {
+      event.preventDefault();
+      paneRefs[layout.focused]?.selectTranscript?.();
+      return;
+    }
     if (meta && (key === 'n' || (event.shiftKey && key === 'o'))) { event.preventDefault(); newChat(); return; }
     if (meta && event.key === 'Enter' && !typingInAField(event.target)) {
       event.preventDefault();
@@ -536,6 +693,14 @@
       if (quicklook || quicklookLoading) { quicklook = null; quicklookError = null; return; }
       if (searching) { searching = false; return; }
       sidebarOpen = false;
+      // An Escape nothing else took (a running turn's stop, a menu, a field of its own, an open sheet) moves the keyboard to
+      // the chat list when it is showing; there the arrows walk, Enter opens as a click does (the preview tab) and Ctrl-Enter
+      // opens beside. Never on a phone and never reveals a hidden list.
+      if (wide && sidebarShown && !event.defaultPrevented && !insideModal(event.target) && !document.querySelector('[aria-modal="true"]')
+          && (!typingInAField(event.target) || event.target.matches('[data-testid="composer"]'))) {
+        event.preventDefault();
+        sidebarRef?.focusList?.();
+      }
       return;
     }
     if (!event.metaKey && !event.ctrlKey && !event.altKey && !searching && !quicklook
@@ -642,6 +807,36 @@
     }
   };
   setContext('tab-commands', tabCommands);
+
+  // The right-click menu of a tab and of a group's tab strip (data-ctx="tab" / "tabstrip"; the shared ContextMenuHost
+  // draws it). Each item shows its Ctrl-Q chord where it has one (core/keys.js PANE_CHORDS).
+  function tabMenuItems({ group, chat }) {
+    const at = layout.keys.indexOf(group);
+    if (at < 0) return [];
+    const tabs = layout.tabs[at];
+    const many = layout.panels.length > 1;
+    const zoomed = layout.collapsed.some((shut, i) => i !== at && shut) && !layout.collapsed.some((shut, i) => i !== at && !shut);
+    return [
+      chat && tabs.includes(chat) && { id: 'close-tab', label: 'Close', keys: chordHint('close-tab'), run: () => closeTab(group, chat) },
+      chat && tabs.length > 1 && { id: 'close-others', label: 'Close Others', run: () => tabCommands.closeOthers(group, chat) },
+      chat && tabs.indexOf(chat) < tabs.length - 1 && { id: 'close-right', label: 'Close to the Right', run: () => tabCommands.closeToRight(group, chat) },
+      { id: 'close-all', label: 'Close All', run: () => tabCommands.closeAll(group) },
+      SEP,
+      chat && { id: 'split-right', label: 'Split Right', keys: chordHint('split-tab'), run: () => tabCommands.splitRight(group, chat) },
+      chat && tabs.length > 1 && { id: 'tab-to-pane', label: 'Move to New Pane', keys: chordHint('tab-to-pane'), run: () => tabCommands.moveToNewGroup(group, chat) },
+      many && { id: 'pane-to-tabs', label: 'Join Tabs into Neighbour', keys: chordHint('pane-to-tabs'), run: () => joinTabs(at) },
+      many && { id: 'zoom', label: zoomed ? 'Unzoom Pane' : 'Zoom Pane', keys: chordHint('zoom'), run: () => paneAction(at, 'zoom') },
+      many && { id: 'close-pane', label: 'Close Pane', keys: chordHint('close'), run: () => closePane(at) },
+      SEP,
+      { id: 'next-tab', label: 'Next Tab', keys: chordHint('next-tab'), run: () => { focusPane(at); desktopCommands.next(); } },
+      { id: 'prev-tab', label: 'Previous Tab', keys: chordHint('prev-tab'), run: () => { focusPane(at); desktopCommands.prev(); } },
+      { id: 'chords', label: 'Keyboard Chords…', keys: chordHint('help'), run: () => keyboardStore.dispatch('help.set', { open: true }) }
+    ];
+  }
+  $effect(() => {
+    const off = [provideMenu('tab', (ctx) => tabMenuItems(ctx)), provideMenu('tabstrip', (ctx) => tabMenuItems({ group: ctx.group, chat: null }))];
+    return () => off.forEach((f) => f());
+  });
 
   function activateTab(group, chat) {
     const before = layout.panels[layout.focused];
@@ -786,6 +981,10 @@
     if (action === 'left') { paneGesture(paneStore, 'move', { index, delta: -1 }); return settlePanes(); }
     if (action === 'right') { paneGesture(paneStore, 'move', { index, delta: 1 }); return settlePanes(); }
     if (action === 'close') return closePane(index);
+    if (action === 'close-tab') return closeTab(layout.keys[index], layout.panels[index]);
+    if (action === 'tab-to-pane') return tabCommands.moveToNewGroup(layout.keys[index], layout.panels[index]);
+    if (action === 'pane-to-tabs') return joinTabs(index);
+    if (action === 'zoom') { focusPane(index); paneGesture(paneStore, 'zoom'); return settlePanes(); }
   }
 
   function openRail(index) {
@@ -1077,6 +1276,30 @@
 <svelte:head><title>{windowTitle}</title></svelte:head>
 
 <div class="app" class:resizing={sidebarDragging} style:--keyboard-inset={`${keyboardInset}px`} style:--sidebar-w={`${sidebarWidth}px`}>
+  {#if panePrefix}
+    <div class="pane-prefix" role="status" data-testid="pane-prefix">⌃Q · h new pane · x close · w close tab · o next · n p tabs · ⇧H ⇧L resize · {'{'} {'}'} swap · z zoom · ? all</div>
+  {/if}
+  {#if chordHelp}
+    <div class="chord-help" role="dialog" aria-label="Keyboard chords" data-testid="chord-help">
+      <div class="chord-head">Ctrl-Q, then <span>Esc closes</span></div>
+      <dl>
+        {#each PANE_CHORDS as entry (entry.chord)}
+          <dt><kbd>{entry.show ?? entry.key}</kbd></dt><dd>{entry.label}</dd>
+        {/each}
+      </dl>
+      <div class="chord-head">Without the prefix</div>
+      <dl>
+        <dt><kbd>⌃H ⌃L</kbd></dt><dd>pane to the left, right</dd>
+        <dt><kbd>⌃⇧U ⌃⇧D</kbd></dt><dd>scroll the transcript half a screen</dd>
+        <dt><kbd>Esc</kbd></dt><dd>to the chat list; ↑ ↓ walk, ↩ opens, ⌃↩ opens beside</dd>
+        {#if isApple()}<dt><kbd>⌃C</kbd></dt><dd>stop the focused chat</dd>{/if}
+        <dt><kbd>{isApple() ? '⌘' : 'Ctrl-'}A</kbd></dt><dd>select the whole transcript</dd>
+        <dt><kbd>{isApple() ? '⌘' : 'Ctrl-'}F</kbd></dt><dd>find in chat</dd>
+        <dt><kbd>{isApple() ? '⌘\\' : 'Ctrl-\\'}</kbd></dt><dd>split the tab</dd>
+        <dt><kbd>e</kbd></dt><dd>archive the row under the pointer (outside a text field)</dd>
+      </dl>
+    </div>
+  {/if}
   {#if sidebarOpen && !wide}
     <button class="scrim" onclick={() => (sidebarOpen = false)} aria-label="Close chat list"></button>
   {/if}
@@ -1087,6 +1310,7 @@
   <div class="peekwrap" class:peeking={sidebarPeek && sidebarHidden} data-testid="sidebar-peek"
     onpointerleave={() => (sidebarPeek = false)}>
   <Sidebar
+    bind:this={sidebarRef}
     conversations={state.conversations}
     chatState={state}
     {session}
@@ -1193,7 +1417,7 @@
             conversationId={panelId}
             primary={index === layout.focused}
             autofocus={wide && panelId === transientId}
-            pane={wide ? { index, count: layout.panels.length, max: MAX_PANELS } : null}
+            pane={wide ? { index, count: layout.panels.length, max: MAX_PANELS, tabs: layout.tabs[index].length, zoomed: layout.panels.length > 1 && layout.collapsed.every((shut, i) => i === index || shut) } : null}
             onpane={(action) => paneAction(index, action)}
             onpath={openPath}
             onselect={(id, options) => select(id, options)}
@@ -1310,6 +1534,20 @@
     }
   }
   main { flex: 1; min-width: 0; min-height: 0; display: flex; }
+  /* Ctrl-Q is waiting for its second key: what the common ones do (Ctrl-Q ? lists them all). */
+  .pane-prefix, .chord-help {
+    position: fixed; left: 50%; transform: translateX(-50%); z-index: 60;
+    max-width: calc(100vw - 24px); border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg-raised); color: var(--ink); font: 12px var(--mono);
+  }
+  .pane-prefix { top: 12px; padding: 8px 12px; pointer-events: none; }
+  .chord-help { top: 48px; padding: 12px 16px; max-height: calc(100dvh - 96px); overflow: auto; box-shadow: 0 10px 40px rgb(0 0 0 / 0.35); }
+  .chord-head { color: var(--ink-faint); margin: 4px 0 6px; }
+  .chord-head span { float: right; margin-left: 24px; }
+  .chord-help dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; margin: 0 0 8px; }
+  .chord-help dt { text-align: right; }
+  .chord-help dd { margin: 0; color: var(--ink-dim); }
+  .chord-help kbd { font-family: var(--mono); }
   .scrim { position: fixed; inset: 0; background: rgb(0 0 0 / 0.42); z-index: 35; border: none; }
   .blank {
     flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;

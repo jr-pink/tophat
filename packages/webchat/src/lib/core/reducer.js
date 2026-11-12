@@ -513,7 +513,9 @@ function applyEvent(draft, event) {
           tool: content.tool, rawInput: '', input: content.input ?? null,
           preview: null, output: '', state: 'running', isError: false
         },
-        (existing) => ({ ...existing, tool: content.tool || existing.tool, input: content.input ?? existing.input, state: 'running' }));
+        // An older page loaded after the result brings the start in late: it fills in the call, it does not reopen
+        // it.
+        (existing) => ({ ...existing, tool: content.tool || existing.tool, input: content.input ?? existing.input }));
       settleThinking(draft, id, content.agentId);
       
       
@@ -563,8 +565,7 @@ function applyEvent(draft, event) {
           ...existing,
           agentType: content.agentType || existing.agentType || 'agent',
           description: content.description || existing.description || 'Subagent',
-          prompt: content.prompt ?? existing.prompt,
-          state: 'running'
+          prompt: content.prompt ?? existing.prompt
         }));
       
       
@@ -579,6 +580,13 @@ function applyEvent(draft, event) {
       break;
     case 'run.status':
       if (!RUN_STATES.includes(content.state)) throw new TypeError(`Invalid run state: ${content.state}`);
+      // Claude's limit errors of a turn codex took over (server/claude-fallback.js, tophat-md/tophat#7) are no longer
+      // anything to act on: each row reads as the note. Keyed like the error row, so the note holds whichever folds first.
+      for (const failed of content.fallback?.errors || []) {
+        if (!String(failed?.id).startsWith(`${id}:`)) continue;
+        upsert(draft, id, failed.id, { type: 'error', at, cursor: failed.cursor ?? event.cursor, agentId: null },
+          (item) => ({ ...item, recovered: content.note }));
+      }
       break;
     case 'run.cancelled': {
       const list = ownList(draft, id);
