@@ -23,6 +23,11 @@ export const sidebarDecl = declare({
     names: list(normalizeWorkspace),
     current: field(null, normalizeWorkspace),
     open: flags(),
+    // Folders whose chats go quiet while the folder is collapsed (right-click: Mute When Collapsed), by folder key. A
+    // preference, not a read mark: the unread state stays on the chats and the folder's dot comes back when it is expanded.
+    // Per device, like which folders are open, which it is judged against. Owner request, 2026-11-11 22:20 PST: "lets
+    // add mark as read and mute-when-closed options to the right click menu".
+    muteCollapsed: flags(),
     layout: field(emptyLayout(), cleanLayout),
     mainFolded: bool(),
     // Whether archived folders (and their subtrees) draw, dimmed with an "archived" marker, instead of being hidden.
@@ -65,17 +70,21 @@ export const sidebarDecl = declare({
   actions: {
     // Folder open/closed is an absolute statement about one key (folderKey of its name).
     'folder.open': on('open', (open, { key, open: yes }) => setMember(open, key, yes)),
+    // Mute When Collapsed is an absolute statement about one key, like folder.open: repeating it changes nothing.
+    'folder.mute': on('muteCollapsed', (muted, { key, muted: yes }) => setMember(muted, key, yes)),
     'folder.create': on('names', (names, { name }) => withName(names, canonicalWorkspace(name))),
     'folder.rename': (s, { from, to }) => {
       const clean = normalizeWorkspace(to);
       if (!clean || clean === from) return s;
       const a = folderKey(from), b = folderKey(clean);
-      const names = renamedIn(s.names, from, clean), layout = renamedLayout(s.layout, from, clean), open = swapKey(swapKey(s.open, a, b), miscKey(a), miscKey(b)), current = s.current === from ? clean : s.current;
-      return names === s.names && layout === s.layout && open === s.open && current === s.current ? s : { ...s, names, layout, open, current };
+      const names = renamedIn(s.names, from, clean), layout = renamedLayout(s.layout, from, clean), open = swapKey(swapKey(s.open, a, b), miscKey(a), miscKey(b)), muteCollapsed = swapKey(s.muteCollapsed, a, b), current = s.current === from ? clean : s.current;
+      return names === s.names && layout === s.layout && open === s.open && muteCollapsed === s.muteCollapsed && current === s.current ? s : { ...s, names, layout, open, muteCollapsed, current };
     },
     'folder.remove': (s, { name }) => {
       const names = withoutName(s.names, name), layout = removedLayout(s.layout, name), current = s.current === name ? null : s.current;
-      return names === s.names && layout === s.layout && current === s.current ? s : { ...s, names, layout, current };
+      // A removed folder takes its mute with it, so a folder made later under the same name starts loud.
+      const muteCollapsed = setMember(s.muteCollapsed, folderKey(name), false);
+      return names === s.names && layout === s.layout && muteCollapsed === s.muteCollapsed && current === s.current ? s : { ...s, names, layout, muteCollapsed, current };
     },
     // `all` is every folder name on screen (device names plus names found on chats): the move is a pure function of it.
     'folder.move': on('layout', (layout, { all, drag, target, where }) => moveFolder(all, layout, drag, target, where)),

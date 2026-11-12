@@ -252,9 +252,10 @@ export const miscKey = (folder) => `misc:${folder}`;
  * subfolders, with no Misc row; off by default. Folder archive: `isArchived(key)` is a folder's own flag; an archived folder and
  * its subtree are not drawn unless `showArchived`, when they draw dimmed (`archived` on the row; `archivedOwn` when it is the
  * flagged folder itself). Nothing about parent, order or membership changes, so clearing the flag restores exactly what was
- * there.
+ * there. `isMuted(key)` is the folder's Mute When Collapsed flag: while it is collapsed its row and its ancestors' rows show
+ * no live/unread dot for anything inside it.
  */
-export function explorerRows(rows, { names = [], layout = emptyLayout(), focus = null, isOpen = () => false, searching = false, newIn = null, isArchived = () => false, showArchived = false, inlineOwn = false } = {}) {
+export function explorerRows(rows, { names = [], layout = emptyLayout(), focus = null, isOpen = () => false, searching = false, newIn = null, isArchived = () => false, showArchived = false, inlineOwn = false, isMuted = () => false } = {}) {
   const out = [];
   const pushChats = (list, depth, dim = false) => {
     for (const row of list) {
@@ -276,7 +277,11 @@ export function explorerRows(rows, { names = [], layout = emptyLayout(), focus =
   const live = (row) => row.indicator === 'live' || row.indicator === 'unread';
   const shown = (k) => k === UNFILED || showArchived || !isArchived(k);
   const subs = (k) => tree.children(k).filter(shown);
-  const subtreeLive = (k) => (members.get(k) || []).some(live) || subs(k).some(subtreeLive);
+  // Mute When Collapsed: a muted folder that is collapsed is quiet, its whole subtree with it (its chats are hidden, and so
+  // is anything inside it that an open subfolder would otherwise show). Nothing is read or changed; expanding the folder
+  // makes the dot count again. A muted folder that is open counts as usual, its collapsed subfolders by their own rules.
+  const quiet = (k) => isMuted(k) && !isOpen(k);
+  const subtreeLive = (k) => !quiet(k) && ((members.get(k) || []).some(live) || subs(k).some(subtreeLive));
   // A folder's own chats: directly under it, or, when it has subfolders, under its last 'misc' row.
   const pushOwn = (k, depth, dim) => {
     const own = members.get(k) || [];
@@ -305,6 +310,21 @@ export function explorerRows(rows, { names = [], layout = emptyLayout(), focus =
   walk(root, 0, false);
   if (root !== ROOT) pushOwn(root, 0, false);
   return out;
+}
+
+/**
+ * The chats in a folder and everything under it: each row's folder is read as explorerRows reads it (an unknown or empty
+ * name is the Inbox), then kept when that folder is `key` or lies inside it. Archived chats are not in the folder's list.
+ */
+export function chatsUnder(rows, key, { names = [], layout = emptyLayout() } = {}) {
+  const tree = folderTree(names, layout);
+  const known = new Set(names.map(folderKey));
+  return rows.filter((row) => {
+    if (row.archived) return false;
+    const own = canonicalWorkspace(row.workspace);
+    const k = own ? folderKey(own) : UNFILED;
+    return tree.isWithin(known.has(k) || k === UNFILED ? k : UNFILED, key);
+  });
 }
 
 /** Whether a chat sits in the focused folder's subtree (null focus: everything). */

@@ -2,6 +2,8 @@
 // engine per browser. It renders and handles input only (A11): no reducer fold of server events, no IndexedDB, no
 // EventSource. It keeps two things of its own, because they belong to this tab:
 // - provisional chats (core/transient.js: the empty chat a tab opens into, which no other tab and no server knows), and
+// - a synchronous journal (localStorage, kit outbox-local.js) of every message and chat creation it made until the engine has
+//   answered that it holds them durably, and replays it at boot, on reconnect and when a call goes unanswered (below), and
 // - the optimistic echo of its own actions until the engine's patch carries them, so a send shows the instant it is
 //   made, exactly as the legacy session showed it. The id of each action is minted here (a ULID) and is the one the
 //   engine persists and sends, so a call re-sent after an engine hand-over is the same intent, deduplicated.
@@ -13,6 +15,7 @@ import { connectEngine } from '../../../../runner/tools/docstore-kit/lib/engine/
 import { ulid } from '../../../../runner/tools/docstore-kit/lib/engine/ulid.js';
 import { openExisting, req } from '../../../../runner/tools/docstore-kit/lib/engine/idb.js';
 import { makeChatServer } from './chat-engine.js';
+import { createSendJournal, JOURNAL_KEY, RETRY_BACKOFF_MS } from './send-journal.js';
 import { ENGINE_DB } from './chat-store.js';
 import { readLegacyLocal } from './migrate.js';
 
@@ -51,7 +54,9 @@ export async function peekHeaders({ indexedDB: idb = globalThis.indexedDB, name 
 
 export function createEngineSession({ connect = defaultConnect, connectOptions = {}, accepts = (id) => !isIncognito(id), newIdImpl = newId,
   mintId = ulid, storage = globalThis.localStorage, win = globalThis.window, doc = globalThis.document,
-  peek = connect === defaultConnect ? () => peekHeaders() : null } = {}) {
+  peek = connect === defaultConnect ? () => peekHeaders() : null,
+  journalKey = JOURNAL_KEY, stallMs = 12_000, resubmitMs = 20_000, retryMs = RETRY_BACKOFF_MS,
+  report = null, setTimer = (...a) => globalThis.setTimeout(...a), clearTimer = (...a) => globalThis.clearTimeout(...a), wallClock = () => Date.now() } = {}) {
   const mark = (name) => { try { globalThis.performance?.mark?.(name); } catch { /* no user timing */ } };
   mark('engine:connect');
   const client = connect(connectOptions);
@@ -59,6 +64,15 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
   const provisional = new Map();
   const mine = new Map(); // action id -> action, until the engine's reply (its patch arrived first)
   const dropped = new Set(); // revoked chats this tab already dropped, until the engine's state agrees
+  // What he made that the engine has not yet confirmed durable. Navigation, a reload, a hung or rebooted engine, a failed call cannot
+  // take it: the next boot replays it under the same action id (the engine and the server both dedupe on it). The journal itself
+  // (write-ahead row, backoff, stall, replay, telemetry) is engine/send-journal.js, shared with the legacy session.
+  const journal = createSendJournal({
+    storage, key: journalKey, stallMs, resubmitMs, retryMs, report, setTimer, clearTimer, wallClock,
+    context: () => ({ engine: client?.kind ?? null, online: win?.navigator?.onLine ?? null, calls: client?.stats?.().pending ?? null }),
+    onChange: (e) => { if (e && !journal.has(e.id)) mine.delete(e.id); recompute(); }, // settled: the engine's patch carries the echo now
+    deliver: async ({ id, op, conversationId, payload, at }) => call('dispatch', op, conversationId, payload, { actionId: id, at })
+  });
   let base = emptyState();
   // Until the engine has published a chat list (or its start() resolved), the tab shows the stored list it read itself
   // (peekHeaders); from then on only the engine's state, so nothing of the peek outlives the engine's first word.
@@ -80,6 +94,12 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
     for (const id of dropped) { if (s.conversations[id]) s = forgetConversation(s, id); else dropped.delete(id); }
     state = s;
     status = { ...(engineStatus || status), engine: client.kind };
+    // Truthful offline: a send that has gone unanswered for stallMs means nothing is being delivered, whatever the browser's
+    // online flag says (the engine can be wedged while the network is up, or the reverse).
+    const jv = journal.view();
+    if (jv.deliveryStalled) status = { ...status, offline: true, deliveryStalled: jv.deliveryStalled };
+    else if (status.deliveryStalled) status = { ...status, deliveryStalled: null };
+    if (jv.journalError) status = { ...status, journalError: jv.journalError };
     // The outbox note counts this tab's sends the moment they are made, as the legacy session did (it set `queued`
     // synchronously at dispatch): what the engine owes plus what this tab sent that the engine has not yet shown.
     const owed = base.owed;
@@ -132,12 +152,28 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
     }
     const id = actionId || mintId();
     if (mine.has(id)) return undefined;
-    const action = makeAction({ op, conversationId, payload, deviceId: 'tab', deviceSeq: 1, at: new Date().toISOString(), actionId: id });
+    const at = new Date().toISOString();
+    const action = makeAction({ op, conversationId, payload, deviceId: 'tab', deviceSeq: 1, at, actionId: id });
     mine.set(id, action);
+    if (journal.journals(op)) journal.track({ id, op, conversationId, payload, at });
     recompute();
-    try { return await call('dispatch', op, conversationId, payload, { actionId: id }); }
+    return submit(id, op, conversationId, payload, at);
+  }
+
+  // One call to the engine for an action. Journaled actions leave `mine` and the journal only when the engine says it holds
+  // them durably (send-journal.js: a call that rejects or never answers is sent again under the same id). Other ops keep the plain one-shot call.
+  async function submit(id, op, conversationId, payload, at) {
+    if (journal.has(id)) {
+      return journal.submit(id);
+    }
+    try { return await call('dispatch', op, conversationId, payload, { actionId: id, at }); }
     finally { mine.delete(id); recompute(); }
   }
+
+  // First render: his unsent words from the last life of this tab are already on screen, before the engine has said a word.
+  const drawRestored = (e) => mine.set(e.id, makeAction({ op: e.op, conversationId: e.conversationId, payload: e.payload, deviceId: 'tab', deviceSeq: 1, at: e.at, actionId: e.id }));
+  const restoreOptions = { skip: (id) => mine.has(id), draw: drawRestored };
+  journal.restore(restoreOptions);
 
   function createProvisional(conversationId, payload = {}) {
     if (!conversationId || state.conversations[conversationId] || !accepts(conversationId)) return false;
@@ -160,17 +196,19 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
     return true;
   }
 
+  // Everything still unconfirmed is asked of the engine again (it dedupes on the id): the network came back, the page came back.
+  const resubmitAll = () => journal.resubmitAll(restoreOptions);
   let wired = false;
   function wireWindow() {
     if (wired || !win?.addEventListener) return;
     wired = true;
-    win.addEventListener('online', () => call('setOnline', true).catch(() => {}));
+    win.addEventListener('online', () => { call('setOnline', true).catch(() => {}); resubmitAll(); });
     win.addEventListener('offline', () => call('setOnline', false).catch(() => {}));
     const flush = () => call('flushHeaders').catch(() => {});
     win.addEventListener('pagehide', () => { flush(); client.close?.(); });
     doc?.addEventListener?.('visibilitychange', () => {
       if (doc.visibilityState === 'hidden') flush();
-      else call('tabVisible').catch(() => {});
+      else { call('tabVisible').catch(() => {}); resubmitAll(); }
     });
   }
 
@@ -179,7 +217,12 @@ export function createEngineSession({ connect = defaultConnect, connectOptions =
     mark('engine:start');
     const legacy = readLegacyLocal(storage);
     const t0 = clock();
-    const result = await call('start', opts, { device: legacy.device, legacyActions: legacy.actions });
+    const started = call('start', opts, { device: legacy.device, legacyActions: legacy.actions });
+    // what the last life of this tab left unconfirmed goes to the engine once it has started, or after 3 s if it has not
+    const goReplay = () => { try { journal.submitReplayed(); } catch { /* none */ } };
+    started.then(goReplay, goReplay);
+    setTimer(goReplay, 3000)?.unref?.();
+    const result = await started;
     await client.ready;
     engineSpeaks(); // the engine has started: its state is the truth, even an empty list
     status = { ...status, engineStartMs: clock() - t0, migration: result?.migration ?? null };

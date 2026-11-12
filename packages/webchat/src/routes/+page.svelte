@@ -250,10 +250,10 @@
       if (nextStatus.readyMs !== undefined) {
         window.__webchatBoot = { firstPaintMs: nextStatus.firstPaintMs, readyMs: nextStatus.readyMs, cached: nextStatus.cached };
       }
-      if (!activeId && wide && !selecting) {
-        const first = rankConversations(next.conversations, { now: Date.now() })[0];
-        if (first) select(first.id, { touch: false });
-      }
+      // Nothing is open once boot has settled (the last pane's chat was revoked or is gone): the blank chat, as when the
+      // last tab is closed. Never another chat: the open chat changes only on his own action, not because the one he had
+      // is missing from a list.
+      if (bootSettled && !activeId && wide && !selecting && !transientId) openTransient();
     });
 
     
@@ -287,22 +287,34 @@
     // link that names a chat, and the explicit ?new, both still win.
     if (!restored && !fromUrl && !wantsNew && !wantsIncognito) openTransient();
     if (wantsIncognito) newIncognitoChat();
+    // What boot itself put on screen. The engine can take a minute to answer start() (a wedged disk commit), and he does not wait: a
+    // chat he opens or creates meanwhile is his.
+    const bootLayout = layout;
+    const bootChats = new Set(layout.tabs.flat());
     session.start({ open: fromUrl || (restored ? activeId : null) }).then(() => {
+      const untouched = layout === bootLayout;
       // Boot is the one moment the whole chat list is known, so it is where the folds
       // of chats that are gone are dropped. See client/fold-store.js.
       pruneFolds(Object.keys(state.conversations || {}));
       if (restored) {
-        // A pane whose chat no longer exists is dropped. An empty list is a cold cache with no network, which
-        // says nothing about any chat, so nothing is dropped on it.
+        // A restored pane whose chat no longer exists is dropped. An empty list is a cold cache with no network, which
+        // says nothing about any chat, so nothing is dropped on it. Only chats the window had before it reloaded: one
+        // made since is pending creation (the server has not heard of it yet), not gone.
         if (Object.keys(state.conversations || {}).length) {
-          if (pane('pane.drop', { ids: layout.tabs.flat().filter((id) => !state.conversations[id]) })) settlePanes();
+          const gone = layout.tabs.flat().filter((id) => bootChats.has(id) && !state.conversations[id] && !session.isProvisional(id));
+          if (pane('pane.drop', { ids: gone })) settlePanes();
         }
         for (const panel of layout.panels) session.hydrate(panel);
       }
-      if (wantsNew) newChat();
-      // A link to a chat already in a restored pane keeps the saved focus: the address bar can lag behind it.
-      else if (fromUrl && !(restored && layout.panels.includes(fromUrl))) select(fromUrl);
-      else if (restored && activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
+      bootSettled = true;
+      if (untouched) {
+        if (wantsNew) newChat();
+        // A link to a chat already in a restored pane keeps the saved focus: the address bar can lag behind it.
+        else if (fromUrl && !(restored && layout.panels.includes(fromUrl))) select(fromUrl);
+        else if (restored && activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
+      }
+      // The sweep left no pane at all: the blank chat.
+      if (!layout.panels.length && wide && !transientId) openTransient();
     });
 
     window.addEventListener('pointermove', archivePointer);
@@ -713,6 +725,8 @@
   // there. `selecting`: the blank chat released here publishes while no pane is focused, which would wake the boot fallback
   // above into opening the newest chat as a normal tab ahead of this one (a sidebar click then never opened a preview tab).
   let selecting = false;
+  // start() has resolved and its boot decisions are made; until then an empty layout is a pending boot request, not "nothing open".
+  let bootSettled = false;
   function select(id, { touch = true, preview = false } = {}) {
     selecting = true;
     try { releaseTransient(id); } finally { selecting = false; }

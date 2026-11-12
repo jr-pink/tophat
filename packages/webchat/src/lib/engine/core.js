@@ -53,7 +53,7 @@ const refusedForGood = (code) => code >= 400 && code < 500 && code !== 401 && co
 export function createEngineCore({
   fetchImpl, EventSourceImpl = globalThis.EventSource, store, deviceId, hydrateEvents, uploadPatienceMs = null,
   accepts = () => true, mintId = defaultUlid, weekSync = true, windowMs = CHAT_POLICY.windowMs,
-  onTelemetry = () => {}, online = () => globalThis.navigator?.onLine !== false,
+  onTelemetry = () => {}, commitMs = 4000, online = () => globalThis.navigator?.onLine !== false,
   setTimer = (...a) => globalThis.setTimeout(...a), clearTimer = (...a) => globalThis.clearTimeout(...a),
   clock = () => (globalThis.performance?.now?.() ?? Date.now()), yieldNow = () => new Promise((r) => setTimeout(r, 0))
 } = {}) {
@@ -547,13 +547,62 @@ export function createEngineCore({
     if (gone.length) store.outboxDelete(gone).catch(() => {});
   }
 
-  async function dispatch(op, conversationId, payload = {}, { actionId = null } = {}) {
+  // A commit to the durable outbox is bounded: IndexedDB can stall (a blocked upgrade, a connection closed under a worker the laptop
+  // slept through) and a commit that never settles used to hold the whole dispatch, so the action was neither stored nor sent and the
+  // tab's call never returned. Delivery no longer waits on the disk: a commit that fails or runs past the bound is reported
+  // (status.outboxError, a `delivery` telemetry record), the action is delivered from memory, and the commit is tried again on every
+  // flush. `dispatch` answers `durable` so the tab keeps its own copy (session-host.js journal) until it is true.
+  const COMMIT_MS = commitMs;
+  const commits = new Map();
+  const lateCommits = new Set(); // actions delivered before their commit settled
+  function commitWire(wire) {
+    // one commit per action in flight: a retry while the first has not settled waits on it instead of queueing behind it on the writer chain
+    let put = commits.get(wire.id);
+    if (!put) {
+      put = Promise.resolve().then(() => store.outboxPut([wire]));
+      commits.set(wire.id, put);
+      const forget = () => { if (commits.get(wire.id) === put) commits.delete(wire.id); };
+      put.then(() => {
+        forget();
+        storedIds.add(wire.id);
+        if (status.outboxError?.id === wire.id) setStatus({ outboxError: null });
+        // delivered and acknowledged while the disk was still taking it: take it straight off again
+        if (lateCommits.has(wire.id) && !delivery.outbox.some((a) => a.id === wire.id)) { lateCommits.delete(wire.id); persistOutbox(); }
+      }, forget);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimer(() => {
+        if (settled) return;
+        settled = true;
+        setStatus({ outboxError: { at: new Date().toISOString(), id: wire.id, reason: `outbox commit still pending after ${COMMIT_MS} ms` } });
+        onTelemetry({ kind: 'delivery', event: 'commit_stalled', durationMs: COMMIT_MS, id: wire.id, op: wire.op, conversation: wire.conversation_id });
+        resolve(false);
+      }, COMMIT_MS);
+      timer?.unref?.();
+      put.then(() => { if (settled) return; settled = true; clearTimer(timer); resolve(true); }, (cause) => {
+        if (settled) return;
+        settled = true; clearTimer(timer);
+        setStatus({ outboxError: { at: new Date().toISOString(), id: wire.id, reason: String(cause?.message || cause) } });
+        onTelemetry({ kind: 'delivery', event: 'commit_failed', durationMs: 0, id: wire.id, op: wire.op, conversation: wire.conversation_id, error: String(cause?.message || cause) });
+        resolve(false);
+      });
+    });
+  }
+  /** True when the store holds the action, or nothing owes it any more (delivered, or refused for good). */
+  const isDurable = (id) => storedIds.has(id) || !delivery.outbox.some((a) => a.id === id);
+
+  async function dispatch(op, conversationId, payload = {}, { actionId = null, at = null } = {}) {
     if (!accepts(conversationId)) return undefined;
-    if (actionId && delivery.outbox.some((a) => a.id === actionId)) return undefined;
+    if (actionId) {
+      const held = delivery.outbox.find((a) => a.id === actionId);
+      // The same intent again (the tab re-sent it): already owed. Whatever the disk has not yet taken is committed now.
+      if (held) { if (!storedIds.has(actionId)) await commitWire(held); return undefined; }
+    }
     markOpen(conversationId);
     const id = actionId || mintId();
     const deviceSeq = store.nextDeviceSeq();
-    const action = makeAction({ op, conversationId, payload, deviceId, deviceSeq, at: new Date().toISOString(), actionId: id });
+    const action = makeAction({ op, conversationId, payload, deviceId, deviceSeq, at: at || new Date().toISOString(), actionId: id });
     const wire = { ...action, id: action.action_id, uploads: payload?.uploads || [] };
     try { store.admit(store.sizeOf ? store.sizeOf(wire) : JSON.stringify(wire).length); }
     catch (cause) {
@@ -565,9 +614,10 @@ export function createEngineCore({
     state = applyOptimistic(state, action);
     publish();
     scheduleHeaderSnapshot();
-    // Durable first (A7): the record is committed before delivery can emit the POST.
-    await store.outboxPut([wire]);
-    storedIds.add(wire.id);
+    // Durable first (A7): the record is committed before delivery can emit the POST, unless the disk will not take it in
+    // time; then it is delivered from memory and `durable` is false until a later commit lands.
+    const durable = await commitWire(wire);
+    if (!durable) lateCommits.add(wire.id);
     if (status.backpressure) setStatus({ backpressure: null });
     return applyDelivery({ type: 'dispatch', action: wire });
   }
@@ -636,6 +686,8 @@ export function createEngineCore({
   }
   async function flushOutbox() {
     if (!delivery.outbox.length) return;
+    // actions the disk has not taken yet are committed again at every flush (a stalled commit is retried, not forgotten)
+    for (const held of delivery.outbox) if (!storedIds.has(held.id)) commitWire(held);
     if (flushing) return flushing;
     flushing = applyDelivery({ type: 'retry_fired' }).finally(() => { flushing = null; });
     return flushing;
@@ -707,7 +759,7 @@ export function createEngineCore({
   }
 
   return {
-    start, hydrate, loadEarlier, canLoadEarlier, loadFullLog, search, file, flushOutbox, syncWeek, dispatch,
+    start, hydrate, loadEarlier, canLoadEarlier, loadFullLog, search, file, flushOutbox, syncWeek, dispatch, isDurable,
     stageUpload: (id) => applyDelivery({ type: 'upload_staged', id }),
     failUpload: (id, error = null) => { if (error) uploadErrors.set(id, String(error)); return applyDelivery({ type: 'upload_failed', id }); },
     dropRevoked() {

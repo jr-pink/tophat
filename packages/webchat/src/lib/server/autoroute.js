@@ -48,28 +48,11 @@ export const STAY_LIMIT = 3;
 const ENDPOINT = process.env.WEBCHAT_TITLE_ENDPOINT || '' + (process.env.TOPHAT_FAST_MODEL_ENDPOINT || '');
 const MODEL = process.env.WEBCHAT_ROUTE_MODEL || process.env.WEBCHAT_TITLE_MODEL || 'gpt-oss-120b';
 
-const PROMPT = `You file chat threads into the user's own folders. He makes the folders; you never invent one.
-You are given his folders and one chat (often only its first message).
-Reply with ONLY one of:
-  - the exact name of the one folder the chat belongs in, or
-  - none
-Answer none unless the folder's definition or subject clearly covers what the chat is about. The chat then waits in his Inbox, which costs him nothing; a chat filed in the wrong folder is worse than one left there. none is a normal, good answer, and a folder with no definition and a vague name is a weak reason to file.
-A folder marked "his definition" is what he says belongs there. It is authoritative and beats any
-resemblance to the titles already filed there: read what the chat is actually about and ask whether
-his definition covers it. The titles are only examples of chats already filed, and some of them
-were filed by an earlier guess. A folder marked "auto summary" is only a guess at what its chats
-share; trust it less than the chat's content.
-A folder for one specific project, organisation, community or group takes only chats about that
-specific thing. A chat that is merely similar in kind (an invitation, a dinner, a networking
-message, a purchase, some code) does not belong in a specific folder because it shares a topic word
-with it; it belongs in a general folder that his definitions say covers that kind of thing, else none.
-Operating a organisation the user runs (its shop, suppliers, orders, equipment, labs) is that organisation's
-folder, not a general errands or upkeep folder, when his definitions say so.
-Pick the folder whose definition the chat is about; being merely technical, or similar in kind, is not enough.
-Folders nest: a folder listed as "A > B" is B inside A. Go down the tree: pick the most specific folder whose definition
-covers the chat. Every folder that has subfolders also has an implicit Misc: a chat that fits folder A but none of A's
-subfolders goes to A itself (it shows under A's Misc); never leave it unfiled for that reason. Answer none (his Inbox) only
-when no top-level folder fits. Answer with the folder's own name (B), never the path.`;
+const PROMPT = `You file a chat into one of the user's folders; never invent one. His definitions are authoritative.
+Reply with ONLY the exact name of the one folder whose definition covers the chat, or none.
+Folders nest: "A > B" is B inside A. Pick the most specific folder that fits; a chat that fits folder A but none of A's
+subfolders goes to A itself (it shows under A's Misc). Answer none (his Inbox) only
+when no top-level folder fits. Answer with the folder's own name, never the path.`;
 
 /**
  * Folder descriptions keyed by lowercase name: { name, text, source } (folder-descriptions.js).

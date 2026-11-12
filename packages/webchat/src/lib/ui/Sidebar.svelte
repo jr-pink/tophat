@@ -1,7 +1,7 @@
 <script>
   import { automatedTitle } from '$lib/core/title.js';
   import { plainText } from '$lib/core/summary.js';
-  import { indicatorOf } from '$lib/core/rowstate.js';
+  import { indicatorOf, unreadOf } from '$lib/core/rowstate.js';
   import Icon from './Icon.svelte';
   import Nav from './Nav.svelte';
   import SwipeRow from './SwipeRow.svelte';
@@ -15,7 +15,7 @@
   // what the host page keeps out of the lists (core/transient.js unlistedByHost); none on the owner's own app
   const hostUnlisted = () => (typeof window === 'undefined' ? null : window.__tophatUnlisted || null);
   import { queueArchive, queueEdit as queueDescription, queueParent, readCached as readCachedDescs, sync as syncDescriptions } from '$lib/core/folder-descs.js';
-  import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, effectiveLayout, explorerKey, explorerRows, folderKey, folderTree, inSubtree, listWorkspaces, moveFolder, normalizeWorkspace, pathTo } from '$lib/core/workspaces.js';
+  import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, chatsUnder, effectiveLayout, explorerKey, explorerRows, folderKey, folderTree, inSubtree, listWorkspaces, moveFolder, normalizeWorkspace, pathTo } from '$lib/core/workspaces.js';
   import { sidebarDecl, openKey } from '$lib/core/sidebar-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
   import HostMenu from './HostMenu.svelte';
@@ -379,6 +379,17 @@
   });
 
   const marksRead = (row) => Boolean(row.unread) || row.indicator === 'live';
+  // Folder Mark Read: the unread chats in a folder and everything under it (a running chat with nothing unread is not
+  // "unread"; its finish stays loud). `unreadUnder` takes folder keys and chat ids, so one list serves the folder menu and
+  // the multi-select menu.
+  const unreadUnder = (keys, ids = []) => {
+    const all = Object.values(listed), seen = new Set(), out = [];
+    const take = (c) => { if (!seen.has(c.id) && unreadOf(c)) { seen.add(c.id); out.push(c.id); } };
+    for (const k of keys) for (const c of chatsUnder(all, k, { names: allWorkspaces, layout: wsLayout })) take(c);
+    for (const id of ids) { const c = conversations[id]; if (c) take(c); }
+    return out;
+  };
+  const markAllRead = (ids) => { for (const id of ids) onread(id, true, { mute: false }); };
 
   const wsKey = openKey;
   const searching = $derived(Boolean(filter.trim()));
@@ -394,7 +405,7 @@
   const inFocus = (row) => !focusKey || inSubtree(row, workspace, tree);
   // Demo page only: tophat.md's reset script sets this so a folder's own chats sit directly under it, above its subfolders, with no Misc row.
   const demoInlineOwn = typeof localStorage !== 'undefined' && localStorage.getItem('tophat-demo-inline-own') === '1';
-  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived, inlineOwn: demoInlineOwn }));
+  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived, inlineOwn: demoInlineOwn, isMuted: (k) => Boolean($sb.muteCollapsed[k]) }));
   const focusCount = $derived(focusKey ? rows.filter((row) => canonicalWorkspace(row.workspace) && folderKey(canonicalWorkspace(row.workspace)) === focusKey).length : 0);
   // Keyboard order follows what is on screen: the tree, then the open trays.
   const trayItems = $derived([...(deferredOpen ? deferredRows : []), ...(asideOpen ? asideRows : []), ...(archivedOpen ? archivedRows : [])]
@@ -534,10 +545,12 @@
   function bulkMenu(addrs) {
     const chats = addrs.filter((a) => chatOfAddr(a)).length, folders = addrs.filter((a) => keyOfAddr(a) && keyOfAddr(a) !== UNFILED).length;
     const what = [chats && `${chats} chat${chats === 1 ? '' : 's'}`, folders && `${folders} folder${folders === 1 ? '' : 's'}`].filter(Boolean).join(', ');
+    const unread = unreadUnder(addrs.map(keyOfAddr).filter((k) => k != null), addrs.map((a) => chatOfAddr(a)?.id).filter(Boolean));
     return [
       { id: 'resort', label: `Re-sort ${what} with Descriptions`, run: () => resort(addrs, { label: what }) },
       { id: 'move', label: `Move ${what} to`, children: moveMenu(addrs) },
       SEP,
+      unread.length > 0 && { id: 'read', label: 'Mark Read', run: () => markAllRead(unread) },
       chats && { id: 'aside', label: `Set Aside ${chats} chat${chats === 1 ? '' : 's'}`, run: () => { for (const a of addrs) { const c = chatOfAddr(a); if (c) onaside(c.id, true); } } },
       chats && { id: 'archive', label: `Archive ${chats} chat${chats === 1 ? '' : 's'}`, keys: '⌘⌫', run: () => archiveChats(addrs) },
       folders && { id: 'archive-folders', label: `Archive ${folders} folder${folders === 1 ? '' : 's'}`, run: () => archiveFolders(addrs, true) },
@@ -552,6 +565,7 @@
     pick(addr);
     const name = nameForKey(key), named = key !== UNFILED && name;
     const sibs = folderSiblings(key), at = sibs.indexOf(key), open = isOpen(key);
+    const unread = unreadUnder([key]), muted = Boolean($sb.muteCollapsed[key]);
     return [
       named && { id: 'new-chat', label: 'New Chat in Folder', run: () => { enter(name); onnew(); } },
       { id: 'new-folder', label: 'New Folder…', run: () => newFolder(named ? key : ROOT) },
@@ -560,6 +574,12 @@
       { id: 'toggle', label: open ? 'Collapse' : 'Expand', keys: open ? '←' : '→', run: () => setOpen(key, !open) },
       named && tree.children(key).length && { id: 'expand-all', label: 'Expand All Inside', keys: '⌥-click', run: () => expandAllUnder(key, true) },
       named && tree.children(key).length && { id: 'collapse-all', label: 'Collapse All Inside', run: () => expandAllUnder(key, false) },
+      SEP,
+      // Owner request, 2026-11-11 22:20 PST: "lets add mark as read and mute-when-closed options to the right click menu".
+      // Mark Read reads every unread chat in the folder and its subfolders; Mute When Collapsed is a standing flag that keeps
+      // the folder's dot quiet while it is collapsed (nothing is read; expanding brings the dot back).
+      unread.length > 0 && { id: 'read', label: 'Mark Read', run: () => markAllRead(unread) },
+      { id: 'mute-collapsed', label: muted ? 'Unmute When Collapsed' : 'Mute When Collapsed', run: () => sb.dispatch('folder.mute', { key, muted: !muted }) },
       SEP,
       named && { id: 'rename', label: 'Rename…', keys: '↩', run: () => startRename(name) },
       named && { id: 'desc', label: 'Edit Description…', run: () => editDesc(name) },

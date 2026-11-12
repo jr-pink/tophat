@@ -6,6 +6,7 @@ import { interactionStats } from '$lib/server/interaction.js';
 import { readingTraceStats } from '$lib/server/reading-trace-store.js';
 import { handoverShape } from '$lib/server/code-shape.js';
 import { bootCodeShape, busyConversations, liveConversations, runnerShape, storeHealth, storeShape } from '$lib/server/app.js';
+import { deliverySummary } from '$lib/server/client-lag.js';
 import { healthOf } from '$lib/server/extensions.js';
 import { extensions } from '$lib/server/extensions-boot.js';
 
@@ -29,10 +30,11 @@ export async function GET(event) {
   // 401, because a machine surface does not tell a stranger it is there.
   if (localRefusal(event)) return json({ error: 'not found' }, { status: 404 });
 
-  // Health is what the chat path really does, measured: the store's own synthetic probe (a real durable append,
-  // a read back through the read-only index connection and a stream round trip, on a timer), its writer's queue
-  // and age, and the libuv threadpool the file routes ride on. A writer thread that hung, a disk that stopped
-  // accepting writes or a wedged threadpool each turn `ok` false.
+  // Health is what the chat path really does, measured: the store's own synthetic probe (a real durable append, a read back through the read-only
+  // index connection and a stream round trip, on a timer), its writer's queue and age, and the libuv threadpool the file routes ride on. A writer
+  // thread that hung, a disk that stopped accepting writes or a wedged threadpool each turn `ok` false. What tabs report about their own sends
+  // (client-lag.js deliverySummary): a server-only check could say "nothing wrong" while a message was lost.
+  const clientDelivery = await deliverySummary().catch((error) => ({ ok: true, error: String(error?.message || error) }));
   const chat = storeHealth();
   const pool = threadpoolState();
   const poolOk = !pool || (!pool.wedged && (pool.misses || 0) < 2);
@@ -44,6 +46,9 @@ export async function GET(event) {
   return json({
     ok: chatOk && poolOk,
     ...(chat.ok === false && chat.reason ? { degraded: chat.reason } : {}),
+    // Not part of `ok` (a restart cannot fix a browser): the deploy guard's verdict is unchanged, and a person or agent reading health sees the warning.
+    ...(clientDelivery.ok === false ? { warning: `client delivery: ${clientDelivery.open.length} send(s) stuck or failed in the last ${Math.round((clientDelivery.windowMs || 0) / 60000)} min (see clientDelivery)` } : {}),
+    clientDelivery,
     product: process.env.PRODUCT_NAME || 'tophat',
     instance,
     uptimeSeconds: process.uptime(),

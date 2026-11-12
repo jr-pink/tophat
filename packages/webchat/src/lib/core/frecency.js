@@ -1,11 +1,17 @@
 import { isDeferred } from './defer.js';
 import { indicatorOf, unreadOf } from './rowstate.js';
+// The set of run states that mean "a turn is running right now" has ONE owner, core/activity.js
+// LIVE_RUN, which is what the activity strip reads. the half that drifts is the half nobody
+// notices, because a chat that is live in one place and idle in the other just sorts oddly.
+// core/reducer.js (LIVE_RUN_STATES) and core/rowstate.js (RUNNING_STATES) still hold their own
+// copies; live-run-owner.test.js pins all of them to the same set, and folding those two in is the
+// rest of this merge.
+import { LIVE_RUN } from './activity.js';
 
 export const HALF_LIFE_HOURS = 6;
-const AGE_FLOOR = 0; 
+const AGE_FLOOR = 0;
 
 const DEPTH_CAP = 4;
-const RUNNING = new Set(['queued', 'starting', 'thinking', 'running']);
 
 function hoursBetween(nowMs, iso) {
   const then = Date.parse(iso || '');
@@ -38,7 +44,7 @@ export function rankConversations(conversations, { now = Date.now(), query = '',
       : (includeArchived || !c.archived) && !parked(c)))
     .filter((c) => (includeSidechats || !c.sidechat))
     .filter((c) => (match ? match.has(c.id) : !needle || `${c.title} ${c.preview}`.toLowerCase().includes(needle)))
-    .map((c) => ({ ...c, score: frecency(c, now), live: RUNNING.has(c.runState), unread: unreadOf(c), indicator: indicatorOf(c) }));
+    .map((c) => ({ ...c, score: frecency(c, now), live: LIVE_RUN.has(c.runState), unread: unreadOf(c), indicator: indicatorOf(c) }));
   if (!sorted) return rows;
   return rows.sort((a, b) =>
       Number(b.pinned) - Number(a.pinned) ||

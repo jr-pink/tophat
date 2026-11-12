@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { passwordManager, TYPES, totp } from '$lib/server/password-manager.js';
+import { unavailable } from '$lib/server/vault-unavailable.js';
 const options = { headers: { 'cache-control': 'private, no-store', 'pragma': 'no-cache' } };
 const LIMIT = 16 * 1024 * 1024;
 const IMPORTS = new Set(['chrome', 'apple', 'bitwarden', 'bitwarden-csv', '1password', '1password-csv', '1pux']);
@@ -17,7 +18,7 @@ export function GET({ url } = {}) {
     const archived = url?.searchParams.get('archived') === '1';
     return json({ entries: status.locked ? [] : manager.list({ archived }).map(metadata),
       history: status.locked ? [] : manager.history({ limit: 200 }), types: TYPES, status }, options);
-  } catch { return json({ error: 'Credential catalog unavailable' }, { ...options, status: 503 }); }
+  } catch (cause) { return json(unavailable(cause), { ...options, status: 503 }); }
 }
 async function boundedBody(request) {
   const reader = request.body?.getReader();

@@ -11,6 +11,7 @@ import {
   unsentMessages, unsentByConversation, waitingUploadsByConversation
 } from '../core/delivery.js';
 import { createEngineSession } from '../engine/session-host.js';
+import { createSendJournal, JOURNAL_KEY } from '../engine/send-journal.js';
 import { engineSelected, isAppSession } from '../engine/flag.js';
 import { rollbackToLegacy } from '../engine/migrate.js';
 import { installParityProbe, installStateDump } from '../engine/state-dump.js';
@@ -44,7 +45,9 @@ export function createSession(options = {}) {
     if (!window.__tophatState) { installStateDump(session, { core: 'docstore' }); installParityProbe(session); }
     return session;
   }
-  const session = createLegacySession(options);
+  // The app's own legacy session keeps the tab journal (engine/send-journal.js, the same one the engine host uses, under the same key so a
+  // switch either way finds what the other left). Incognito, rooms and injected sessions pass their own options and journal nothing.
+  const session = createLegacySession(app ? { journalKey: JOURNAL_KEY, ...options } : options);
   if (app) {
     if (!window.__tophatState) installStateDump(session, { core: 'legacy' });
     // Hands back only if the engine ran (its own meta says so); otherwise one existence probe and nothing else.
@@ -56,7 +59,10 @@ export function createSession(options = {}) {
 
 function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateEvents, uploadPatienceMs,
   accepts = (id) => !isIncognito(id), newIdImpl = newId, replicaOptions = undefined,
-  deviceKey = 'tophat-webchat-device', weekSync = true } = {}) {
+  deviceKey = 'tophat-webchat-device', weekSync = true,
+  // The write-ahead journal of what he sends (engine/send-journal.js): off unless a key is given, so incognito leaves nothing on disk.
+  journalKey = null, journalStorage = globalThis.localStorage, journalTiming = {}, postPatienceMs = 10_000,
+  win = globalThis.window, doc = globalThis.document } = {}) {
   const doFetch = fetchImpl || ((...args) => globalThis.fetch(...args));
   const EventSourceCtor = eventSourceImpl ?? globalThis.EventSource;
 
@@ -154,7 +160,7 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
 
   function setStatus(patch) {
     status = { ...status, ...patch };
-    status.offline = status.online === false || status.reachable === false;
+    status.offline = status.online === false || status.reachable === false || Boolean(status.deliveryStalled);
     publish();
   }
 
@@ -530,6 +536,7 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
     replayOutbox();
     rehydrateOutbox(persisted);
     scheduleFlushRetry();
+    journal.submitReplayed();
 
     if (typeof window !== 'undefined') {
       status.online = navigator.onLine !== false;
@@ -1233,6 +1240,8 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
     markOpen(conversationId);
     deviceSeq += 1;
     const action = makeAction({ op, conversationId, payload, deviceId, deviceSeq, at: new Date().toISOString(), ...(actionId ? { actionId } : {}) });
+    // First thing, before the echo is drawn and before any call: the row is on this device (or the failure is said).
+    if (journal.journals(op) && !journal.has(action.action_id)) journal.track({ id: action.action_id, op, conversationId, payload, at: action.at });
     state = applyOptimistic(state, action);
     publish();
     
@@ -1255,10 +1264,12 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
     
     
     
-    return applyDelivery({
+    const delivered = applyDelivery({
       type: 'dispatch',
       action: { ...action, id: action.action_id, uploads: payload?.uploads || [] },
     });
+    if (journal.has(action.action_id)) journal.watch(action.action_id); // the delivery machine has sent it; the journal times the answer
+    return delivered;
   }
 
   
@@ -1362,12 +1373,19 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
   // typed must still be there when he has.
   const refusedForGood = (code) => code >= 400 && code < 500 && code !== 401 && code !== 408 && code !== 429;
 
+  // Each POST is an attempt with its own abort: a call that never answers is abandoned by the journal's nudge (below) and asked again
+  // under the same action id, and a late failure of an abandoned attempt must not clear the new attempt's in-flight slot.
+  const attempts = new Map();
   async function post(action) {
+    const attempt = { at: Date.now(), controller: typeof AbortController === 'function' ? new AbortController() : null };
+    attempts.set(action.id, attempt);
+    const current = () => attempts.get(action.id) === attempt;
     try {
       const response = await doFetch('/api/actions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(action)
+        body: JSON.stringify(action),
+        ...(attempt.controller ? { signal: attempt.controller.signal } : {})
       });
       if (!heard(response)) throw new Error('offline');
       if (!response.ok) {
@@ -1390,18 +1408,24 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
           });
           // A scope move the server refused: the dropdown goes back to where the chat still is.
           if (action.op === ACTIONS.MOVE_SCOPE) { state = setConversationScope(state, action.conversation_id, action.payload?.from ?? null); publish(); }
+          journal.settle(action.id); // the server read it and said no, and the composer shows why: nothing is owed
+          if (current()) attempts.delete(action.id);
           await applyDelivery({ type: 'send_rejected', id: action.id });
           return;
         }
         throw new Error(reason);
       }
       const body = await response.json();
+      journal.settle(action.id); // the server has it (a replay of the same id answers 2xx too): the tab's copy may go
+      if (current()) attempts.delete(action.id);
       await applyDelivery({ type: 'send_ok', id: action.id, events: body.events || [] });
     } catch (cause) {
+      if (!current()) return; // abandoned by the journal's nudge; the newer attempt owns the slot
       // A transport failure keeps the action and keeps retrying -- that is what the outbox is
       // for -- but it is still worth a word, on a separate field so it cannot be mistaken for
       // a refusal the reader has to act on.
       if (cause?.name === 'TypeError') unheard();
+      attempts.delete(action.id);
       setStatus({ sendError: cause.message });
       await applyDelivery({ type: 'send_failed', id: action.id });
     }
@@ -1456,6 +1480,60 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
       if (cached) return { ...cached, stale: true };
       throw cause;
     }
+  }
+
+  // The journal of what he sent that the server has not yet confirmed (engine/send-journal.js; the engine host runs the same module).
+  // This core's own delivery machine (core/delivery.js) keeps retrying a failed POST, but its outbox is written through the replica
+  // (IndexedDB, behind `start`), a POST that never answers holds its chat's slot for good, and a reload before `start` finished
+  // replayed nothing. The journal is written synchronously before the echo, confirms on the server's answer (`settle`, in post()), and
+  // here `deliver` is only the nudge: put the action back in the delivery machine if it is not there, abandon an attempt that has not
+  // answered in `postPatienceMs` and pump again.
+  const restored = new Map(); // journal id -> the wire action, for rows an earlier life of this tab left
+  const wireOf = (action) => ({ ...action, id: action.action_id, uploads: action.payload?.uploads || [] });
+  const journal = createSendJournal({
+    storage: journalKey ? journalStorage : null, key: journalKey || undefined, ...journalTiming,
+    context: () => ({ engine: 'legacy', online: win?.navigator?.onLine ?? null }),
+    report: (row) => { try { Promise.resolve(doFetch('/api/client-lag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ records: [row] }), keepalive: true })).catch(() => {}); } catch { /* telemetry never throws into a send */ } },
+    onChange: () => {
+      const v = journal.view();
+      if (v.journalError !== (status.journalError ?? null) || Boolean(v.deliveryStalled) !== Boolean(status.deliveryStalled) || v.deliveryStalled) setStatus({ deliveryStalled: v.deliveryStalled, journalError: v.journalError });
+    },
+    deliver: async (entry) => {
+      const owed = delivery.outbox.some((a) => a.id === entry.id);
+      if (!owed) {
+        const wire = restored.get(entry.id);
+        if (!wire) { journal.settle(entry.id); return { pending: true }; } // nothing owes it any more: it was answered, or refused for good
+        rehydrateOutbox([wire]);
+        return { pending: true };
+      }
+      const attempt = attempts.get(entry.id);
+      if (attempt && Date.now() - attempt.at >= postPatienceMs) {
+        attempts.delete(entry.id);
+        try { attempt.controller?.abort(); } catch { /* the request is dropped either way */ }
+        setStatus({ sendError: 'the server did not answer' });
+        applyDelivery({ type: 'send_failed', id: entry.id });
+      }
+      applyDelivery({ type: 'retry_fired' }).catch(() => {});
+      return { pending: true };
+    }
+  });
+  if (journalKey) {
+    // His unsent words from the last life of this tab are on screen at once, before `start` has opened any store.
+    const drew = journal.restore({
+      skip: (id) => delivery.outbox.some((a) => a.id === id),
+      draw: (e) => {
+        deviceSeq += 1;
+        const action = makeAction({ op: e.op, conversationId: e.conversationId, payload: e.payload, deviceId, deviceSeq, at: e.at, actionId: e.id });
+        restored.set(e.id, wireOf(action));
+        if (accepts(e.conversationId)) { markOpen(e.conversationId); state = applyOptimistic(state, action); }
+      }
+    });
+    if (drew) publish();
+    const replayNow = () => { try { journal.submitReplayed(); } catch { /* none */ } };
+    setTimeout(replayNow, 3000)?.unref?.(); // `start` sends them when the replica is open
+    const again = () => journal.resubmitAll();
+    win?.addEventListener?.('online', again);
+    doc?.addEventListener?.('visibilitychange', () => { if (doc.visibilityState === 'visible') again(); });
   }
 
   return {

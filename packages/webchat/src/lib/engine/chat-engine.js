@@ -79,7 +79,7 @@ export function makeChatServer({ fetchImpl, EventSourceImpl = globalThis.EventSo
     file: async (p, o) => (await need()).file(p, o),
     flushOutbox: async () => (await need()).flushOutbox(),
     syncWeek: async () => (await need()).syncWeek(),
-    dispatch: async (op, id, payload, o) => { await (await need()).dispatch(op, id, payload, o); return true; },
+    dispatch: async (op, id, payload, o) => { const c = await need(); await c.dispatch(op, id, payload, o); return { durable: o?.actionId ? c.isDurable(o.actionId) : true }; },
     stageUpload: async (id) => { await (await need()).stageUpload(id); return true; },
     failUpload: async (id, e) => { await (await need()).failUpload(id, e); return true; },
     dropRevoked: async () => (await need()).dropRevoked(),

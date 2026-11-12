@@ -124,6 +124,7 @@
       cause.status = response.status;
       if (response.status === 401) cause.signedOut = true;
       else if (response.status === 423) cause.locked = true;
+      else if (body.reason === 'unreadable') { cause.unreadable = true; cause.message = body.hint || body.error; }
       else if (response.status >= 500) cause.offline = true;
       throw cause;
     }
@@ -133,6 +134,7 @@
   /** The four failures told apart. Offline is the pill's job and never an error banner. */
   function failed(cause, message) {
     if (cause?.signedOut) { signedOut = true; return; }
+    if (cause?.unreadable) { error = cause.message; return; }
     if (cause?.offline) { if (cause.missing) error = cause.message; return; }
     if (cause?.locked) { macLocked = true; return; }
     if (cause?.notEnrolled) { error = cause.message; return; }
@@ -167,7 +169,7 @@
       if (locked && !localReadable) { revealed = null; }
     } catch (cause) {
       if (cause?.locked) macLocked = true;
-      if (cause?.offline || cause?.locked) { paintLocal(); return; }
+      if ((cause?.offline || cause?.locked) && !cause?.unreadable) { paintLocal(); return; }
       failed(cause, 'Could not open the vault.');
     }
   }
