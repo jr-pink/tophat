@@ -1,6 +1,8 @@
 import { json } from '@sveltejs/kit';
 import { ACTIONS, validateAction } from '$lib/core/contract.js';
 import { app, applyAction } from '$lib/server/app.js';
+import { coreActionOf, observe } from '$lib/server/extensions.js';
+import { extensions } from '$lib/server/extensions-boot.js';
 import { isIncognito } from '$lib/core/incognito.js';
 import { filterEvents, scopeContext, scopeHttpError } from '$lib/server/scope-guard.js';
 
@@ -65,6 +67,12 @@ export async function POST(event) {
     cursorBefore: before,
     cursorAfter: app.store.cursor(),
   });
+  // Extensions observe the owner's live actions (never a replayed one: the replay branch above returned already). A rule's
+  // failure is logged and never fails his action.
+  if (process.env.TOPHAT_EXTENSIONS_FILE) {
+    const live = coreActionOf(action, 'user');
+    if (live) extensions().then((host) => observe(host, live)).then((rs) => { for (const r of rs || []) if (!r.ok) console.error(`[extensions] ${r.ext}/${r.rule}: ${r.error}`); }).catch((e) => console.error(`[extensions] observe: ${e.message}`));
+  }
   
   
   return json({ events: filterEvents(ctx, app.store, app.store.since(before)), cursor: app.store.cursor() },

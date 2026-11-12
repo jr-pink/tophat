@@ -4,8 +4,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { binDir, readResolved, resolvedFile, validateExtensionsBlock } from './extensions.mjs';
 
-const TOP = ['name', 'owner', 'scope', 'hosts', 'ports', 'paths', 'devices', 'models', 'components', 'runner', 'webchat', 'deploy', 'sources', 'hub', 'intake', 'note'];
+const TOP = ['name', 'owner', 'scope', 'hosts', 'ports', 'paths', 'devices', 'models', 'components', 'runner', 'webchat', 'deploy', 'sources', 'hub', 'intake', 'extensions', 'note'];
 const REF_KEYS = ['env', 'keyring', 'file'];
 const SCOPE_NAME = /^[a-z][a-z0-9-]{1,47}$/;
 
@@ -28,6 +29,7 @@ export const DEFAULTS = Object.freeze({
   sources: [],
   hub: null,
   intake: null,
+  extensions: null,
 });
 
 // Keys whose value would be a secret if written inline; in a source's config they must be credential references.
@@ -158,6 +160,9 @@ export function resolveInstance(raw, { dir = process.cwd(), home = os.homedir() 
   for (const m of Object.values(c.models)) { if (m.credential) m.credential = absRef(m.credential); if (m.workspace) m.workspace = absRef(m.workspace); }
   if (c.hub) { c.hub.token = absRef(c.hub.token); if (c.hub.deviceKey) c.hub.deviceKey = absRef(c.hub.deviceKey); }
   if (isObj(c.intake?.model)) for (const k of ['credential', 'workspace']) if (c.intake.model[k]) c.intake.model[k] = absRef(c.intake.model[k]);
+  // Extension packages (extensions.mjs): directories resolve like every other path of the file.
+  c.extensions = validateExtensionsBlock(c.extensions);
+  if (c.extensions) c.extensions.dirs = c.extensions.dirs.map(abs);
   c.sources = c.sources.map((src) => ({ ...src, config: Object.fromEntries(Object.entries(src.config || {}).map(([k, v]) => [k, isObj(v) ? absRef(v) : typeof v === 'string' && /^~\//.test(v) ? expand(v, home) : v])) }));
   return c;
 }
@@ -259,6 +264,11 @@ export function instanceEnv(c, { buildDir = null } = {}) {
     if (k in env) throw new Error(`instance config: runner.env.${k} is already set by the instance file (${k === 'TOPHAT_WEBCHAT_URL' ? 'ports.webchat' : 'its own key'})`);
     env[k] = isObj(v) ? JSON.stringify(v) : String(v);
   }
+  // Extensions: the resolved set the webchat loads, and the tools they provide first on the children's PATH.
+  if (c.extensions) {
+    env.TOPHAT_EXTENSIONS_FILE = resolvedFile(c);
+    env.PATH = [binDir(c), env.PATH ?? process.env.PATH ?? ''].filter(Boolean).join(':');
+  }
   return env;
 }
 
@@ -290,6 +300,10 @@ export function instanceJobs(c, { configFile } = {}) {
   if (has('push') && has('upkeep') && c.intake) jobs.push({ job: 'intake', label: `${base}.intake`, args: ['instance', 'intake', '--config', configFile, '--forever', '--tick', '30'], log: 'intake' });
   if (c.hub && !jobs.some((j) => j.job === 'intake')) jobs.push({ job: 'sync', label: `${base}.sync`, args: ['instance', 'sync', '--config', configFile, '--forever', '--every', '60'], log: 'sync' });
   if (c.models.fast?.workspace) jobs.push({ job: 'fast-proxy', label: `${base}.fast-proxy`, args: ['instance', 'fast-proxy', '--config', configFile], log: 'fast-proxy' });
+  // Extension jobs (slot job.upkeep): one interval unit each, from the set `tophat ext build` resolved last.
+  for (const e of (c.extensions && readResolved(c)?.extensions) || []) {
+    for (const j of e.jobs || []) jobs.push({ job: `ext-${e.id}-${j.name}`, label: `${base}.ext.${e.id}.${j.name}`, args: ['ext', 'run-job', '--config', configFile, e.id, j.name], log: `ext-${e.id}-${j.name}`, interval: j.everySeconds });
+  }
   return jobs;
 }
 
@@ -304,6 +318,7 @@ export function serviceUnit(c, { configFile, kind = 'launchd', node = process.ex
   const { label, log: logName } = spec;
   const log = path.join(c.paths.state, 'logs');
   if (kind === 'systemd') {
+    if (spec.interval) throw new Error(`job ${job} runs every ${spec.interval}s: a systemd timer unit is not generated yet (launchd only)`);
     return `[Unit]\nDescription=tophat instance ${c.name} ${job}\n\n[Service]\nExecStart=${[node, bin, ...spec.args].join(' ')}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
   }
   if (kind !== 'launchd') throw new Error(`unknown unit kind ${kind} (launchd | systemd)`);
@@ -321,8 +336,8 @@ export function serviceUnit(c, { configFile, kind = 'launchd', node = process.ex
 ${args}
   </array>
   <key>EnvironmentVariables</key><dict>${envBlock}</dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+${spec.interval ? `  <key>StartInterval</key><integer>${Number(spec.interval)}</integer>` : `  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>`}
   <key>StandardOutPath</key><string>${xml(path.join(log, `${logName}.log`))}</string>
   <key>StandardErrorPath</key><string>${xml(path.join(log, `${logName}.err.log`))}</string>
 </dict>

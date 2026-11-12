@@ -80,6 +80,13 @@ export function plan({ configFile, buildDir = null, env = process.env, root = WO
 /** Start the instance. With foreground (the CLI) the process follows the child; otherwise the child is returned. */
 export async function start({ configFile, buildDir = null, foreground = true, stdio = 'inherit', env = process.env, root = WORKSPACE } = {}) {
   const p = plan({ configFile, buildDir, env, root });
+  // Extensions are checked and resolved on every start, so the server loads exactly the set on disk now; a refused one is
+  // reported here and in /api/health, and never stops the instance.
+  if (p.instance.extensions) {
+    const { buildExtensions } = await import('./extensions.mjs');
+    const r = await buildExtensions(p.instance, { root });
+    console.log(`instance ${p.instance.name}: extensions ${r.order.join(', ') || 'none'}${r.refused.length ? `; refused ${r.refused.map((x) => `${x.id} (${x.code})`).join(', ')}` : ''}`);
+  }
   if (!p.webchat) { console.log(`instance ${p.instance.name}: no app component enabled (${p.instance.components.join(', ')}); nothing to start`); return null; }
   if (foreground) console.log(`instance ${p.instance.name}: webchat on ${p.env.ORIGIN}; enrol with the token in ${p.enrol}`);
   const child = spawn(process.execPath, [path.join(p.webchat, 'serve.mjs')], { cwd: p.webchat, env: { ...p.env, WEBCHAT_PARENT_PID: String(process.pid) }, stdio });

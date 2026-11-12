@@ -21,7 +21,7 @@ Benchmark results comparing research memory systems and production assistants:
 
 <!-- figure:memory-bench -->
 
-How it works: a graph that ingests disconnected facts and builds knowledge over time. ([technical post](https://github.com/tophat-md/tophat/blob/main/README.md))
+How it works: a graph that ingests disconnected facts and builds knowledge over time.
 
 </details>
 

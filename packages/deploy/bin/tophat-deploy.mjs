@@ -22,12 +22,15 @@
 //                                                    user into the instance file; prints the device public key for the group's admin
 //   tophat instance group create NAME --config FILE   make a group this instance administers (scope.groups), then sync
 //   tophat instance group add NAME USER [--role read|write|admin] --config FILE   admin: add a member, wrap the key to their devices
+//   tophat ext list|check|build --config FILE          the instance's extensions: found, gate-checked (exit 1 on a refusal),
+//                                                    or resolved for the server (<state>/extensions/resolved.json + bin/)
+//   tophat ext run-job --config FILE ID JOB           run one extension job once (what its interval unit runs)
 //   tophat instance intake --config FILE [--force] [--forever [--tick S]]   the intake (sources -> replica -> derive) when
 //                                                    due on the instance file's intake.everySeconds; --force runs it now
 import path from 'node:path';
 import { WORKSPACE, check, complete, list, loadManifest, tree } from '../src/components.mjs';
 import { instanceEnv, instanceJobs, loadInstance, serviceUnit } from '../src/instance.mjs';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
@@ -130,10 +133,21 @@ try {
     args.shift();
     const { runFastProxy } = await import('../src/fast-proxy.mjs');
     runFastProxy(path.resolve(flag('--config') || die('instance fast-proxy: --config FILE is required')));
+  } else if (cmd === 'ext') {
+    args.shift();
+    const file = path.resolve(flag('--config') || die(`ext ${sub ?? ''}: --config FILE is required`));
+    const c = loadInstance(file);
+    if (!c.extensions) die('ext: the instance file has no extensions block ({ dirs: [PATH] })');
+    const ext = await import('../src/extensions.mjs');
+    if (sub === 'list') { out(ext.discover(c).map((d) => { const m = JSON.parse(readFileSync(d.manifestFile, 'utf8')); return { id: m.id, version: m.version, dir: d.dir, disabled: c.extensions.disable.includes(m.id) }; })); }
+    else if (sub === 'check') { const r = await ext.checkExtensions(c); out({ ok: !r.refused.length, order: r.order, refused: r.refused, disabled: r.disabled, provides: Object.fromEntries(r.regs.map((g) => [g.manifest.id, r.kit.providesOf(g)])) }); process.exit(r.refused.length ? 1 : 0); }
+    else if (sub === 'build') { const r = await ext.buildExtensions(c); out(r); process.exit(r.refused.length ? 1 : 0); }
+    else if (sub === 'run-job') { const [id, job] = args; if (!id || !job) die('ext run-job: ID and JOB are required'); out(await ext.runJob(c, { id, job })); }
+    else die(`ext: unknown sub-command ${sub} (list | check | build | run-job)`);
   } else if (cmd === 'start') {
     const file = flag('--config');
     if (!file) die('start: --config FILE is required');
     const { start } = await import('../src/start.mjs');
     await start({ configFile: path.resolve(file), buildDir: flag('--build') });
-  } else die('usage: tophat components list|tree|check, tophat start --config FILE, tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|join|group|intake --config FILE');
+  } else die('usage: tophat components list|tree|check, tophat ext list|check|build|run-job --config FILE, tophat start --config FILE, tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|join|group|intake --config FILE');
 } catch (e) { die(e.message, 1); }

@@ -11,6 +11,7 @@ import { scopeGate } from '$lib/server/scopes-gate.js';
 import { maskResponse, publicMode } from '$lib/server/home-mask.js';
 import { preloadBundle } from '$lib/core/shell-preload.js';
 import { DOC_PAGE_SHAPE, docToken, isPublicPath, roomToken } from '$lib/server/public-paths.js';
+import { extensionRoute } from '$lib/server/extensions-boot.js';
 
 // The feed listens to the stores from boot, so a write made before the first page subscribes is
 // still in its ring when that page resumes.
@@ -41,6 +42,13 @@ export async function handle({ event, resolve }) {
     if (!token || !hasDoc(token)) return notFound('No such document');
   }
 
+  // An extension's route (slot http.route, EXTENSIONS-V1 section 6). One declared `auth: 'own'` checks its own credential
+  // (a device's bearer token) and answers before the session gate, like the public paths below; `auth: 'session'` is
+  // served after it. Core's own routes always win a path both name: an extension route is consulted only for a path no
+  // file route serves (event.route.id is null).
+  const ext = event.route?.id ? null : await extensionRoute(event.request.method, path);
+  if (ext?.auth === 'own') return withRoute(`${event.request.method} ${path}`, () => ext.run(event));
+
   // Which surfaces answer without his session, and why each one may, is
   // src/lib/server/public-paths.js, which tests/public-paths.test.mjs pins. Every path on that list
   // re-checks inside its own handler; this is the outer gate, not the only one.
@@ -65,6 +73,8 @@ export async function handle({ event, resolve }) {
       headers: { location: '/login', 'cache-control': 'no-store', vary: 'cookie' }
     });
   }
+
+  if (ext?.auth === 'session') return withRoute(`${event.request.method} ${path}`, () => ext.run(event));
 
   // A write names the tab it came from (x-tophat-client), so the live feed can tell that tab to
   // skip its own echo; reads are never attributed, because a read that refreshes tasks writes

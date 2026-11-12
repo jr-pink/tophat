@@ -8,7 +8,8 @@
 // (`<paths.state>/run/webchat.json`, temp+rename) is kept only so `stop` signals the process `start` spawned; a record
 // whose process is gone is stale and is replaced, so a crash never blocks the next start. The release a start uses
 // without --build is the webchat's `build-current` pointer, the one `instance ship` flips and serve.mjs follows.
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { instanceEnv, loadInstance } from './instance.mjs';
@@ -80,6 +81,13 @@ export function startInstance({ configFile, buildDir = null, env = process.env, 
   if (holder) return { ok: false, reason: 'port_in_use', instance: c.name, port: Number(c.ports.webchat), ...holder };
   const p = spec ? null : plan({ configFile, buildDir, env, root });
   if (p && !p.webchat) return { ok: false, reason: 'no_app_component', instance: c.name, components: c.components };
+  // Extensions are resolved before the server starts, by the same step `tophat start` and `tophat ext build` run (a
+  // child process, so this function stays synchronous); a refusal is reported in the build output and /api/health.
+  let extensions = null;
+  if (p && c.extensions) {
+    try { extensions = JSON.parse(execFileSync(process.execPath, [fileURLToPath(new URL('../bin/tophat-deploy.mjs', import.meta.url)), 'ext', 'build', '--config', path.resolve(configFile)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })); }
+    catch (e) { try { extensions = JSON.parse(String(e.stdout || '')); } catch { return { ok: false, reason: 'extensions_build_failed', instance: c.name, error: String(e.stderr || e.message).slice(0, 500) }; } }
+  }
   const log = logFile(c);
   mkdirSync(path.dirname(log), { recursive: true, mode: 0o700 });
   const fd = openSync(log, 'a');
@@ -89,7 +97,7 @@ export function startInstance({ configFile, buildDir = null, env = process.env, 
   const build = p ? p.build : (run.env?.TOPHAT_BUILD_DIR ?? null);
   const rec = writeJson(recordFile(c), { instance: c.name, pid: child.pid, port: Number(c.ports.webchat), origin: (p ?? { env: run.env ?? {} }).env?.ORIGIN ?? null,
     build, config: path.resolve(configFile), log, startedAt: new Date().toISOString() });
-  return { ok: true, ...rec };
+  return { ok: true, ...rec, ...(extensions ? { extensions: { order: extensions.order, refused: extensions.refused } } : {}) };
 }
 
 /** Stop it: SIGTERM, then SIGKILL after `graceMs`. Idempotent; stopping what is not running is ok:true, stopped:false. */

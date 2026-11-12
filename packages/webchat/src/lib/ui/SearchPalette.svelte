@@ -4,6 +4,7 @@
   import { CACHED_LIMIT, mergeResults, quickIndexFor, quickswitchResults, recentChats, searchCachedChats, searchStages, titleMatches } from '$lib/core/search.js';
   import { rankConversations } from '$lib/core/recency.js';
   import { isListDown, isListUp } from '$lib/core/keys.js';
+  import { extStore, runExtCommand } from '$lib/client/extensions.js';
 
   let { chatState, session, onopen = () => {}, onclose = () => {} } = $props();
 
@@ -18,16 +19,27 @@
   const recents = $derived(query.trim() ? [] : recentChats(chatState.conversations, { rank: rankConversations }));
   const titles = $derived(titleMatches(chatState.conversations, query, { rank: rankConversations }));
   const cached = $derived(searchCachedChats(chatState, query, { limit: CACHED_LIMIT }));
-  const merged = $derived(query.trim()
+  // A query starting with ">" lists commands (EXTENSIONS-V1 section 7, VS Code's palette): each is one action, run by name.
+  const ext = extStore();
+  const commandMode = $derived(query.startsWith('>'));
+  const commands = $derived(commandMode
+    ? ($ext.commands || []).filter((c) => c.title.toLowerCase().includes(query.slice(1).trim().toLowerCase()))
+      .map((c) => ({ conversationId: `cmd:${c.id}`, command: c.id, title: c.title, excerpt: c.category || c.ext, kind: 'command' }))
+    : []);
+  const merged = $derived(commandMode ? commands : query.trim()
     ? quickswitchResults(titles, mergeResults(serverResults, cached))
     : recents);
+  function choose(result) {
+    if (result?.command) { runExtCommand(result.command, {}); onclose(); return; }
+    onopen(result, query);
+  }
 
   $effect(() => { results = merged; if (selected >= merged.length) selected = 0; });
   $effect(() => { field?.focus(); });
 
   $effect(() => {
     const value = query;
-    if (!value.trim()) { serverResults = []; expanded = []; return; }
+    if (!value.trim() || value.startsWith('>')) { serverResults = []; expanded = []; return; }
     const id = ++requestId;
     const timer = setTimeout(async () => {
       try {
@@ -48,7 +60,7 @@
     if (quick !== null) {
       event.preventDefault(); event.stopPropagation();
       const target = results[quick];
-      if (target) onopen(target, query);
+      if (target) choose(target);
       return;
     }
     if (isListDown(event)) {
@@ -63,7 +75,7 @@
     }
     if (event.key === 'Enter' && results[selected]) {
       event.preventDefault();
-      onopen(results[selected], query);
+      choose(results[selected]);
     }
   }
 </script>
@@ -74,7 +86,7 @@
     bind:this={field}
     bind:value={query}
     onkeydown={keydown}
-    placeholder="Jump to a chat, or search every one"
+    placeholder="Jump to a chat, search every one, or > for commands"
     data-testid="search-input"
     aria-label="Search every chat"
   />
@@ -86,7 +98,7 @@
       <button
         class="result press"
         class:sel={index === selected}
-        onclick={() => onopen(result, query)}
+        onclick={() => choose(result)}
         onpointerenter={() => (selected = index)}
         data-testid="search-result"
         data-kind={result.kind || 'text'}

@@ -23,6 +23,8 @@
   import DescEditor from './DescEditor.svelte';
   import { hostState, refreshHosts } from '$lib/core/hosts.svelte.js';
   import { provideMenu, SEP } from '$lib/client/context-menu.js';
+  import { extStore, refreshContributions, runExtCommand } from '$lib/client/extensions.js';
+  import { menusOf } from '$lib/core/ext-state.js';
   import { createDeadlineFetch } from '../../../../runner/tools/docstore-kit/lib/engine/deadline.js';
   const net = createDeadlineFetch();
 
@@ -58,6 +60,8 @@
   // hydrated synchronously here, so the first paint is already right; saved by the kit, not by this component.
   // Membership rides on each chat (conversation.workspace).
   const sb = uiApp().use(sidebarDecl);
+  // Extension menu items for a chat row (slot ui.sidebar.chatMenu): data from the server, run by command name.
+  const extUi = extStore();
   let descs = $state(readCachedDescs());
   if (enterAtStart && !sb.get().current) sb.dispatch('workspace.enter', { name: enterAtStart });
   const workspace = $derived($sb.current);
@@ -596,8 +600,14 @@
       SEP,
       { id: 'cut', label: 'Cut', keys: '⌘X', run: () => sb.dispatch('clip.set', { addr }) },
       { id: 'copy-link', label: 'Copy Link', run: () => navigator.clipboard?.writeText(`${location.origin}/?chat=${encodeURIComponent(id)}`) },
-      { id: 'copy-title', label: 'Copy Title', run: () => navigator.clipboard?.writeText(automatedTitle(c.title).text || c.title || '') }
+      { id: 'copy-title', label: 'Copy Title', run: () => navigator.clipboard?.writeText(automatedTitle(c.title).text || c.title || '') },
+      ...extChatItems(id)
     ];
+  }
+  function extChatItems(id) {
+    const items = menusOf(extUi.get(), 'ui.sidebar.chatMenu');
+    if (!items.length) return [];
+    return [SEP, ...items.map((m) => ({ id: `ext:${m.command}`, label: m.title, run: () => runExtCommand(m.command, { id }) }))];
   }
   function explorerMenuItems() {
     return [
@@ -613,6 +623,7 @@
     ];
   }
   $effect(() => {
+    refreshContributions();
     const off = [
       provideMenu('folder', (ctx) => (ctx.key ? folderMenuItems(ctx.key) : explorerMenuItems())),
       provideMenu('chat', (ctx) => chatMenuItems(ctx.id)),

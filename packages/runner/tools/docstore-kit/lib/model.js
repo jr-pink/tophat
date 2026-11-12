@@ -159,10 +159,10 @@ export function fold(decl, state, entries) {
 }
 
 /** The Stream entry for an action: one-to-one with L1 `PUT /v1/streams/{stream}/entries/{entry-id}`. */
-// The HLC's logical part `l` and the intent id `id` ride inside the (encrypted) payload envelope; an entry from an older
-// build has neither (l = 0, no id) and orders by event time as before.
-export const toStreamEntry = (e) => ({ entry_id: `${e.device}:${e.seq}`, device_id: e.device, device_seq: e.seq, event_time: new Date(e.ts).toISOString(), payload: { type: e.type, payload: e.payload, ...(e.l ? { l: e.l } : {}), ...(e.id ? { id: e.id } : {}) } });
-export const fromStreamEntry = (r) => ({ ...(r.payload.id ? { id: r.payload.id } : {}), device: r.device_id, seq: r.device_seq, ts: Date.parse(r.event_time), ...(Number.isInteger(r.payload.l) && r.payload.l > 0 ? { l: r.payload.l } : {}), type: r.payload.type, payload: r.payload.payload });
+// The HLC's logical part `l` and the intent id `id` ride inside the (encrypted) payload envelope; an entry from an older build
+// has neither (l = 0, no id) and orders by event time as before. absent on older entries.
+export const toStreamEntry = (e) => ({ entry_id: `${e.device}:${e.seq}`, device_id: e.device, device_seq: e.seq, event_time: new Date(e.ts).toISOString(), payload: { type: e.type, payload: e.payload, ...(e.l ? { l: e.l } : {}), ...(e.id ? { id: e.id } : {}), ...(e.actor ? { actor: e.actor } : {}), ...(e.caused_by ? { caused_by: e.caused_by } : {}) } });
+export const fromStreamEntry = (r) => ({ ...(r.payload.id ? { id: r.payload.id } : {}), device: r.device_id, seq: r.device_seq, ts: Date.parse(r.event_time), ...(Number.isInteger(r.payload.l) && r.payload.l > 0 ? { l: r.payload.l } : {}), ...(typeof r.payload.actor === 'string' ? { actor: r.payload.actor } : {}), ...(typeof r.payload.caused_by === 'string' ? { caused_by: r.payload.caused_by } : {}), type: r.payload.type, payload: r.payload.payload });
 
 function readRecord(storage, key) {
   try { const raw = storage?.getItem(key); return raw ? JSON.parse(raw) : null; } catch { return null; }
@@ -258,7 +258,8 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     if (!scheduled) { scheduled = true; schedule(save); }
   }
 
-  /** dispatch(type, payload, { id, assertVersion, actor }) -> the logged entry, or null for a no-op.
+  /** dispatch(type, payload, { id, assertVersion, actor, causedBy }) -> the logged entry, or null for a no-op.
+   *  - actor (row #13) is stored on the entry and on the Stream; causedBy (row #14) is the trigger's intent id.
    *  Order (py ActionBus): idempotent return for an id already logged, version, guards, reducer + lifecycle.
    *  - id: the intent id (a ULID minted once at the gesture, A7). Omitted: minted here. A retried id returns the entry it
    *    logged (or null once it left the log) and changes nothing.
@@ -287,7 +288,9 @@ export function createReplica(decl, { storage, device, now = Date.now, schedule 
     }
     if (next === view) return null; // idempotent no-op: nothing logged, saved, pushed
     const t = hlc.tick();
-    const entry = { id: id ?? ulid(), device, seq: ++seq, ts: t.ts, ...(t.l ? { l: t.l } : {}), type, payload: clone(payload) };
+    const actor = typeof opts?.actor === 'string' && opts.actor ? opts.actor : null;
+    const causedBy = typeof opts?.causedBy === 'string' && opts.causedBy ? opts.causedBy : null;
+    const entry = { id: id ?? ulid(), device, seq: ++seq, ts: t.ts, ...(t.l ? { l: t.l } : {}), ...(actor ? { actor } : {}), ...(causedBy ? { caused_by: causedBy } : {}), type, payload: clone(payload) };
     remember(entry.id);
     changes += 1;
     view = next;

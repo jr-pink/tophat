@@ -85,6 +85,8 @@ export function isPublicPath({ path, method = 'GET', bearer = false, shareToken 
   // deploy guard and src/lib/server/liveness.js probe it with no credential), and /api/inbound,
   // /api/agent and /api/replies/projection are loopback plus the service token.
   if (path === '/api/health' || path === '/api/inbound' || path === '/api/agent' || path === '/api/replies/projection') return true;
+  // An extension job's dispatch (loopback, service token; routes/api/ext/dispatch re-checks both).
+  if (path === '/api/ext/dispatch' && method === 'POST') return true;
 
   if (isMultiplayerPath(path)) return true;
   if (isSharePath(path)) return true;

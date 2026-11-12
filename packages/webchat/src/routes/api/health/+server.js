@@ -6,6 +6,8 @@ import { interactionStats } from '$lib/server/interaction.js';
 import { readingTraceStats } from '$lib/server/reading-trace-store.js';
 import { handoverShape } from '$lib/server/code-shape.js';
 import { bootCodeShape, busyConversations, liveConversations, runnerShape, storeHealth, storeShape } from '$lib/server/app.js';
+import { healthOf } from '$lib/server/extensions.js';
+import { extensions } from '$lib/server/extensions-boot.js';
 
 const instance = `${process.pid}:${Date.now()}`;
 let handover = null;
@@ -14,7 +16,7 @@ function telemetryState() {
   try { return { interaction: interactionStats(), readingTrace: readingTraceStats() }; } catch (error) { return { error: String(error?.message || error) }; }
 }
 
-export function GET(event) {
+export async function GET(event) {
   // Loopback, and not through the tunnel. Cloudflared delivers a remote request as a local socket,
   // so a forwarding header is the tell however local the peer looks, and an address the adapter
   // cannot give is never local.
@@ -51,6 +53,8 @@ export function GET(event) {
     store: createHash('sha256').update(storeShape()).digest('hex').slice(0, 12),
     runner: createHash('sha256').update(runnerShape()).digest('hex').slice(0, 12),
     code: bootCodeShape(),
+    // The instance's extensions (EXTENSIONS-V1 slot health.fields): what loaded, at which version, what was refused and why.
+    ...(process.env.TOPHAT_EXTENSIONS_FILE ? { extensions: await healthOf(await extensions()) } : {}),
     // The shape of the handover record this process writes (code-shape.js handoverShape): deploy.sh compares it with the
     // one the build it is about to restart into accepts, and refuses a restart that would end the live children.
     handover: (handover ??= handoverShape()),
