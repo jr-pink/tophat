@@ -14,7 +14,7 @@
   import { listedConversations, stableListing } from '$lib/core/transient.js';
   // what the host page keeps out of the lists (core/transient.js unlistedByHost); none on the owner's own app
   const hostUnlisted = () => (typeof window === 'undefined' ? null : window.__tophatUnlisted || null);
-  import { queueArchive, queueEdit as queueDescription, queueParent, readCached as readCachedDescs, sync as syncDescriptions } from '$lib/core/folder-descs.js';
+  import { isMuted as folderMuted, queueArchive, queueEdit as queueDescription, queueMute, queueParent, readCached as readCachedDescs, sync as syncDescriptions } from '$lib/core/folder-descs.js';
   import { CATCHALL_LABEL, ROOT, UNFILED, canonicalWorkspace, chatsUnder, effectiveLayout, explorerKey, explorerRows, folderKey, folderTree, inSubtree, listWorkspaces, moveFolder, normalizeWorkspace, pathTo } from '$lib/core/workspaces.js';
   import { sidebarDecl, openKey } from '$lib/core/sidebar-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
@@ -167,6 +167,8 @@
     queueParent(clean, parent === ROOT ? '' : parent);
     if (descSource(from) === 'manual') queueDescription(clean, descOf(from));
     for (const child of tree.children(k)) queueParent(nameForKey(child) ?? child, clean);
+    // Its Mute When Collapsed flag moves with it: set under the new name, cleared (tombstoned) under the old.
+    if (folderMuted(descs, k)) { queueMute(clean, true); queueMute(from, false); }
     descs = readCachedDescs();
     sb.dispatch('folder.rename', { from, to: clean });
     syncDescs();
@@ -178,6 +180,8 @@
     // Its subfolders move up to its parent, in the shared tree too.
     const tree = folderTree(allWorkspaces, wsLayout), k = folderKey(name), up = tree.parentOf(k);
     for (const child of tree.children(k)) queueParent(nameForKey(child) ?? child, up === ROOT ? '' : up);
+    // A removed folder takes its mute with it, so a folder made later under the same name starts loud.
+    if (folderMuted(descs, k)) queueMute(name, false);
     descs = readCachedDescs();
     sb.dispatch('folder.remove', { name });
     syncDescs();
@@ -405,7 +409,7 @@
   const inFocus = (row) => !focusKey || inSubtree(row, workspace, tree);
   // Demo page only: tophat.md's reset script sets this so a folder's own chats sit directly under it, above its subfolders, with no Misc row.
   const demoInlineOwn = typeof localStorage !== 'undefined' && localStorage.getItem('tophat-demo-inline-own') === '1';
-  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived, inlineOwn: demoInlineOwn, isMuted: (k) => Boolean($sb.muteCollapsed[k]) }));
+  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived, inlineOwn: demoInlineOwn, isMuted: (k) => folderMuted(descs, k) }));
   const focusCount = $derived(focusKey ? rows.filter((row) => canonicalWorkspace(row.workspace) && folderKey(canonicalWorkspace(row.workspace)) === focusKey).length : 0);
   // Keyboard order follows what is on screen: the tree, then the open trays.
   const trayItems = $derived([...(deferredOpen ? deferredRows : []), ...(asideOpen ? asideRows : []), ...(archivedOpen ? archivedRows : [])]
@@ -565,7 +569,7 @@
     pick(addr);
     const name = nameForKey(key), named = key !== UNFILED && name;
     const sibs = folderSiblings(key), at = sibs.indexOf(key), open = isOpen(key);
-    const unread = unreadUnder([key]), muted = Boolean($sb.muteCollapsed[key]);
+    const unread = unreadUnder([key]), muted = folderMuted(descs, key);
     return [
       named && { id: 'new-chat', label: 'New Chat in Folder', run: () => { enter(name); onnew(); } },
       { id: 'new-folder', label: 'New Folder…', run: () => newFolder(named ? key : ROOT) },
@@ -579,7 +583,7 @@
       // Mark Read reads every unread chat in the folder and its subfolders; Mute When Collapsed is a standing flag that keeps
       // the folder's dot quiet while it is collapsed (nothing is read; expanding brings the dot back).
       unread.length > 0 && { id: 'read', label: 'Mark Read', run: () => markAllRead(unread) },
-      { id: 'mute-collapsed', label: muted ? 'Unmute When Collapsed' : 'Mute When Collapsed', run: () => sb.dispatch('folder.mute', { key, muted: !muted }) },
+      { id: 'mute-collapsed', label: muted ? 'Unmute When Collapsed' : 'Mute When Collapsed', run: () => { descs = queueMute(name ?? key, !muted); syncDescs(); } },
       SEP,
       named && { id: 'rename', label: 'Rename…', keys: '↩', run: () => startRename(name) },
       named && { id: 'desc', label: 'Edit Description…', run: () => editDesc(name) },

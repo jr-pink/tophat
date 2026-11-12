@@ -37,9 +37,15 @@ export function overlay(server, outbox) {
       out[key] = { ...(out[key] || { name: e.name }), archived: e.archived === true, archivedAt: e.at, pending: true };
       continue;
     }
+    // A mute edit ("m:<key>"): the folder's Mute When Collapsed flag, beside place, archive and text.
+    if (k.startsWith('m:')) {
+      const key = k.slice(2);
+      out[key] = { ...(out[key] || { name: e.name }), muted: e.muted === true, mutedAt: e.at, pending: true };
+      continue;
+    }
     const o = out[k];
-    const placed = typeof o?.parentAt === 'string', archivedSet = typeof o?.archivedAt === 'string';
-    const keep = o && (placed || archivedSet) ? { name: o.name, ...(placed ? { parent: o.parent, parentAt: o.parentAt } : {}), ...(archivedSet ? { archived: o.archived, archivedAt: o.archivedAt } : {}) } : null;
+    const placed = typeof o?.parentAt === 'string', archivedSet = typeof o?.archivedAt === 'string', mutedSet = typeof o?.mutedAt === 'string';
+    const keep = o && (placed || archivedSet || mutedSet) ? { name: o.name, ...(placed ? { parent: o.parent, parentAt: o.parentAt } : {}), ...(archivedSet ? { archived: o.archived, archivedAt: o.archivedAt } : {}), ...(mutedSet ? { muted: o.muted, mutedAt: o.mutedAt } : {}) } : null;
     if (e.text) out[k] = { ...(keep || {}), name: e.name, text: e.text, source: 'manual', at: e.at, pending: true };
     else if (keep) out[k] = keep;
     else delete out[k];
@@ -83,6 +89,23 @@ export function queueArchive(name, archived, { storage, now = () => new Date().t
   return readCached(storage);
 }
 
+/** Whether the folder is muted while collapsed, as shown (an unsent edit counts). `key` is the folder key. */
+export const isMuted = (descs, key) => descs?.[key]?.muted === true;
+
+/**
+ * Records a folder's Mute When Collapsed flag (true = muted) durably, applied to the returned descriptions at once. The flag is
+ * an absolute statement stamped with the time of the edit: the server keeps the newest per folder (a false is the tombstone),
+ * so a replay changes nothing and two devices converge. `name` is the folder name, or the Inbox's key.
+ */
+export function queueMute(name, muted, { storage, now = () => new Date().toISOString() } = {}) {
+  const k = keyOf(name);
+  if (!k) return readCached(storage);
+  const outbox = read(storage, OUTBOX, {});
+  outbox[`m:${k}`] = { name: String(name).replace(/\s+/g, ' ').trim(), muted: muted === true, at: now() };
+  write(storage, OUTBOX, outbox);
+  return readCached(storage);
+}
+
 /**
  * Sends every queued edit, then fetches the server's copy and caches it. An edit leaves the outbox
  * only when the server answered 2xx; a network error or a 5xx leaves it for the next try.
@@ -92,7 +115,7 @@ export async function sync({ storage, fetchImpl = globalThis.fetch } = {}) {
   let outbox = read(storage, OUTBOX, {});
   for (const [k, e] of Object.entries(outbox)) {
     try {
-      const r = await fetchImpl('/api/folder-descriptions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(k.startsWith('p:') ? { name: e.name, parent: e.parent, at: e.at } : k.startsWith('a:') ? { name: e.name, archived: e.archived === true, at: e.at } : { name: e.name, text: e.text, at: e.at }) });
+      const r = await fetchImpl('/api/folder-descriptions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(k.startsWith('p:') ? { name: e.name, parent: e.parent, at: e.at } : k.startsWith('a:') ? { name: e.name, archived: e.archived === true, at: e.at } : k.startsWith('m:') ? { name: e.name, muted: e.muted === true, at: e.at } : { name: e.name, text: e.text, at: e.at }) });
       if (!r.ok) continue;
       outbox = read(storage, OUTBOX, {});
       // An edit made while this one was in flight stays queued.

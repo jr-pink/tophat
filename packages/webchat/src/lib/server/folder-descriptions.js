@@ -65,7 +65,9 @@ export function setManual(name, text, path = PATH, { at = null } = {}) {
 const hasPlace = (e) => typeof e?.parentAt === 'string';
 // Folder archive: a flag beside the place, newest `archivedAt` wins. Nothing else about the folder changes.
 const hasArchive = (e) => typeof e?.archivedAt === 'string';
-const hasMeta = (e) => hasPlace(e) || hasArchive(e);
+// Mute When Collapsed: another flag beside them, newest `mutedAt` wins; a false is the tombstone, so a later device's unmute beats an earlier mute.
+const hasMute = (e) => typeof e?.mutedAt === 'string';
+const hasMeta = (e) => hasPlace(e) || hasArchive(e) || hasMute(e);
 function withoutText(e) { const { text: _t, source: _s, at: _a, ...rest } = e; return rest; }
 
 export function setParent(name, parent, path = PATH, { at = null } = {}) {
@@ -92,6 +94,18 @@ export function setArchived(name, archived, path = PATH, { at = null } = {}) {
   const when = at && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : new Date().toISOString();
   if (all[k]?.archivedAt && all[k].archivedAt > when) return all[k];
   all[k] = { ...(all[k] || { name: normalizeWorkspace(name) }), archived: archived === true, archivedAt: when };
+  if (!all[k].name) all[k].name = normalizeWorkspace(name);
+  writeAll(all, path);
+  return all[k];
+}
+
+export function setMuted(name, muted, path = PATH, { at = null } = {}) {
+  const k = key(name);
+  if (!k) return null;
+  const all = readAll(path);
+  const when = at && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : new Date().toISOString();
+  if (all[k]?.mutedAt && all[k].mutedAt > when) return all[k];
+  all[k] = { ...(all[k] || { name: normalizeWorkspace(name) }), muted: muted === true, mutedAt: when };
   if (!all[k].name) all[k].name = normalizeWorkspace(name);
   writeAll(all, path);
   return all[k];

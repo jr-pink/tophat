@@ -4,7 +4,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { sidebarDecl } from '../src/lib/core/sidebar-state.js';
 import { UNFILED, chatsUnder, explorerRows, folderKey } from '../src/lib/core/workspaces.js';
 
 const names = ['Home', 'Garden', 'Taxes'];
@@ -33,26 +32,6 @@ test('a chat whose folder is unknown counts as Inbox, as explorerRows draws it',
   const stray = [chat('s1', 'Gone folder', { unread: true })];
   assert.deepEqual(chatsUnder(stray, UNFILED, { names, layout }).map((r) => r.id), ['s1']);
   assert.deepEqual(chatsUnder(stray, folderKey('Home'), { names, layout }), []);
-});
-
-test('folder.mute is one absolute, id-keyed, idempotent action', () => {
-  const s0 = sidebarDecl.normalize({});
-  assert.deepEqual(s0.muteCollapsed, {});
-  const on = sidebarDecl.actions['folder.mute'](s0, { key: 'home', muted: true });
-  assert.equal(on.muteCollapsed.home, true);
-  assert.equal(sidebarDecl.actions['folder.mute'](on, { key: 'home', muted: true }), on, 'repeating it is the same state');
-  const off = sidebarDecl.actions['folder.mute'](on, { key: 'home', muted: false });
-  assert.deepEqual(off.muteCollapsed, {});
-  assert.equal(sidebarDecl.actions['folder.mute'](off, { key: 'home', muted: false }), off);
-});
-
-test('the flag follows a rename and goes with a removed folder', () => {
-  const s = sidebarDecl.actions['folder.mute'](sidebarDecl.normalize({ names: ['Home'] }), { key: folderKey('Home'), muted: true });
-  const renamed = sidebarDecl.actions['folder.rename'](s, { from: 'Home', to: 'Home Base' });
-  assert.equal(renamed.muteCollapsed[folderKey('Home Base')], true);
-  assert.equal(renamed.muteCollapsed[folderKey('Home')], undefined);
-  const removed = sidebarDecl.actions['folder.remove'](s, { name: 'Home' });
-  assert.deepEqual(removed.muteCollapsed, {});
 });
 
 test('a collapsed folder shows a dot for unread inside; muting it silences that, and expanding restores it', () => {
@@ -99,11 +78,11 @@ test('the folder menu offers Mark Read (only with something unread) and a flippi
   const src = body('folderMenuItems');
   assert.match(src, /unread\.length > 0 && \{ id: 'read', label: 'Mark Read'/);
   assert.match(src, /label: muted \? 'Unmute When Collapsed' : 'Mute When Collapsed'/);
-  assert.match(src, /sb\.dispatch\('folder\.mute', \{ key, muted: !muted \}\)/);
+  assert.match(src, /queueMute\(name \?\? key, !muted\)/);
   assert.match(menu, /const markAllRead = \(ids\) => \{ for \(const id of ids\) onread\(id, true, \{ mute: false \}\); \};/);
 });
 
 test('the multi-select menu has Mark Read, and the explorer is told which folders are muted', () => {
   assert.match(body('bulkMenu'), /unread\.length > 0 && \{ id: 'read', label: 'Mark Read'/);
-  assert.match(menu, /isMuted: \(k\) => Boolean\(\$sb\.muteCollapsed\[k\]\)/);
+  assert.match(menu, /isMuted: \(k\) => folderMuted\(descs, k\)/);
 });
