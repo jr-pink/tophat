@@ -16,6 +16,7 @@ svg#s{position:absolute;inset:0;width:100%;height:100%;display:block}
 text{fill:var(--ink);font:10.5px "American Typewriter","Courier New",Courier,monospace}
 text.d{fill:var(--dim)}
 text.h{fill:var(--dim);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase}
+text.hm{fill:var(--ink);font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
 text.ha{fill:var(--acc);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase}
 .arc{fill:none;stroke:var(--arc);stroke-width:1}
 .pk{fill:var(--acc)}
@@ -37,8 +38,8 @@ text.ha{fill:var(--acc);font-size:9.5px;letter-spacing:.08em;text-transform:uppe
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>
 <figure>
-<div class="art" id="art"><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs id="defs"></defs></svg><svg id="s" role="img" aria-label="your Mac running tophat: connectors fan into memory, memory and the runner read and write each other, the runner acts through its tools; outside, the web client above, the hub, peers and the model provider below"></svg></div>
-<figcaption><b>Fig. 4</b>Every connector flows into one memory on your Mac; the runner reads and writes it, calls the model provider, answers you in the web client, and acts out through every tool it has. Memory syncs with the hub and your peers. Dots travel along each connection; hover an icon for its name.</figcaption>
+<div class="art" id="art"><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs id="defs"></defs></svg><svg id="s" role="img" aria-label="a Mac mini running tophat: connectors fan into memory, memory and the runner read and write each other, the runner acts through its tools; outside, the web client above, the hub, peers and the model provider below"></svg></div>
+<figcaption><b>Fig. 5</b>Every connector flows into one memory on your Mac; the runner reads and writes it, calls the model provider, answers you in the web client, and acts out through every tool it has. Memory syncs with the hub and your peers. Dots travel along each connection; hover an icon for its name.</figcaption>
 </figure>
 <script>
 /* real icons: the Apple apps, Outlook and Discord as their app icons (88 px WebP); the other services as their Simple Icons marks (public domain) on a tile in the brand colour; embedded so nothing is fetched */
@@ -75,21 +76,23 @@ const svg=document.getElementById('s');
 const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
 let raf=0,packets=[];
 /*
- * The architecture, as drawn by hand (2026-11-10): one box is your Mac running tophat. Inside it every connector fans into memory,
+ * The architecture, as drawn by hand (2026-11-10): one box is a Mac mini running tophat. Inside it every connector fans into memory,
  * memory and the runner read and write each other, and the runner acts out through its tools (the column on the right). Outside the box:
  * the web client you chat in (above), and below, the hub and your peers (memory syncs with them) and the model provider the runner calls.
  */
 function build(){
   cancelAnimationFrame(raf);packets=[];
-  const W=svg.clientWidth,H=svg.clientHeight;if(!W||!H)return;
-  const narrow=W<620;
+  const cw0=svg.clientWidth,ch0=svg.clientHeight;if(!cw0||!ch0)return;
+  /* one drawing at every size: below 900px wide the desktop layout is drawn at 900x520 and scaled down whole, never reflowed */
+  const small=cw0<900,W=small?900:cw0,H=small?520:ch0;
+  if(small){svg.setAttribute('viewBox',`0 0 ${W} ${H}`);svg.setAttribute('preserveAspectRatio','xMidYMid meet')}else svg.removeAttribute('viewBox');
+  const narrow=false;
   const P={arc:'',ic:'',bx:'',tx:''};
   const arcs=[];
   /* a connection: a soft curve with a travelling dot; two=true sends a second dot the other way */
   const arc=(x0,y0,x1,y1,vert,dur,two)=>{
     const d=vert?`M${x0} ${y0}C${x0} ${y0+(y1-y0)*.55} ${x1} ${y1-(y1-y0)*.55} ${x1} ${y1}`:`M${x0} ${y0}C${x0+(x1-x0)*.55} ${y0} ${x1-(x1-x0)*.55} ${y1} ${x1} ${y1}`;
     P.arc+=`<path class="arc" d="${d}"/>`;arcs.push({dur,back:false});
-    if(two){P.arc+=`<path class="arc" d="${d}" style="stroke:none"/>`;arcs.push({dur:dur*1.15,back:true})}
   };
   const memory=(x,y,w,h)=>{
     P.bx+=`<rect class="bx" x="${x}" y="${y}" width="${w}" height="${h}" rx="8"/>`;
@@ -110,7 +113,7 @@ function build(){
   const both=(x0,y0,x1,y1)=>{const a=Math.atan2(y1-y0,x1-x0),L=(x,y,s)=>`M${x+5*Math.cos(a+s*2.6)} ${y+5*Math.sin(a+s*2.6)}L${x} ${y}L${x+5*Math.cos(a-s*2.6)} ${y+5*Math.sin(a-s*2.6)}`;
     P.bx+=`<path class="ar" d="M${x0} ${y0}L${x1} ${y1}${L(x1,y1,1)}${L(x0,y0,-1).replace(/2\.6/g,'')}"/>`;
     P.bx+=`<path class="ar" d="M${x0+5*Math.cos(a+.5)} ${y0+5*Math.sin(a+.5)}L${x0} ${y0}L${x0+5*Math.cos(a-.5)} ${y0+5*Math.sin(a-.5)}"/>`;};
-  const head=(x,y,t,acc,anchor)=>{P.tx+=`<text class="${acc?'ha':'h'}" x="${x}" y="${y}"${anchor?` text-anchor="${anchor}"`:''}>${t}</text>`};
+  const head=(x,y,t,acc,anchor)=>{P.tx+=`<text class="${acc==='m'?'hm':acc?'ha':'h'}" x="${x}" y="${y}"${anchor?` text-anchor="${anchor}"`:''}>${t}</text>`};
 
   if(!narrow){
     const cw=Math.min(W,1060),ox=(W-cw)/2;
@@ -119,28 +122,29 @@ function build(){
     const wcH=30,top=6,by0=top+wcH+28,partyH=30,by1=H-8-partyH-28;
     const ch=by1-by0,midY=by0+ch/2;
     P.bx+=`<rect x="${bx0}" y="${by0}" width="${bx1-bx0}" height="${ch}" rx="14" fill="none" stroke="var(--ink)" stroke-width="1.2" stroke-dasharray="1 0"/>`;
-    head(bx0+12,by0+16,'your Mac · tophat',true);
+    head(bx0+12,by0+16,'Mac mini','m');
     /* inputs: a two-column grid on the left of the box */
     const n=INPUTS.length/2,p=Math.min(36,(ch-34)/(n+.5)),s=Math.round(p*.78),xg=s+8,lx=bx0+16,yo=by0+26+(ch-34-(n+.5)*p)/2;
     const memW=Math.max(70,Math.min(100,(bx1-bx0)*.15)),memH=Math.min(ch*.5,memW*1.25);
     const agW=Math.max(70,Math.min(96,(bx1-bx0)*.14)),agH=agW*.9;
     const free0=lx+xg+s+30,free1=bx1-16,gap=(free1-free0-memW-agW)/3;
-    const memX=free0+gap,agX=memX+memW+gap*1.2,memY=midY-memH/2,agY=midY-agH/2;
+    const inner=Math.min(44,gap*.5),memX=free0+gap+(gap*1.2-inner)/2,agX=memX+memW+inner,memY=midY-memH/2,agY=midY-agH/2;
     memory(memX,memY,memW,memH);runner(agX,agY,agW,agH);
     head(memX+memW/2,memY-7,'memory',true,'middle');head(agX+agW/2,agY-7,'runner',true,'middle');
     both(memX+memW+3,midY,agX-3,midY);
     INPUTS.forEach((k,i)=>{const col=i%2,r=(i-col)/2,x=lx+col*xg,y=yo+r*p+col*p/2;
-      P.ic+=ico(k,x,y,s);arc(x+s,y+s/2,memX,memY+8+i*(memH-16)/(INPUTS.length-1),false,3800)});
+      P.ic+=ico(k,x,y,s);arc(x+s,y+s/2,memX,midY+(i/(INPUTS.length-1)-.5)*memH*.3,false,3800)});
     /* outside, above: the web client you chat in */
     const wcW=Math.min(150,agW*1.6),wcX=agX+agW/2-wcW/2;
     party(wcX,top,wcW,wcH,'web client');arc(agX+agW/2,agY,wcX+wcW/2,top+wcH,true,2600,true);
     /* outside, below: hub and peers under memory, the model provider under the runner */
-    const py=H-8-partyH,hubW=Math.min(70,memW),peerW=34,peersX=memX+memW/2-(hubW+10+2*peerW+8)/2;
+    const py=H-8-partyH,hubW=Math.min(70,memW),peerW=34,groupW=hubW+10+2*peerW+8,mpW=Math.min(150,agW*1.7);
+    /* the bottom row: hub and peers centred under memory, the provider under the runner, pushed apart evenly when they would touch */
+    let peersX=memX+memW/2-groupW/2,mpX=agX+agW/2-mpW/2;const clash=peersX+groupW+24-mpX;if(clash>0){peersX-=clash/2;mpX+=clash/2}
     party(peersX,py,hubW,partyH,'hub');
     for(let j=0;j<2;j++)party(peersX+hubW+10+j*(peerW+8),py,peerW,partyH,'peer'.slice(0,j?4:4));
-    arc(memX+memW*.35,memY+memH,peersX+hubW/2,py,true,3000,true);
-    arc(memX+memW*.65,memY+memH,peersX+hubW+10+peerW/2,py,true,3300,true);
-    const mpW=Math.min(150,agW*1.7),mpX=agX+agW/2-mpW/2;
+    arc(memX+memW/2,memY+memH,peersX+hubW/2,py,true,3000,true);
+    for(let j=0;j<2;j++)arc(memX+memW/2,memY+memH,peersX+hubW+10+j*(peerW+8)+peerW/2,py,true,3300+j*300,true);
     party(mpX,py,mpW,partyH,'model provider');arc(agX+agW/2,agY+agH,mpX+mpW/2,py,true,2400,true);
     /* actions: the column on the right */
     head(rx0,by0-10,'actions');
@@ -148,7 +152,7 @@ function build(){
     let y=by0;
     wts.forEach((wt,i)=>{
       const rh=ch*wt/sum,cy=y+rh/2;y+=rh;
-      const sy=agY+10+i*(agH-20)/(wts.length-1);
+      const sy=midY+(i/(wts.length-1)-.5)*agH*.3;
       if(i<3){const sc=Math.min(1,(rh-6)/54),w=72*sc,h=54*sc;
         P.ic+=`<g transform="translate(${rx0+(illW-w)/2} ${cy-h/2}) scale(${sc})">${ART[HEAD[i][0]]()}</g>`;
         const nn=Math.floor((rw-illW-8)/6.5);
@@ -169,11 +173,11 @@ function build(){
     const mx=(W-(memW+gapX+agW))/2,ax=mx+memW+gapX,my=r2+s+34;
     const ah=46,colW=(bx1-bx0-12)/3,oy=my+boxH+40,lblY=oy+ah+12,by1=lblY+26;
     P.bx+=`<rect x="${bx0}" y="${by0}" width="${bx1-bx0}" height="${by1-by0}" rx="12" fill="none" stroke="var(--ink)" stroke-width="1.2"/>`;
-    head(bx0+10,by0+14,'your Mac · tophat',true);
+    head(bx0+10,by0+14,'Mac mini','m');
     memory(mx,my,memW,boxH);runner(ax,my+(boxH-agW*.8)/2,agW,agW*.8);both(mx+memW+3,my+boxH/2,ax-3,my+boxH/2);
     head(mx+memW/2,my-6,'memory',true,'middle');head(ax+agW/2,my-6,'runner',true,'middle');
     INPUTS.forEach((k,i)=>{const row=i%2,c=(i-row)/2,x=x0+c*p+row*p/2,y=row?r2:r1;
-      P.ic+=ico(k,x,y,s);arc(x+s/2,y+s,mx+10+i*(memW-20)/(INPUTS.length-1),my,true,3800)});
+      P.ic+=ico(k,x,y,s);arc(x+s/2,y+s,mx+memW/2+(i/(INPUTS.length-1)-.5)*memW*.3,my,true,3800)});
     const wcW=120;party(ax+agW/2-wcW/2,top,wcW,wcH,'web client');arc(ax+agW/2,my+(boxH-agW*.8)/2,ax+agW/2,top+wcH,true,2600,true);
     ['browser','mac','chat'].forEach((a,i)=>{const cx=bx0+6+colW*(i+.5),sc=.85;
       P.ic+=`<g transform="translate(${cx-36*sc} ${oy}) scale(${sc})">${ART[a]()}</g>`;
@@ -182,19 +186,12 @@ function build(){
     const py=by1+26,ph=26,hubW=58,peerW=40,mpW=Math.min(140,W*.38);
     party(pad+4,py,hubW,ph,'hub');party(pad+4+hubW+8,py,peerW,ph,'peer');
     party(bx1-4-mpW,py,mpW,ph,'model provider');
-    arc(mx+memW*.3,my+boxH,pad+4+hubW/2,py,true,3000,true);
-    arc(mx+memW*.6,my+boxH,pad+4+hubW+8+peerW/2,py,true,3300,true);
+    arc(mx+memW/2,my+boxH,pad+4+hubW/2,py,true,3000,true);
+    arc(mx+memW/2,my+boxH,pad+4+hubW+8+peerW/2,py,true,3300,true);
     arc(ax+agW*.8,my+(boxH+agW*.8)/2,bx1-4-mpW/2,py,true,2400,true);
     head(pad+2,oy-8,'actions');
   }
-  svg.innerHTML=P.arc+'<g id="pk"></g>'+P.bx+P.ic+P.tx;
-  const paths=[...svg.querySelectorAll('path.arc')],pk=svg.querySelector('#pk');
-  paths.forEach((el,i)=>{const c=document.createElementNS(NS,'circle');c.setAttribute('r','2.4');c.setAttribute('class','pk');pk.appendChild(c);
-    packets.push({el,c,len:el.getTotalLength(),dur:arcs[i].dur,back:arcs[i].back,ph:(i*.6180339)%1})});
-  if(reduce){packets.forEach(k=>place(k,.5));return}
-  const loop=now=>{for(const k of packets)place(k,((now/k.dur)+k.ph)%1);raf=requestAnimationFrame(loop)};
-  raf=requestAnimationFrame(loop);
+  svg.innerHTML=P.arc+P.bx+P.ic+P.tx;
 }
-function place(k,t){const u=k.back?1-t:t,pt=k.el.getPointAtLength(u*k.len);k.c.setAttribute('cx',pt.x);k.c.setAttribute('cy',pt.y);k.c.setAttribute('opacity',Math.sin(t*Math.PI).toFixed(2))}
 build();new ResizeObserver(()=>build()).observe(svg);
 </script></body></html>

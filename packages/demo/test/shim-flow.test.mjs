@@ -2,6 +2,10 @@
 // profile) and a fake human check: whatever the check does, the intro ends sent-with-the-first-answer or on the failed-check page, never as
 // a blank chat. Skipped where Chrome or the webchat build is missing. The check is faked by answering Cloudflare's script request in the
 // browser (a stand-in `window.turnstile`), and the server's verify is the config's `turnstile.stub`.
+// Speed: one webchat, one demo server and one Chrome serve the whole file, the visitors (each its own browser context and guest) run at the same time,
+// the answer's stream runs at TEST_SPEED times its real pace (demo.json `streamSpeed`), the intro at the same factor (sessionStorage `demo-tune`, shim.js),
+// and nothing waits for a clock that a condition can be waited on instead. What stays real time: the server's 2 s beat before the answer (asserted by
+// its own test), the shim's retry back-offs, and the page's 2.5 s poll that ends the opener's pending rules.
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -10,6 +14,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { openerAnswer } from '../src/answer.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '../../..');
@@ -17,9 +22,13 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 // the webchat build under test: the package's own, or TOPHAT_TEST_WEBCHAT_BUILD (a fresh build in another directory)
 const BUILD = process.env.TOPHAT_TEST_WEBCHAT_BUILD || path.join(REPO, 'packages/webchat/build');
 const skip = !existsSync(CHROME) ? 'no Google Chrome' : !existsSync(path.join(BUILD, 'handler.js')) ? 'no webchat build' : false;
+const TEST_SPEED = Number(process.env.TOPHAT_TEST_SPEED) || 10;
+// what the opener's answer holds: figures in all, and how many of them are widget frames (the rest are pictures)
+const ANSWER = openerAnswer(path.join(REPO, 'packages/demo/content/description.md'), path.join(REPO, 'packages/demo/widgets'));
+const FIGURES = (ANSWER.match(/!\[/g) || []).length, FRAMES = (ANSWER.match(/\.html\)/g) || []).length;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
-const until = async (fn, ms, what) => { const end = Date.now() + ms; let last; while (Date.now() < end) { try { last = await fn(); if (last) return last; } catch (e) { last = e; } await sleep(150); } throw new Error(`timed out waiting for ${what}: ${last && last.message || JSON.stringify(last)}`); };
+const until = async (fn, ms, what) => { const end = Date.now() + ms; let last; while (Date.now() < end) { try { last = await fn(); if (last) return last; } catch (e) { last = e; } await sleep(50); } throw new Error(`timed out waiting for ${what}: ${last && last.message || JSON.stringify(last)}`); };
 
 // stand-in for Cloudflare's api.js: what the page's `window.turnstile` does is chosen by `window.__demoFake`
 const FAKE_TURNSTILE = `window.turnstile={render(el,o){window.__ts=o;const m=window.__demoFake;if(m==='pass')setTimeout(()=>o.callback('tok'),window.__demoFakeDelay||300);if(m==='error')setTimeout(()=>o['error-callback']('300010'),200);return 'w1'},reset(){const o=window.__ts,m=window.__demoFake;if(m==='error')setTimeout(()=>o['error-callback']('300010'),200)},remove(){}};`;
@@ -28,7 +37,7 @@ const WIPE = `(()=>{let done=false;document.addEventListener('input',(e)=>{const
 // a send button that never enables
 const NO_SEND = `setInterval(()=>{const b=document.querySelector('[data-testid="send"]');if(b)b.disabled=true},15);`;
 
-describe('the first minute, against a scratch demo', { skip }, () => {
+describe('the first minute, against a scratch demo', { skip, concurrency: 6 }, () => {
   let dir, demoPort, webchatPort, children = [], chrome, ws, seq = 0;
   const pending = new Map(), listeners = [];
   const base = () => `http://127.0.0.1:${demoPort}`;
@@ -37,6 +46,12 @@ describe('the first minute, against a scratch demo', { skip }, () => {
   before(async () => {
     dir = mkdtempSync(path.join(os.tmpdir(), 'demo-flow-'));
     webchatPort = await freePort(); demoPort = await freePort();
+    // Chrome starts at once, beside the webchat and the demo server coming up
+    const chromeUp = (async () => {
+      const port = await freePort();
+      chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(dir, 'profile')}`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+      return until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()).webSocketDebuggerUrl, 20_000, 'chrome');
+    })();
     const cfg = path.join(dir, 'cfg'), state = path.join(dir, 'state'), ws0 = path.join(dir, 'ws');
     for (const d of [path.join(cfg, 'secrets'), path.join(state, 'demo'), ws0]) mkdirSync(d, { recursive: true });
     const put = (f, v) => writeFileSync(path.join(cfg, f), typeof v === 'string' ? v : JSON.stringify(v, null, 1));
@@ -55,7 +70,7 @@ describe('the first minute, against a scratch demo', { skip }, () => {
       instance: './instance.json', db: path.join(state, 'runner/memory.sqlite'), scope: 'tophat-dev', records: path.join(dir, 'r.jsonl'), manifest: path.join(dir, 'm.json'), snapshot: path.join(state, 'demo/snap.json'),
       cache: path.join(state, 'demo/cache'), port: demoPort, bind: '127.0.0.1', frameAncestors: [], slots: [], visitorDb: path.join(state, 'demo/visitors.sqlite'), sessionSecretFile: './secrets/session', edgeSecretFile: './secrets/edge',
       turnstile: { siteKey: 'scratch-key', stub: true }, downloadUrl: 'https://github.com/tophat-md/tophat',
-      visitors: { turnsPerSession: 5, dailyUsd: 3, model: 'claude-haiku-5-5', usdPerTurn: 0.03, sessionHours: 24 }
+      streamSpeed: TEST_SPEED, visitors: { turnsPerSession: 5, dailyUsd: 3, model: 'claude-haiku-5-5', usdPerTurn: 0.03, sessionHours: 24 }
     });
     const env = { PATH: process.env.PATH, HOME: process.env.HOME, NODE_NO_WARNINGS: '1' };
     const log = (name) => openSync(path.join(dir, `${name}.log`), 'a');
@@ -67,9 +82,7 @@ describe('the first minute, against a scratch demo', { skip }, () => {
     run([path.join(REPO, 'packages/demo/bin/tophat-demo.mjs'), 'serve', '--config', path.join(cfg, 'demo.json')], 'demo');
     await until(async () => (await fetch(`${base()}/healthz`)).ok, 30_000, 'the demo server');
 
-    const port = await freePort();
-    chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(dir, 'profile')}`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
-    const url = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()).webSocketDebuggerUrl, 20_000, 'chrome');
+    const url = await chromeUp;
     ws = new WebSocket(url);
     await new Promise((r) => ws.addEventListener('open', r));
     ws.addEventListener('message', (e) => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { const { res, rej } = pending.get(m.id); pending.delete(m.id); m.error ? rej(new Error(m.error.message)) : res(m.result); } else listeners.forEach((f) => f(m)); });
@@ -96,7 +109,7 @@ describe('the first minute, against a scratch demo', { skip }, () => {
       if (fake === 'blocked') S('Fetch.failRequest', { requestId: id, errorReason: 'Failed' }).catch(() => {});
       else S('Fetch.fulfillRequest', { requestId: id, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'text/javascript' }, { name: 'access-control-allow-origin', value: '*' }], body: Buffer.from(FAKE_TURNSTILE).toString('base64') }).catch(() => {});
     });
-    const boot = `window.__demoFake=${JSON.stringify(fake)};window.__demoFakeDelay=${delay};window.__demoCheckTimeoutMs=${checkMs};window.__demoIntroDeadlineMs=${introMs};`;
+    const boot = `window.__demoFake=${JSON.stringify(fake)};window.__demoFakeDelay=${delay};window.__demoCheckTimeoutMs=${checkMs};window.__demoIntroDeadlineMs=${introMs};try{sessionStorage.setItem('demo-tune',JSON.stringify({speed:${TEST_SPEED}}))}catch(e){}`;
     await S('Page.addScriptToEvaluateOnNewDocument', { source: boot + scripts.join('\n') });
     await S('Page.navigate', { url: base() + url });
     const ev = async (expr) => (await S('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true })).result.value;
@@ -116,15 +129,20 @@ describe('the first minute, against a scratch demo', { skip }, () => {
   const settled = async (v, ms = 45_000) => until(async () => {
     if (await onFailPage(v)) return 'failed-check page';
     const st = await v.state();
-    return st && !st.intro && (await v.figures()) >= 6 ? 'first answer' : false;
+    return st && !st.intro && (await v.figures()) >= FIGURES ? 'first answer' : false;
   }, ms, 'the first answer or the failed-check page');
 
-  test('a check that passes after the answer began: typed intro, six widgets that load, no overlay, no bounce', { timeout: 90_000 }, async () => {
-    const v = await visitor({ fake: 'pass', delay: 5000, checkMs: 30_000 });
+  test('a check that passes after the answer began: typed intro, the widgets that load, no overlay, no bounce', { timeout: 90_000 }, async () => {
+    // the fake check holds its answer until the test gives it (after the answer has begun), instead of guessing a delay
+    const v = await visitor({ fake: 'pass', delay: 600_000, checkMs: 30_000 });
     try {
+      await until(async () => { const st = await v.state(); return st && !st.intro && st.running; }, 40_000, 'the answer to begin');
+      assert.equal((await v.state()).verified, false, 'the check has not passed yet');
+      await until(() => v.ev('Boolean(window.__ts)'), 10_000, 'the check widget');
+      await v.ev("window.__ts.callback('tok')");
       assert.equal(await settled(v), 'first answer');
       await until(async () => (await v.state()).verified, 15_000, 'the check to pass');
-      await until(async () => (await v.ev("document.querySelectorAll('figure iframe').length")) >= 6, 30_000, 'six widget frames');
+      await until(async () => (await v.ev("document.querySelectorAll('figure iframe').length")) >= FRAMES, 30_000, `${FRAMES} widget frames`);
       assert.equal(await v.alerts(), '', 'no widget failed to load');
       assert.equal((await v.where()).startsWith('/_demo/text'), false);
       assert.equal(await v.ev("Boolean(document.getElementById('demo-limit'))"), false);
@@ -133,7 +151,7 @@ describe('the first minute, against a scratch demo', { skip }, () => {
 
   for (const fake of ['hang', 'error', 'blocked']) {
     test(`a check that ${fake === 'hang' ? 'never answers' : fake === 'error' ? 'errors' : 'cannot load its script'} ends on the failed-check page, with the intro sent first or not at all`, { timeout: 90_000 }, async () => {
-      const v = await visitor({ fake });
+      const v = await visitor({ fake, checkMs: fake === 'hang' ? 1000 : 10_000 }); // (the others end by their own retries: two, backed off)
       try {
         assert.equal(await until(async () => ((await onFailPage(v)) ? 'failed-check page' : false), 40_000, 'the failed-check page'), 'failed-check page');
         const st = await v.state();
@@ -173,7 +191,7 @@ describe('the first minute, against a scratch demo', { skip }, () => {
   });
 
   test('a send button that never enables: the failed-check page, not a blank chat', { timeout: 90_000 }, async () => {
-    const v = await visitor({ fake: 'pass', scripts: [NO_SEND], introMs: 5000 });
+    const v = await visitor({ fake: 'pass', scripts: [NO_SEND], introMs: 1500 });
     try {
       assert.equal(await settled(v, 30_000), 'failed-check page');
       assert.equal((await v.state()).intro, true, 'nothing was sent');
@@ -190,27 +208,31 @@ describe('the first minute, against a scratch demo', { skip }, () => {
       assert.equal(await settled(v), 'first answer');
     } finally { await v.close(); }
   });
-  test('the opening motion: only the bar on black, then the normal app, and the cleanup leaves no trace', { timeout: 90_000 }, async () => {
+  test('the opening motion: only the bar on black, typed under a fixed caret, then the normal app, and the cleanup leaves no trace', { timeout: 90_000 }, async () => {
     const v = await visitor({ fake: 'pass' });
     try {
-      // the typed line is centred on the screen and grows outward from the middle: the caret rides its end, so it sits half the typed line's
-      // (scaled) width right of the centre. One evaluation reads the caret, the scale and the mirror's width of what is typed, so the typing cannot move between them.
-      const seen = await until(async () => v.ev("(()=>{const r=document.documentElement;const f=document.querySelector('[data-testid=composer]');const m=[...document.body.children].find((e)=>e.tagName==='SPAN'&&e.style.position==='fixed');if(!(r.classList.contains('demo-ready')&&f&&f.value.length>=3&&m&&m.textContent===f.value))return null;const S=parseFloat(r.style.getPropertyValue('--di-s'));const c=document.getElementById('demo-caret').getBoundingClientRect();return{cls:r.className,bg:getComputedStyle(document.body).backgroundColor,vw:innerWidth,caret:c.left+c.width/2,want:innerWidth/2+S*m.getBoundingClientRect().width/2,value:f.value}})()"), 20_000, 'the opening, mid typing');
+      // The typed line slides left under a caret fixed at the centre of the screen (the whole text laid out once in a clip window that ends at the caret,
+      // each character a step of a transform): whatever has been typed ends at the caret. The typing is a Web Animation, so the test holds it half way
+      // (paused, time set) and reads the geometry there, whatever speed the intro runs at and whatever the main thread is doing.
+      const seen = await until(async () => v.ev("(()=>{const r=document.documentElement,o=document.getElementById('demo-intro'),m=o&&o.querySelector('.win .msg');if(!m||!window.__demoIntroOwned||!r.classList.contains('demo-intro'))return null;const a=m.getAnimations()[0];if(!a)return null;a.pause();a.currentTime=a.effect.getComputedTiming().endTime/2;const n=m.firstChild.data.length,rg=document.createRange(),c=o.querySelector('.caret').getBoundingClientRect(),cx=o.querySelector('.line').getBoundingClientRect().left;let best=null;for(let i=1;i<=n;i++){rg.setStart(m.firstChild,0);rg.setEnd(m.firstChild,i);const d=Math.abs(rg.getBoundingClientRect().right-cx);if(!best||d<best.d)best={i,d}}const out={cls:r.className,bg:getComputedStyle(document.body).backgroundColor,n,typed:best.i,off:best.d,centre:Math.abs(c.left+c.width/2-innerWidth/2),conn:getComputedStyle(document.querySelector('[data-testid=conn]')||document.body).visibility};a.play();return out})()"), 20_000, 'the opening, mid typing');
       assert.match(seen.cls, /demo-intro/); assert.equal(seen.bg, 'rgb(0, 0, 0)');
+      assert.ok(seen.typed > 0 && seen.typed < seen.n, `half way through the line (${seen.typed} of ${seen.n})`);
+      assert.ok(seen.off <= 2, `what is typed ends at the line's anchor, where the caret sits (${seen.off}px off)`);
+      assert.ok(seen.centre <= 6, // (the caret's own margin and width, a few px)
+         `the caret is at the centre of the screen (${seen.centre}px off)`);
       // the connection coming up is never shown during the opening, whatever the stream is doing
       assert.equal(await v.ev("getComputedStyle(document.querySelector('[data-testid=conn]')).visibility"), 'hidden', 'no connection dot in the opening');
-      assert.ok(Math.abs(seen.caret - seen.want) <= 2, `the caret rides the end of the centred line (${seen.caret} vs ${seen.want})`);
       assert.equal(await settled(v), 'first answer');
       // (the page's own poll, every 2.5 s, ends the opener's pending-state rules once the activity line has left queued/starting)
       await until(async () => v.ev("!/demo-/.test(document.documentElement.className)"), 9000, 'the opening cleaned up');
-      assert.equal(await v.ev("document.querySelectorAll('#demo-caret').length"), 0);
+      assert.equal(await v.ev("document.querySelectorAll('#demo-intro').length"), 0);
     } finally { await v.close(); }
   });
 
   test('a visitor pressing a key drops the opening at once', { timeout: 60_000 }, async () => {
     const v = await visitor({ fake: 'pass' });
     try {
-      await until(async () => v.ev("document.documentElement.classList.contains('demo-ready')"), 20_000, 'the opening');
+      await until(async () => v.ev("Boolean(window.__demoIntroOwned) && document.documentElement.classList.contains('demo-intro')"), 20_000, 'the opening');
       await v.key('x');
       await until(async () => v.ev("!/demo-(intro|ready)/.test(document.documentElement.className)"), 2000, 'the opening dropped');
     } finally { await v.close(); }
@@ -225,15 +247,15 @@ describe('the first minute, against a scratch demo', { skip }, () => {
     assert.ok(html.includes('<title>'));
     assert.equal((await fetch(`${base()}/og.png`)).status, 200);
   });
-  test('a new guest in the same browser starts from nothing: old qk:* keys and engine databases are gone, the Inbox folded', { timeout: 120_000 }, async () => {
+  test('every load starts from nothing: old qk:* keys and engine databases are gone, the Inbox folded', { timeout: 120_000 }, async () => {
     const v = await visitor({ fake: 'pass', url: '/?fresh=1' });
     try {
-      await until(async () => v.ev("localStorage.getItem('demo-guest')"), 20_000, 'the first guest');
-      const g1 = await v.ev("localStorage.getItem('demo-guest')");
+      await until(async () => (await v.where()).startsWith('/?chat=opener') && v.ev("Boolean(window.__chatEngineWorker) && localStorage.getItem('tophat-workspaces:chats:main-folded')"), 20_000, 'the first load');
+      const w1 = await v.ev('window.__chatEngineWorker');
       await v.ev("localStorage.setItem('qk:marker','old');localStorage.setItem('tophat-workspaces:chats:main-folded','0');new Promise((r)=>{const q=indexedDB.open('tophat-engine-old-guest',1);q.onupgradeneeded=()=>{};q.onsuccess=()=>{q.result.close();r(1)}})");
       await v.ev("location.href='/?fresh=1'");
-      await until(async () => (await v.ev("localStorage.getItem('demo-guest')")) !== g1, 20_000, 'a new guest');
-      assert.equal(await v.ev("localStorage.getItem('qk:marker')"), null, 'the old guest\'s device state is gone');
+      await until(async () => { const w = await v.ev('window.__chatEngineWorker'); return w && w !== w1; }, 20_000, 'the next load, with its own engine worker');
+      assert.equal(await v.ev("localStorage.getItem('qk:marker')"), null, 'the old load\'s device state is gone');
       assert.equal(await v.ev("localStorage.getItem('tophat-workspaces:chats:main-folded')"), '1');
       await until(async () => !(await v.ev("indexedDB.databases().then((l)=>l.some((d)=>d.name==='tophat-engine-old-guest'))")), 10_000, 'the old database deleted');
     } finally { await v.close(); }

@@ -16,6 +16,7 @@
     ".": "./src/index.mjs",
     "./interface": "./src/interface.mjs",
     "./hybrid": "./core/vendor/rev6/push/hybrid.mjs",
+    "./pages": "./core/vendor/rev6/push/pages.mjs",
     "./recency": "./core/vendor/rev6/push/recency.mjs",
     "./list": "./core/vendor/rev6/push/list.mjs",
     "./support": "./core/vendor/rev6/push/support.mjs",

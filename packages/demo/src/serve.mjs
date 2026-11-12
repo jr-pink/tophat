@@ -21,6 +21,7 @@ import { createFeed, pieceDelayMs, tokenPieces } from './stream.mjs';
 import { COOKIE_NAME, Guests, emailOf, scopeOf, scopeSettings, verifyTurnstile } from './guests.mjs';
 import { renderFallback } from '../fallback/render.mjs';
 import { pinAction } from './pin.mjs';
+import { graphRoute } from './graph-route.mjs';
 import { OPENER_GEN_ID, OPENER_ID, SEED_RETIRED_SCOPE, forkIdOf, forkSeedChat, isSeedId, retire, loadTemplates, openStore, openerGenOf, seedGuest, seedOpener, seedRowsOf } from './seed-chats.mjs';
 
 /** How long after the opener is sent the answer begins to stream. */
@@ -57,12 +58,15 @@ export async function serve(c) {
   const scopes = { orgDomain };
   const model = c.visitors?.model || 'claude-haiku-5-5';
   const widgetsDir = path.join(DEMO, 'widgets');
+  const graph = graphRoute({ assets: c.viewerAssets || path.join(DEMO, '../viewer/assets'), snapshot: c.snapshot });
   const description = path.join(DEMO, 'content/description.md');
   const contextFile = path.join(DEMO, 'content/agent-context.md');
   const repo = c.downloadUrl || 'https://github.com/tophat-md/tophat';
   const edgeSecret = c.edgeSecretFile ? readFileSync(c.edgeSecretFile, 'utf8').trim() : null;
   const turnstileSecret = c.turnstile?.secretFile ? readFileSync(c.turnstile.secretFile, 'utf8').trim() : null;
   const siteKey = c.turnstile?.siteKey || '';
+  // `streamSpeed` (config, default 1) divides the pause between streamed pieces: the scratch-instance tests set it so a 10 s answer takes about a second; unset, the stream is unchanged
+  const pieceWait = (piece) => pieceDelayMs(piece) / (Number(c.streamSpeed) > 0 ? Number(c.streamSpeed) : 1);
 
   // what the day has really cost: the runner's own cost on each completed run, cached for 30 s
   const ro = new DatabaseSync(dbPath, { readOnly: true });
@@ -116,10 +120,15 @@ export async function serve(c) {
   const introCss = () => readFileSync(path.join(HERE, 'intro.css'), 'utf8');
   // the theme trial and the desktop frame of very large screens, served after intro.css as /_demo/page.css
   const THEME_CSS = "/* trial: the warm pastel rose as the chat accent, in place of the orange */html:root{--accent:#e6a0a6;--accent-soft:#e6a0a622}@media (prefers-color-scheme:light){html:root{--accent:#b45c6e;--accent-soft:#b45c6e1a}}";
-  const BIGSCREEN_CSS = "@media (min-width:1900px) and (min-height:950px){:root{--th-ww:min(108rem,calc(100vw - 160px));--th-wh:min(calc(var(--th-ww) * 0.62),calc(100vh - 140px));--th-tb:30px;--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}@media (prefers-color-scheme:dark){:root{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}}:root[data-theme=light]{--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}:root[data-theme=dark]{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}html,body{height:100%;background:var(--th-desk)!important}body{margin:0;display:grid;place-items:center;overflow:hidden}body>div[style*=\"contents\"]{display:block!important;width:var(--th-ww);height:calc(var(--th-wh) - var(--th-tb));margin-top:var(--th-tb);position:relative;overflow:hidden;transform:translateZ(0);border-radius:0 0 10px 10px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 30px 90px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.12);background:var(--bg,#fff)}body>div[style*=\"contents\"] .app{height:100%!important}body::before,body::after{position:fixed;left:calc(50vw - var(--th-ww) / 2);top:calc(50vh - var(--th-wh) / 2);width:var(--th-ww);height:var(--th-tb);z-index:1;pointer-events:none}body::before{content:\"\";border-radius:10px 10px 0 0;box-shadow:0 0 0 1px rgba(0,0,0,.14);background:radial-gradient(circle at 18px 50%,#ff5f57 5.5px,transparent 6px),radial-gradient(circle at 38px 50%,#febc2e 5.5px,transparent 6px),radial-gradient(circle at 58px 50%,#28c840 5.5px,transparent 6px),var(--th-chrome)}body::after{content:\"tophat\";text-align:center;line-height:var(--th-tb);font:12px/30px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink)}}";
-  const pageCss = () => introCss() + '\n' + THEME_CSS + '\n' + BIGSCREEN_CSS;
+  // the demo has one surface, so the section pill (notes / chats / fnf) is not shown; the menu button inside it stays (chat list, search), and
+  // it keeps the pill's place in the sidebar header and in the corner tab the collapsed list leaves. A CSS rule, not a change to the app.
+  const NAV_CSS = "[data-testid=nav-pill]{border-color:transparent!important;background:transparent!important;padding:0!important}[data-testid=nav-pill] a.tab,[data-testid=nav-pill] .sep{display:none!important}";
+  const BIGSCREEN_CSS = "@media (min-width:1900px) and (min-height:950px){:root[data-th-full]{--th-tb:0px}:root{--th-ww:min(108rem,calc(100vw - 160px));--th-wh:min(calc(var(--th-ww) * 0.62),calc(100vh - 140px));--th-tb:30px;--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}@media (prefers-color-scheme:dark){:root{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}}:root[data-theme=light]{--th-desk:#ece6d8;--th-chrome:#dcd6c8;--th-ink:#5a554c}:root[data-theme=dark]{--th-desk:#0d0d0d;--th-chrome:#262626;--th-ink:#9a9a9a}html,body{height:100%;background:var(--th-desk)!important}body{margin:0;display:grid;place-items:center;overflow:hidden}body>div[style*=\"contents\"]{display:block!important;width:var(--th-ww);height:calc(var(--th-wh) - var(--th-tb));margin-top:var(--th-tb);position:relative;overflow:hidden;transform:translateZ(0);border-radius:0 0 10px 10px;box-shadow:0 0 0 1px rgba(0,0,0,.14),0 30px 90px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.12);background:var(--bg,#fff)}body>div[style*=\"contents\"] .app{height:100%!important}}";
+  const windowCss = () => readFileSync(path.join(HERE, 'window.css'), 'utf8'); // the desktop window's bar, traffic lights, dock chip and closed screen (window.js drives them)
+  const windowJs = () => readFileSync(path.join(HERE, 'window.js'), 'utf8');
+  const pageCss = () => introCss() + '\n' + THEME_CSS + '\n' + NAV_CSS + '\n' + BIGSCREEN_CSS + '\n' + windowCss();
   // the head's first script: the guest's local reset, the caret drawn at the first paint and the intro state request, then the figure prefetch
-  const CARET_JS = "(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&q.get('fresh')==='1')document.documentElement.classList.add('demo-intro');if(i&&q.get('fresh')!=='1'){var h=document.documentElement;h.classList.add('demo-intro');var k=document.createElement('div');k.id='demo-intro';k.innerHTML='<div class=\"bg\"></div><div class=\"stars\"></div><div class=\"line\"><span class=\"msg\"></span><i class=\"caret idle\"></i><b class=\"send\"></b></div>';h.appendChild(k);window.__demoCaretAt=performance.now();setTimeout(function(){if(!window.__demoIntroOwned){h.classList.remove('demo-intro');k.remove()}},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();";
+  const CARET_JS = "(function(){var q=new URLSearchParams(location.search),c=q.get('chat');var i=!c||/^opener-/.test(c);if(i&&q.get('fresh')==='1')document.documentElement.classList.add('demo-intro');if(i&&q.get('fresh')!=='1'){var h=document.documentElement;h.classList.add('demo-intro');window.__demoCaretAt=performance.now();setTimeout(function(){if(!window.__demoIntroOwned){h.classList.remove('demo-intro')}},9000)}if(q.get('fresh')==='1')return;window.__demoBoot=fetch(i?'/_demo/intro':'/_demo/state',{method:i?'POST':'GET',credentials:'same-origin',cache:'no-store'}).then(function(r){return r.status===401?{gone:true}:r.ok?r.json():null},function(){return null})})();";
   const earlyJs = () => `(function(){${guestReset()}})();\n${CARET_JS}\n${prefetchJs()}`;
 
   // ---- the intro chat ----
@@ -193,7 +202,7 @@ export async function serve(c) {
       await new Promise((r) => setTimeout(r, OPENER_ANSWER_DELAY_MS));
       for (const piece of tokenPieces(answer)) {
         store.append(id, 'assistant.delta', { itemId, text: piece }, { at: at() });
-        await new Promise((r) => setTimeout(r, pieceDelayMs(piece)));
+        await new Promise((r) => setTimeout(r, pieceWait(piece)));
       }
       store.append(id, 'assistant.message', { itemId, text: answer }, { at: at() });
       store.append(id, 'run.completed', { costUsd: 0 }, { at: at() });
@@ -216,7 +225,7 @@ export async function serve(c) {
       await new Promise((r) => setTimeout(r, 400));
       for (const piece of tokenPieces(answer)) {
         store.append(id, 'assistant.delta', { itemId, text: piece }, { at: at() });
-        await new Promise((r) => setTimeout(r, pieceDelayMs(piece)));
+        await new Promise((r) => setTimeout(r, pieceWait(piece)));
       }
       store.append(id, 'assistant.message', { itemId, text: answer }, { at: at() });
       store.append(id, 'run.completed', { costUsd: 0 }, { at: at() });
@@ -251,7 +260,7 @@ export async function serve(c) {
         r.on('data', (d) => chunks.push(d));
         r.on('end', () => {
           let html = Buffer.concat(chunks).toString('utf8');
-          const tag = `<script>window.__tophatSurfaces=${JSON.stringify(SURFACES)};</script>${metaTags(description)}<link rel="stylesheet" id="demo-css" href="/_demo/page.css?v=${assetVersion(pageCss())}"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><noscript><meta http-equiv="refresh" content="0;url=/_demo/text?why=nojs"></noscript><script src="/_demo/shim.js?v=${shimVersion()}" defer></script>`;
+          const tag = `<script>window.__tophatSurfaces=${JSON.stringify(SURFACES)};</script>${metaTags(description)}<link rel="stylesheet" id="demo-css" href="/_demo/page.css?v=${assetVersion(pageCss())}"><link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><noscript><meta http-equiv="refresh" content="0;url=/_demo/text?why=nojs"></noscript><script src="/_demo/shim.js?v=${shimVersion()}" defer></script><script src="/_demo/window.js?v=${assetVersion(windowJs())}" defer></script>`;
           // First thing in the head, before any stylesheet: the visitor's state request starts while the page parses, not after the shim has loaded.
           // The shim reads `window.__demoBoot` (same rule as its own `bootState`). Everything the demo adds that changes between releases (early.js,
           // page.css, shim.js) is a revalidated URL, never inline: the app's service worker answers a returning visitor's navigation from the page it
@@ -301,6 +310,7 @@ export async function serve(c) {
         if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': NO_STORE_ASSET }); return res.end(); }
         res.writeHead(200, headers('text/javascript; charset=utf-8', { 'cache-control': NO_STORE_ASSET, etag })); return res.end(shimJs());
       }
+      if (p === '/_demo/window.js') { const body = windowJs(), etag = `"${assetVersion(body)}"`; if (req.headers['if-none-match'] === etag) { res.writeHead(304, { etag, 'cache-control': NO_STORE_ASSET }); return res.end(); } res.writeHead(200, headers('text/javascript; charset=utf-8', { 'cache-control': NO_STORE_ASSET, etag })); return res.end(body); }
       if (p === '/_demo/text') { res.writeHead(200, headers('text/html; charset=utf-8', { 'cache-control': 'no-store' })); return res.end(textPage({ file: description, contextFile, repo, markdown: md, why: u.searchParams.get('why') === 'nojs' ? 'nojs' : 'check', siteKey, canVerify: true })); }
       // early.js and page.css: revalidated on every load like shim.js (see the page injection above)
       if (p === '/_demo/early.js' || p === '/_demo/page.css') {
@@ -309,10 +319,13 @@ export async function serve(c) {
         res.writeHead(200, headers(js ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8', { 'cache-control': NO_STORE_ASSET, etag })); return res.end(body);
       }
       if (p === '/_demo/intro.css') { res.writeHead(200, headers('text/css; charset=utf-8', { 'cache-control': NO_STORE_ASSET })); return res.end(introCss()); }
-      if (/^\/(favicon\.svg|favicon\.ico|favicon-(16|32|192|512)\.png|apple-touch-icon\.png|og\.png)$/.test(p)) {
+      if (/^\/(favicon\.svg|favicon\.ico|favicon-(16|32|192|512)\.png|apple-touch-icon\.png|og\.png|dock-icon-rose\.png)$/.test(p)) {
         const f = path.join(DEMO, 'public', p.slice(1));
         if (existsSync(f)) { res.writeHead(200, headers(p.endsWith('.svg') ? 'image/svg+xml' : p.endsWith('.ico') ? 'image/x-icon' : 'image/png', { 'cache-control': 'public, max-age=86400' })); return res.end(readFileSync(f)); }
       }
+
+      // the memory viewer over the demo's own snapshot: public, read-only, no session
+      if (graph(req, res, p)) return;
 
       // ---- who is asking ----
       let session = guests.verify(cookieOf(req, COOKIE));

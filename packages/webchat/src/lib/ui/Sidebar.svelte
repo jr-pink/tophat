@@ -1,5 +1,7 @@
 <script>
   import { automatedTitle } from '$lib/core/title.js';
+  import { plainText } from '$lib/core/summary.js';
+  import { indicatorOf } from '$lib/core/rowstate.js';
   import Icon from './Icon.svelte';
   import Nav from './Nav.svelte';
   import SwipeRow from './SwipeRow.svelte';
@@ -31,6 +33,7 @@
     activeId = null,
     openIds = [],
     onselect = () => {},
+    onkeep = () => {},
     onopenbeside = () => {},
     onnew = () => {},
     onsearch = () => {},
@@ -383,7 +386,9 @@
   const focusKey = $derived(workspace && tree.all.includes(folderKey(workspace)) ? folderKey(workspace) : null);
   const crumbs = $derived(focusKey ? pathTo(tree, focusKey).filter((k) => k !== UNFILED) : []);
   const inFocus = (row) => !focusKey || inSubtree(row, workspace, tree);
-  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived }));
+  // Demo page only: tophat.md's reset script sets this so a folder's own chats sit directly under it, above its subfolders, with no Misc row.
+  const demoInlineOwn = typeof localStorage !== 'undefined' && localStorage.getItem('tophat-demo-inline-own') === '1';
+  const items = $derived(explorerRows(searching ? rows : rows.filter(inFocus), { names: allWorkspaces, layout: wsLayout, focus: focusKey ? workspace : null, isOpen, searching, newIn: searching ? null : $sb.newIn, isArchived: isArchivedFolder, showArchived: $sb.showArchived , inlineOwn: demoInlineOwn }));
   const focusCount = $derived(focusKey ? rows.filter((row) => canonicalWorkspace(row.workspace) && folderKey(canonicalWorkspace(row.workspace)) === focusKey).length : 0);
   // Keyboard order follows what is on screen: the tree, then the open trays.
   const trayItems = $derived([...(deferredOpen ? deferredRows : []), ...(asideOpen ? asideRows : []), ...(archivedOpen ? archivedRows : [])]
@@ -431,7 +436,7 @@
   function activate() {
     const it = navItems2.find((x) => x.id === cursor) || navItems2.find((x) => x.kind === 'chat');
     if (!it) return false;
-    if (it.kind === 'chat') { sb.dispatch('cursor.set', { addr: null }); onselect(it.row.id); } else setOpen(it.key, !it.open);
+    if (it.kind === 'chat') { sb.dispatch('cursor.set', { addr: null }); onselect(it.row.id, { preview: true }); } else setOpen(it.key, !it.open);
     return true;
   }
   const NAV = { ArrowDown: 'down', ArrowUp: 'up', ArrowRight: 'right', ArrowLeft: 'left', Home: 'home', End: 'end' };
@@ -545,7 +550,6 @@
       named && { id: 'new-chat', label: 'New Chat in Folder', run: () => { enter(name); onnew(); } },
       { id: 'new-folder', label: 'New Folder…', run: () => newFolder(named ? key : ROOT) },
       SEP,
-      named && { id: 'focus', label: 'Focus Folder', keys: 'Double-click', run: () => enter(name) },
       workspace && focusKey === key && { id: 'up', label: 'Show Parent', keys: 'Esc', run: () => enter(tree.parentOf(key) === ROOT ? null : nameForKey(tree.parentOf(key))) },
       { id: 'toggle', label: open ? 'Collapse' : 'Expand', keys: open ? '←' : '→', run: () => setOpen(key, !open) },
       named && tree.children(key).length && { id: 'expand-all', label: 'Expand All Inside', keys: '⌥-click', run: () => expandAllUnder(key, true) },
@@ -579,7 +583,11 @@
       { id: 'resort', label: 'Re-sort with Descriptions', run: () => resort([addr], { label: c.title || 'this chat' }) },
       SEP,
       { id: 'pin', label: c.pinned ? 'Unpin' : 'Pin', run: () => onpin(id, !c.pinned) },
-      !marksRead(c) && { id: 'unread', label: 'Mark Unread', run: () => onread(id, false) },
+      // Mark Read reads to now and leaves a live run loud (its finish shows unread); Mute When Closed reads it and keeps the
+      // run's finish quiet (mutedRun), offered only while the chat is running.
+      marksRead(c) ? { id: 'read', label: 'Mark Read', run: () => onread(id, true, { mute: false }) }
+        : { id: 'unread', label: 'Mark Unread', run: () => onread(id, false) },
+      indicatorOf(c) === 'live' && { id: 'mute', label: 'Mute When Closed', run: () => onread(id, true, { mute: true }) },
       { id: 'aside', label: c.aside ? 'Put Back' : 'Set Aside', keys: '⌘U', run: () => onaside(id, !c.aside) },
       { id: 'defer', label: 'Defer…', run: () => openDefer(id) },
       { id: 'archive', label: c.archived ? 'Unarchive' : 'Archive', keys: '⌘⌫', run: () => onarchive(id, !c.archived) },
@@ -672,7 +680,12 @@
     if (pick(`c:${id}`, event) === 'multi') { event.preventDefault(); return; }
     if (event.altKey) return;
     event.preventDefault();
-    onselect(id);
+    // A plain click opens the chat as the focused group's preview tab (VS Code); a double click keeps it (rowDblClick).
+    onselect(id, { preview: true });
+  }
+  function rowDblClick(event, id) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    onkeep(id);
   }
 
   // Deferring a chat. The sheet is the shared one, so a chat and a document are parked by the
@@ -826,6 +839,7 @@
     label="Archived"
     icon="archive"
     count={trays.archived}
+    countWhenClosed={false}
     open={archivedOpen}
     onopen={(next) => (archivedOpen = next)}
     note={trays.archivedLive ? `${trays.archivedLive} still running` : null}
@@ -962,9 +976,6 @@
               <button class="icon-btn press" tabindex="-1" onclick={() => startRename(name)} title="Rename" aria-label="Rename workspace" data-testid="rename-workspace"><Icon name="write" size={12} /></button>
             {/if}
             <button class="icon-btn press" tabindex="-1" onclick={(e) => openFolderMenu(e, key)} title="Move folder" aria-label="Move folder" data-testid="move-folder"><Icon name="more" size={12} /></button>
-            {#if name}
-              <button class="icon-btn press" tabindex="-1" onclick={() => enter(name)} title="Focus folder" aria-label="Focus folder" data-testid="enter-workspace"><Icon name="focus" size={12} /></button>
-            {/if}
           </span>
         {/if}
       </div>
@@ -1033,9 +1044,11 @@
         class="chat press focus-ring"
         class:active={row.id === activeId}
         class:inpane={row.id !== activeId && openIds.includes(row.id)}
+        class:muted={row.indicator === 'live-muted' && row.id !== activeId}
         class:sel={$sb.cursor === `c:${row.id}`} class:picked={isSel(`c:${row.id}`) && selected.size > 1}
         href="?chat={encodeURIComponent(row.id)}"
         onclick={(event) => rowClick(event, row.id)}
+        ondblclick={(event) => rowDblClick(event, row.id)}
         data-testid="chat-row"
         data-chat={row.id}
         draggable="true"
@@ -1045,14 +1058,13 @@
         <span class="text">
           <span class="name">{#if row.automated || automatedTitle(row.title).automated}<span class="auto" title="Opened by an automated event, not by the owner" data-testid="automated-tag">auto</span>{/if}{automatedTitle(row.title).text || row.title}</span>
           <span class="preview">
-            {#if deferLabel(row, now)}<span class="until">{deferLabel(row, now)}</span>{:else}{excerpts.get(row.id) || row.preview || '—'}{/if}
+            {#if deferLabel(row, now)}<span class="until">{deferLabel(row, now)}</span>{:else}{plainText(excerpts.get(row.id) || row.preview) || '—'}{/if}
           </span>
         </span>
         <span class="meta">
           
           <span class="mark" data-indicator={row.indicator}>
             {#if row.indicator === 'live'}<span class="dot live-dot"></span>
-            {:else if row.indicator === 'live-muted'}<span class="dot live-dot muted-dot"></span>
             {:else if row.indicator === 'unread'}<span class="dot unread-dot"></span>
             {:else}<span class="time">{ago(row.activeAt || row.updatedAt)}</span>{/if}
           </span>
@@ -1084,6 +1096,8 @@
     padding: 20px clamp(12px, 4vw, 20px) 6px;
     padding-top: max(20px, env(safe-area-inset-top));
   }
+  /** Mute When Closed: no dot, and the row a touch grayer, until the run ends or the chat is opened. */
+  :global(.muted[data-testid="chat-row"]) { opacity: 0.6; }
   .auto { display: inline-block; margin-right: 5px; padding: 0 4px; border-radius: 3px; font-size: 10px; font-weight: 500; letter-spacing: 0.02em; vertical-align: 1px; color: var(--muted, #888); border: 1px solid currentColor; opacity: 0.8; }
   .title { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; letter-spacing: 0.01em; }
   .conn { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint); transition: background-color var(--panel) var(--ease); }
@@ -1125,6 +1139,15 @@
   .dim { opacity: 0.5; }
   .archtag { font-size: 10px; color: var(--ink-faint); border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
   .rowwrap { position: relative; --swipe-bg: var(--bg-sunken); }
+  /* Group hover: the row keeps its hover colour while the pointer is on its buttons (they sit beside the link, not in it),
+     and the buttons' left fade is that same colour, so the fade hides the text with no visible box edge.
+     Each highlight is a tint over the sidebar's --bg-sunken, so the opaque fade colour is the same mix over it.
+     :global(.chat) because Svelte would scope a `> *` step to this component and never match inside SwipeRow
+     (the owner 11-11 17:37: "it needs to match the actual bg color . which is usually a hover or active/selected color" [;] "there needs to be a group hover") */
+  .rowwrap:hover { --rowactions-bg: color-mix(in srgb, var(--ink) 5%, var(--bg-sunken)); }
+  .rowwrap:has(:global(.chat.sel)) { --rowactions-bg: color-mix(in srgb, var(--accent) 7%, var(--bg-sunken)); }
+  .rowwrap:has(:global(.chat.inpane)) { --rowactions-bg: color-mix(in srgb, var(--accent) 20%, var(--bg-sunken)); }
+  .rowwrap:has(:global(.chat.active)) { --rowactions-bg: color-mix(in srgb, var(--accent) 30%, var(--bg-sunken)); }
   .chat {
     display: flex; align-items: center; gap: 8px;
     width: 100%; text-align: left;
@@ -1134,7 +1157,7 @@
     
     color: inherit; text-decoration: none; cursor: pointer;
   }
-  .chat:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+  .rowwrap:hover .chat:not(.active):not(.inpane):not(.sel) { background: color-mix(in srgb, var(--ink) 5%, transparent); }
   .chat.active { background: color-mix(in srgb, var(--accent) 30%, transparent); }
   .chat.inpane { background: color-mix(in srgb, var(--accent) 20%, transparent); }
   
@@ -1213,7 +1236,7 @@
   .crumbs .count { margin-left: 4px; }
   .crumbacts { margin-left: auto; display: flex; gap: 2px; padding-left: 6px; }
   .crumbacts .icon-btn { width: 22px; height: 22px; }
-  .wshead { display: flex; align-items: center; border-radius: 7px; }
+  .wshead { position: relative; display: flex; align-items: center; border-radius: 7px; }
   .wshead:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
   .wshead.drop, .wscur.drop { box-shadow: inset 0 0 0 1px var(--accent); }
   .wstoggle {
@@ -1223,9 +1246,9 @@
   .wstoggle .wsname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .caret { display: inline-flex; color: var(--ink-faint); transition: transform var(--tap, 120ms) var(--ease, ease); }
   .caret.down { transform: rotate(90deg); }
-  .wsacts { display: flex; gap: 2px; padding-right: 4px; opacity: 0; }
-  .wshead:hover .wsacts, .wshead:focus-within .wsacts { opacity: 1; }
-  @media (hover: none) { .wsacts { opacity: 1; } }
+  .wsacts { position: absolute; right: 0; top: 0; bottom: 0; align-items: center; display: flex; gap: 2px; padding: 0 4px 0 14px; opacity: 0; pointer-events: none; border-radius: 0 7px 7px 0; background: linear-gradient(to right, transparent, var(--bg-sunken) 14px); }
+  .wshead:hover .wsacts, .wshead:focus-within .wsacts { opacity: 1; pointer-events: auto; }
+  @media (hover: none) { .wsacts { opacity: 1; pointer-events: auto; position: static; background: none; padding: 0 4px 0 0; } }
   .wsacts .icon-btn { width: 22px; height: 22px; }
   .wsrename { flex: 1; padding: 3px 4px; display: flex; }
   .wsbody { padding-left: 10px; }

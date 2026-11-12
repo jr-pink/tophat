@@ -2,9 +2,10 @@
   // One editor group's tab strip (the top of a pane). Output only: the tabs, the active one, the drop indicator and the
   // dragged tab all come from the kit's panes state (core/panes-state.js) through the page; every gesture here reports to
   // the page, which turns it into one absolute action (tab.activate, tab.close, a drag through core/tab-drag.js).
+  // `preview` is the group's preview tab (core/panels.js): shown in italic, as VS Code does; a double click keeps it.
   import Icon from './Icon.svelte';
 
-  let { group, tabs = [], active = null, focused = false, drag = null, ondown = () => {}, onclose = () => {}, onnew = () => {} } = $props();
+  let { group, tabs = [], active = null, preview = null, focused = false, inset = 0, drag = null, ondown = () => {}, onclose = () => {}, onnew = () => {}, onkeep = () => {} } = $props();
 
   let strip = $state(null);
   const dropAt = $derived(drag?.over?.kind === 'strip' && drag.over.group === group ? drag.over.index : null);
@@ -30,14 +31,15 @@
   }
 </script>
 
-<div class="tabstrip" class:focused data-testid="tabstrip" data-group={group} data-ctx="tabstrip" data-ctx-group={group} role="tablist" tabindex="-1" aria-label="Tabs"
+<div class="tabstrip" class:focused data-testid="tabstrip" data-group={group} data-ctx="tabstrip" data-ctx-group={group} role="tablist" tabindex="-1" aria-label="Tabs" style:padding-left={inset ? `${inset}px` : null}
   ondblclick={(event) => { if (event.target === strip) onnew(); }}>
   <div class="tabs" bind:this={strip} onwheel={wheel} data-testid="tabs">
     {#each tabs as tab, index (tab.id)}
       {#if dropAt === index}<span class="drop" aria-hidden="true" data-testid="tab-drop"></span>{/if}
-      <div class="tab" class:active={tab.id === active} class:dragging={drag?.chat === tab.id && drag?.from === group}
+      <div class="tab" class:active={tab.id === active} class:preview={tab.id === preview} data-preview={tab.id === preview ? 'true' : null} class:dragging={drag?.chat === tab.id && drag?.from === group}
         role="tab" tabindex="-1" aria-selected={tab.id === active} data-tab={tab.id} data-testid="tab" data-ctx="tab" data-ctx-group={group} data-ctx-chat={tab.id} title={tab.title}
         onpointerdown={(event) => down(event, tab.id)}
+        ondblclick={(event) => { if (!event.target.closest?.('.x')) onkeep(tab.id); }}
         onauxclick={(event) => { if (event.button === 1) { event.preventDefault(); onclose(tab.id); } }}>
         <span class="label">{#if tab.automated}<span class="auto" data-testid="automated-tag">auto</span>{/if}{tab.title}</span>
         <button class="x press" type="button" tabindex="-1" aria-label="Close tab" data-testid="tab-close"
@@ -72,6 +74,7 @@
   }
   .focused .tab.active::after { background: var(--accent); }
   .tab.dragging { opacity: 0.45; }
+  .tab.preview .label { font-style: italic; }
   .drop { flex: 0 0 0; position: relative; z-index: 2; }
   .drop::before { content: ''; position: absolute; top: 3px; bottom: 3px; left: -1px; width: 2px; background: var(--accent); }
   .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

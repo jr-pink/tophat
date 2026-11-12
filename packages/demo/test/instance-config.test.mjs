@@ -17,6 +17,13 @@ test('the policy carries public prompt mode and no transcript writes', () => {
   assert.equal(env.TOPHAT_RUNNER_TOOLS_ALLOW, 'memory_search,memory_read');
 });
 
+test('the policy gives the demo a fast model for titles and folder routing, by keyring reference only', () => {
+  const fast = readPolicy().models.fast;
+  assert.ok(fast.baseUrl && fast.model, 'without models.fast a guest chat is never filed (autoroute has no model)');
+  assert.deepEqual(fast.credential, { keyring: 'fast-model-api-key' });
+  assert.ok(!('apiKey' in fast));
+});
+
 test('apply fills what is missing, keeps the rest and the mode, and a second run writes nothing', () => {
   const d = dir();
   try {

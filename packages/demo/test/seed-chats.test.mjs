@@ -39,14 +39,14 @@ const noDuplicateTitles = (rows) => {
 };
 const seed = (store, guest, tpls, now) => seedGuest(store, { guest, scope: scopeOf(guest), templates: tpls, model: 'claude-haiku-5-5', now });
 
-test('the seed definition is 8 chats in three folders plus the intro chat, the intro chat in the personal assistant project folder', () => {
+test('the seed definition is 12 chats in four folders plus the intro chat, the intro chat in the personal assistant project folder', () => {
   const { dir } = fixture();
   try {
     const t = templates(dir);
-    assert.equal(t.filter((x) => !x.opener).length, 8);
+    assert.equal(t.filter((x) => !x.opener).length, 12);
     const by = {};
     for (const x of t.filter((y) => !y.opener)) by[x.workspace] = (by[x.workspace] || 0) + 1;
-    assert.deepEqual(by, { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
+    assert.deepEqual(by, { healthhh: 2, tophat: 4, faqs: 4, 'curiosity / collection': 2 });
     assert.equal(t.find((x) => x.opener).workspace, 'personal assistant project', 'the intro chat is in the personal assistant project folder, not the Inbox');
     assert.deepEqual(t.filter((x) => x.workspace === 'tophat').map((x) => x.title).sort(),
       ['current memory graph', 'how does the memory bench work', 'how sharing works', 'whats new this week']);
@@ -55,20 +55,20 @@ test('the seed definition is 8 chats in three folders plus the intro chat, the i
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('seeding twice writes nothing the second time: 8 chats, no duplicate titles in a folder, identical ids', () => {
+test('seeding twice writes nothing the second time: 12 chats, no duplicate titles in a folder, identical ids', () => {
   const { dir } = fixture(); const store = openStore(path.join(dir, 'events.sqlite'));
   try {
     const t = templates(dir), now = Date.parse('2026-11-10T12:00:00Z');
     const first = seed(store, GUEST, t, now);
-    assert.equal(first.created, 8);
+    assert.equal(first.created, 12);
     const before = listed(store, GUEST), cursor = store.cursor();
     const second = seed(store, GUEST, t, now + 3_600_000);
-    assert.deepEqual(second, { created: 0, retired: 0, kept: 8 });
+    assert.deepEqual(second, { created: 0, retired: 0, kept: 12 });
     assert.equal(store.cursor(), cursor, 'no event written');
     const after = listed(store, GUEST);
     assert.deepEqual(after.map((r) => r.id).sort(), before.map((r) => r.id).sort());
-    assert.deepEqual(folders(after), { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
-    assert.equal(after.filter((r) => !r.side).length, 8);
+    assert.deepEqual(folders(after), { healthhh: 2, tophat: 4, faqs: 4, 'curiosity / collection': 2 });
+    assert.equal(after.filter((r) => !r.side).length, 12);
     noDuplicateTitles(after);
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -85,7 +85,7 @@ test('a release: old versions and dropped chats are retired with the drop marker
     }
     seed(store, GUEST, t, now);
     const mid = listed(store, GUEST);
-    assert.equal(mid.filter((r) => !r.side).length, 8, 'the old rows are out of the guest\'s scope');
+    assert.equal(mid.filter((r) => !r.side).length, 12, 'the old rows are out of the guest\'s scope');
     assert.ok(!mid.some((r) => r.id.startsWith('rrf-') && !/-[0-9a-f]{8}-/.test(r.id)), 'old side chat gone too');
     assert.equal(store.conversation(`rrf-${short}`).scope, SEED_RETIRED_SCOPE);
     const marker = store.conversationEvents(`rrf-${short}`).find((e) => e.kind === 'conversation.meta' && e.content.scopeMove);
@@ -93,14 +93,14 @@ test('a release: old versions and dropped chats are retired with the drop marker
     // then a later release edits one chat and the live chat's answer changes
     const t2 = templates(dir, 'a newer weekly answer').map((x) => (x.id === 'bench' ? { ...x, title: 'mem bench, new numbers' } : x));
     const r = seed(store, GUEST, t2, now + 86_400_000);
-    assert.deepEqual([r.created, r.retired, r.kept], [2, 2, 6]);
+    assert.deepEqual([r.created, r.retired, r.kept], [2, 2, 10]);
     const after = listed(store, GUEST);
-    assert.equal(after.filter((x) => !x.side).length, 8);
-    assert.deepEqual(folders(after), { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
+    assert.equal(after.filter((x) => !x.side).length, 12);
+    assert.deepEqual(folders(after), { healthhh: 2, tophat: 4, faqs: 4, 'curiosity / collection': 2 });
     noDuplicateTitles(after);
     assert.ok(!after.some((x) => x.title === 'how does the memory bench work'));
     // and a third pass on the same release changes nothing
-    assert.deepEqual(seed(store, GUEST, t2, now + 2 * 86_400_000), { created: 0, retired: 0, kept: 8 });
+    assert.deepEqual(seed(store, GUEST, t2, now + 2 * 86_400_000), { created: 0, retired: 0, kept: 12 });
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -129,7 +129,7 @@ test('a message to a starter chat forks it: the seed row is not written to, the 
     seedOpener(store, { id: `opener-${GUEST.slice(0, 10)}`, template: t.find((x) => x.opener), scope: scopeOf(GUEST), model: 'claude-haiku-5-5', now });
     const rows = listed(store, GUEST);
     assert.equal(rows.find((r) => r.id.startsWith('opener-')).workspace, 'personal assistant project');
-    assert.deepEqual(folders(rows), { healthhh: 2, tophat: 4, 'curiosity / collection': 2 });
+    assert.deepEqual(folders(rows), { healthhh: 2, tophat: 4, faqs: 4, 'curiosity / collection': 2 });
     const src = seedRowsOf(store, { scope: scopeOf(GUEST), guest: GUEST }).find((id) => id.startsWith('bench-'));
     const before = store.conversationEvents(src).map((e) => e.cursor);
     const forkId = forkIdOf(src, GUEST);
@@ -145,7 +145,7 @@ test('a message to a starter chat forks it: the seed row is not written to, the 
     // a re-seed and a release leave the fork alone, and it is not a starter chat
     seed(store, GUEST, t, now + 1e6);
     assert.ok(store.conversation(forkId) && store.conversation(forkId).scope === scopeOf(GUEST) && !isSeedId(forkId, GUEST));
-    assert.equal(plannedSeed(t, GUEST).size, 8);
+    assert.equal(plannedSeed(t, GUEST).size, 12);
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -160,7 +160,8 @@ test('read state: a chat marked read is read through its last message, the rest 
       'switch to dumbbell bench?': 'unread', 'pistol squat progression': 'read',
       'values study': 'unread',
       'whats new this week': 'unread', 'how does the memory bench work': 'unread', 'how sharing works': 'read', 'current memory graph': 'read',
-      'encyclopedia cave, what was that place': 'read'
+      'encyclopedia cave, what was that place': 'read',
+      'how is this different from other assistants': 'read', 'how do you make money': 'read', 'where does my data go': 'read', 'what do i need to run it': 'read'
     });
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -174,10 +175,34 @@ test('the guest-reset script lays the folders out in the seed\'s order, health a
   new Function('localStorage', 'document', 'indexedDB', 'window', 'navigator', src)(storage, doc, { deleteDatabase() {} }, {}, {});
   assert.equal(ls.get('qk:old-chat-cache'), undefined, 'every load starts from nothing');
   const rec = JSON.parse(ls.get('tophat-workspaces:chats'));
-  assert.deepEqual(rec.names, ['healthhh', 'personal assistant project', 'tophat', 'curiosity / collection']);
-  assert.deepEqual(rec.layout.order.slice(0, 4), rec.names);
+  assert.deepEqual(rec.names, ['healthhh', 'personal assistant project', 'tophat', 'faqs', 'curiosity / collection']);
+  assert.deepEqual(rec.layout.order.slice(0, 5), rec.names);
+  assert.deepEqual(rec.layout.parent, { faqs: 'tophat' });
   assert.deepEqual(rec.open, ['personal assistant project', 'tophat']);
   assert.equal(ls.get('tophat-workspaces:chats:main-folded'), '1');
   const seedFolders = new Set(JSON.parse(readFileSync(FILE, 'utf8')).chats.map((c) => c.workspace).filter(Boolean));
   assert.deepEqual([...seedFolders].sort(), [...rec.names].sort(), 'the folders the chats name are the folders the page lays out');
+});
+
+test('the guest-reset script drops the window\'s pane layout and sends a reload of a non-opener chat back to the opener', () => {
+  const src = readFileSync(path.join(DEMO, 'src/guest-reset.js'), 'utf8');
+  const run = (search, type) => {
+    const ss = new Map([['qk:panes', '{"layout":{"tabs":[["weekly-1","opener-1"]]}}'], ['qk:landed', 'x'], ['sveltekit:scroll', '{}'], ['demo-tune', '{}'], ['tophat.window-seen', '1']]);
+    const sessionStorage = { getItem: (k) => ss.get(k) ?? null, setItem: (k, v) => ss.set(k, String(v)), removeItem: (k) => ss.delete(k), ...{ keys: () => [...ss.keys()] } };
+    Object.defineProperty(sessionStorage, 'keys', { enumerable: false, value: sessionStorage.keys });
+    const proxy = new Proxy(sessionStorage, { ownKeys: () => [...ss.keys()], getOwnPropertyDescriptor: (t, k) => (ss.has(k) ? { enumerable: true, configurable: true, value: ss.get(k) } : Reflect.getOwnPropertyDescriptor(t, k)) });
+    const to = []; const location = { search, replace: (u) => to.push(u) };
+    const performance = { getEntriesByType: () => [{ type }] };
+    const ls = new Map();
+    const storage = { clear: () => ls.clear(), setItem: (k, v) => ls.set(k, v), getItem: (k) => ls.get(k) ?? null, removeItem: (k) => ls.delete(k) };
+    new Function('sessionStorage', 'location', 'performance', 'localStorage', 'document', 'indexedDB', 'window', 'navigator', src)(proxy, location, performance, storage, { cookie: 'demo_guest=a' }, { deleteDatabase() {} }, {}, {});
+    return { ss, to };
+  };
+  const a = run('?chat=weekly-ac6fb532-5bbfc5e24a', 'reload');
+  assert.deepEqual(a.to, ['/'], 'a reload on another chat goes to the opener');
+  assert.match(readFileSync(path.join(DEMO, 'src/shim.js'), 'utf8'), /const fail = \(why\) => \{ if \(failed \|\| window\.__demoBounce\) return;/, 'the page that is leaving does not report its aborted requests as a failed check');
+  assert.deepEqual([...a.ss.keys()].sort(), ['demo-tune', 'tophat.window-seen'], 'the pane layout and landing record are gone; the demo\'s own keys stay');
+  assert.deepEqual(run('?chat=weekly-ac6fb532-5bbfc5e24a', 'navigate').to, [], 'a followed link to a chat is left alone');
+  assert.deepEqual(run('?chat=opener-5bbfc5e24a-1', 'reload').to, [], 'a reload on the opener stays');
+  assert.deepEqual(run('', 'reload').to, []);
 });

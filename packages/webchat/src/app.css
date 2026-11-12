@@ -146,7 +146,7 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 
 .md-code-open { border-left: 2px solid var(--accent); }
 
-.md-code { position: relative; }
+.md-code-box { position: relative; }
 .md-copy {
   position: absolute; top: 4px; right: 4px;
   display: inline-flex; align-items: center; justify-content: center; padding: 4px 5px; border-radius: 6px;
@@ -156,7 +156,7 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 .md-copy .md-copy-ok { display: none; }
 .md-copy[data-done] .md-copy-i { display: none; }
 .md-copy[data-done] .md-copy-ok { display: block; color: var(--live); }
-.md-code:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
+.md-code-box:hover .md-copy, .md-copy:focus-visible { opacity: 1; }
 @media (hover: none) { .md-copy { opacity: 1; } }
 
 .md-path {
@@ -255,3 +255,12 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 /* tophat's own notes: a wavy underline on the words and a label on the card, so what he reads
    back as his own thinking is his. */
 ::highlight(reader-tophat) { text-decoration: underline; text-decoration-style: wavy; text-underline-offset: 4px; }
+
+/** Inside the tophat desktop shell (its preload sets html[data-desktop]; ~/projects/tophat/apps/tophat-desktop): the
+ *   window has no title bar, so the macOS traffic lights sit over the top of the sidebar. Its header makes room for them
+ *   and is the window's drag handle; its controls stay clickable.
+ */
+html[data-desktop='darwin'] .sidebar > header { padding-top: 42px; -webkit-app-region: drag; }
+html[data-desktop='darwin'] .sidebar > header :is(button, a, input, select, nav, [role='button'], [role='tab']) { -webkit-app-region: no-drag; }
+html[data-desktop='darwin'] .tabstrip { -webkit-app-region: drag; }
+html[data-desktop='darwin'] .tabstrip :is(button, a, input, [role='tab'], [draggable='true']) { -webkit-app-region: no-drag; }

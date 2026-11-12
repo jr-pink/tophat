@@ -3,7 +3,7 @@
 import { RUN_STATES, compareEvents, normalizeSettings, validateEvent } from './contract.js';
 import { blankRow, rowPatch, runPatch } from './rowstate.js';
 import { parseWhenClosed, streamingPreview } from './partial-json.js';
-import { summarize } from './summary.js';
+import { clipHead, clipTail, plainText, summarize } from './summary.js';
 import { automatedTitle } from './title.js';
 import { backgroundEventText } from './automated-event.js';
 
@@ -142,7 +142,7 @@ function chunked(existing, cursor, text, patch) {
 }
 
 function previewOf(text) {
-  return String(text || '').replace(/\s+/gu, ' ').trim().slice(0, 180);
+  return clipHead(plainText(text), 180);
 }
 
 // A fork is born as "<parent> ↳" and takes its name from the first message he sends in it.
@@ -409,7 +409,7 @@ function applyEvent(draft, event) {
       settleThinking(draft, id, content.agentId);
       
       
-      if (!content.agentId) patchConversation(draft, id, at, { preview: previewOf(item.text.slice(-180)) });
+      if (!content.agentId) patchConversation(draft, id, at, { preview: clipTail(plainText(String(item.text || '').slice(-2000)), 180) });
       else patchConversation(draft, id, at, {});
       break;
     }

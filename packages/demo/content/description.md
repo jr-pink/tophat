@@ -25,7 +25,7 @@ How it works: a graph that ingests disconnected facts and builds knowledge over 
 
 </details>
 
-<details>
+<details data-stream="closed">
 <summary>**2. Customizable chat interface**</summary>
 
 A polished baseline chat interface, fully customizable just by asking.
@@ -34,9 +34,11 @@ A polished baseline chat interface, fully customizable just by asking.
 
 <!-- figure:runner-qol -->
 
+<!-- figure:auto-chat -->
+
 </details>
 
-<details>
+<details data-stream="closed">
 <summary>**3. MacOS integration and computer use**</summary>
 
 Tophat lives on a machine of yours so it can act as you.
@@ -53,7 +55,7 @@ So on a whim, you can say "next time i need to go somewhere check traffic and ub
 
 </details>
 
-<details>
+<details data-stream="closed">
 <summary>**4. Connectors enough to capture full context**</summary>
 
 Email, instant messaging, REST APIs, and webhooks included.
@@ -66,7 +68,7 @@ Or build your own with just a few prompts (and share a PR!)
 
 </details>
 
-<details>
+<details data-stream="closed">
 <summary>**5. Per-memory e2ee p2p sharing for collaborative projects.**</summary>
 
 Per-fact permissions so peers can collaborate while keeping some secrets. ([technical post](https://github.com/tophat-md/tophat/blob/main/README.md#sharing-devices-and-cross-scope-pages))
@@ -75,10 +77,10 @@ Per-fact permissions so peers can collaborate while keeping some secrets. ([tech
 
 </details>
 
-<details>
+<details data-stream="closed">
 <summary>**6. All local, private, fully customizable, and open-source.**</summary>
 
-Code is open for customization. Memories live in sqlite and markdown. Tophat is for you, forever.
+Code is open for customization. Memories live in a local sqlite of markdown. Tophat is for you, forever.
 
 </details>
 

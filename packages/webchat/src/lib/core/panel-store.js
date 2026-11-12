@@ -11,18 +11,25 @@
 // Version 2: each pane is an editor group with an ordered list of tabs (`tabs`), `panels[i]` being its active tab. A
 // version-1 layout (one chat per pane) upgrades to groups with one tab each (upgradeLayout), through the kit's migration
 // of the saved record and through the old `tophat.panes` import.
-import { MAX_PANELS, MIN_WIDTH, violations } from './panels.js';
+//
+// Version 3: each group carries its preview tab (`preview[i]`, a chat id or null; VS Code's italic tab, core/panels.js). A
+// version-1 or -2 layout upgrades with no preview tab in any group.
+import { MAX_PANELS, MIN_WIDTH, previewOf, violations } from './panels.js';
 import { isIncognito } from './incognito.js';
 
 export const LAYOUT_KEY = 'tophat.panes';
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 const clean = (value) => typeof value === 'string' && value.length > 0;
 
-// A version-1 layout (no tabs) as groups with one tab each; anything else comes back as it is.
+// An older layout in the current shape: a version-1 layout (no tabs) as groups with one tab each, a version-1 or -2 one
+// (no preview) with no preview tab anywhere; anything else comes back as it is.
 export function upgradeLayout(layout) {
-  if (!layout || typeof layout !== 'object' || Array.isArray(layout.tabs) || !Array.isArray(layout.panels)) return layout;
-  return { ...layout, tabs: layout.panels.map((id) => [id]) };
+  if (!layout || typeof layout !== 'object' || !Array.isArray(layout.panels)) return layout;
+  let next = layout;
+  if (!Array.isArray(next.tabs)) next = { ...next, tabs: next.panels.map((id) => [id]) };
+  if (!Array.isArray(next.preview)) next = { ...next, preview: next.panels.map(() => null) };
+  return next;
 }
 
 // The layout with only the tabs `keepTab` accepts: a group left with none is gone, a group whose active tab went shows
@@ -38,7 +45,8 @@ function keepTabs(layout, keepTab) {
     : kept[index][Math.min(layout.tabs[index].indexOf(id), kept[index].length - 1)]));
   const keys = at(layout.keys);
   const focused = Math.max(0, keys.indexOf(layout.keys[layout.focused]));
-  return { panels: at(active), tabs: at(kept), keys, collapsed: at(layout.collapsed), widths: at(layout.widths), focused, seq: layout.seq };
+  const preview = at(previewOf(layout).map((id, index) => (kept[index].includes(id) ? id : null)));
+  return { panels: at(active), tabs: at(kept), keys, collapsed: at(layout.collapsed), widths: at(layout.widths), focused, seq: layout.seq, preview };
 }
 
 // Open widths over the groups that are left: each keeps its share of what remains; if none had any, they share evenly.
@@ -67,18 +75,18 @@ export function serializeLayout(layout, { transientId = null } = {}) {
 export function parseLayout(raw, { exists = null } = {}) {
   let data;
   try { data = JSON.parse(raw); } catch { return null; }
-  if (!data || typeof data !== 'object' || (data.v !== LAYOUT_VERSION && data.v !== 1)) return null;
-  const saved = data.v === 1 ? upgradeLayout(data.layout) : data.layout;
+  if (!data || typeof data !== 'object' || ![1, 2, LAYOUT_VERSION].includes(data.v)) return null;
+  const saved = data.v === LAYOUT_VERSION ? data.layout : upgradeLayout(data.layout);
   if (!saved || typeof saved !== 'object') return null;
-  const { panels, tabs, keys, collapsed, widths, focused, seq } = saved;
-  if (![panels, tabs, keys, collapsed, widths].every(Array.isArray)) return null;
+  const { panels, tabs, keys, collapsed, widths, focused, seq, preview } = saved;
+  if (![panels, tabs, keys, collapsed, widths, preview].every(Array.isArray)) return null;
   if (!panels.length || panels.length > MAX_PANELS) return null;
   if (!panels.every(clean) || !keys.every(clean)) return null;
   if (!tabs.every((list) => Array.isArray(list) && list.length > 0 && list.every(clean))) return null;
   if (!collapsed.every((shut) => typeof shut === 'boolean')) return null;
   if (!widths.every((width) => typeof width === 'number' && Number.isFinite(width))) return null;
   if (!Number.isInteger(focused) || !Number.isInteger(seq) || seq < 0) return null;
-  let layout = { panels, tabs, keys, collapsed, widths, focused, seq };
+  let layout = { panels, tabs, keys, collapsed, widths, focused, seq, preview };
   if (violations(layout).length) return null;
   if (exists) layout = dropMissing(layout, exists);
   return layout && layout.panels.length ? layout : null;

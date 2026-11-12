@@ -28,6 +28,9 @@ export const sidebarDecl = declare({
     // Whether archived folders (and their subtrees) draw, dimmed with an "archived" marker, instead of being hidden.
     showArchived: bool(),
     width: num(null, { int: true }),
+    // The list is collapsed (wide windows; Cmd-B, the pill's menu, or dragging it narrow). Decided afresh each time a window
+    // opens (core/window-start.js), so never saved.
+    hidden: field(false, Boolean, { ephemeral: true }),
     // The explorer's keyboard cursor: the address of one visible row ('f:<folder key>' or 'c:<chat id>'), VS Code's
     // focused tree item. Per device; a cursor naming a row that is not on screen is simply not drawn.
     cursor: field(null, (v) => (typeof v === 'string' && v.length <= 300 ? v : null)),
@@ -80,6 +83,7 @@ export const sidebarDecl = declare({
     'main.fold': set('mainFolded', 'folded'),
     'archived.show': set('showArchived', 'show'),
     'width.set': set('width', 'px'),
+    'hidden.set': set('hidden', 'hidden'),
     'cursor.set': set('cursor', 'addr'),
     'newfolder.at': set('newIn', 'parent'),
     'rename.at': set('renaming', 'key'),

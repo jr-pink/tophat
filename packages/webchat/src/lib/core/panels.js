@@ -15,13 +15,28 @@ export const RAIL_PX = 34;
 export const MAX_OPEN = 4;
 
 // The layout is a row of editor groups (VS Code's word; the code and the log still say panels). `panels[i]` is the chat
-// the group at i shows, its ACTIVE tab; `tabs[i]` is the group's ordered tab strip (chat ids, no repeats within a
-// group, panels[i] among them); `keys[i]` names the group. A chat can sit in two groups only by an explicit split.
+// the group at i shows, its ACTIVE tab; `tabs[i]` is the group's ordered tab strip (chat ids, no repeats within a group,
+// panels[i] among them); `keys[i]` names the group. A chat can sit in two groups only by an explicit split. `preview[i]`
+// is the group's preview tab (VS Code's italic tab) or null: a chat opened by a plain click in the list that he has not
+// touched yet. At most one per group; the next list click replaces it in place, and any interaction (typing, sending, a
+// double click, a drag, the pin) keeps it as a normal tab.
 export const MAX_PANELS = 12;
 
 export function initial(conversationId = null) {
-  if (!conversationId) return { panels: [], tabs: [], keys: [], collapsed: [], widths: [], focused: 0, seq: 0 };
-  return { panels: [conversationId], tabs: [[conversationId]], keys: ['p1'], collapsed: [false], widths: [1], focused: 0, seq: 1 };
+  if (!conversationId) return { panels: [], tabs: [], keys: [], collapsed: [], widths: [], focused: 0, seq: 0, preview: [] };
+  return { panels: [conversationId], tabs: [[conversationId]], keys: ['p1'], collapsed: [false], widths: [1], focused: 0, seq: 1, preview: [null] };
+}
+
+// The preview column of a layout. A layout written before previews existed (a fixture, an old record) has none: no group
+// has a preview tab.
+export const previewOf = (state) => (Array.isArray(state.preview) && state.preview.length === state.panels.length ? state.preview : state.panels.map(() => null));
+// The layout with group `at`'s preview set to `chat` (or null); the same layout when it already is.
+function withPreview(state, at, chat) {
+  const preview = previewOf(state);
+  if (preview[at] === chat && state.preview === preview) return state;
+  const next = [...preview];
+  next[at] = chat;
+  return { ...state, preview: next };
 }
 
 const clamp = (value, low, high) => (value < low ? low : value > high ? high : value);
@@ -69,19 +84,21 @@ function insertAfter(state, at, conversationId, key = null) {
   const keys = [...from.keys];
   const collapsed = [...from.collapsed];
   const widths = [...from.widths];
+  const preview = [...previewOf(from)];
   const donor = widths[at] ?? 1;
   panels.splice(at + 1, 0, conversationId);
   tabs.splice(at + 1, 0, [conversationId]);
   keys.splice(at + 1, 0, key ?? `p${seq}`);
   collapsed.splice(at + 1, 0, false);
+  preview.splice(at + 1, 0, null);
   let next;
   if (donor / 2 < MIN_WIDTH) {
     const even = panels.map((_, index) => (collapsed[index] ? 0 : 1));
-    next = { panels, tabs, keys, collapsed, widths: normalised(even, collapsed), focused: at + 1, seq };
+    next = { panels, tabs, keys, collapsed, widths: normalised(even, collapsed), focused: at + 1, seq, preview };
   } else {
     widths.splice(at + 1, 0, donor / 2);
     widths[at] = donor / 2;
-    next = { panels, tabs, keys, collapsed, widths: normalised(widths, collapsed), focused: at + 1, seq };
+    next = { panels, tabs, keys, collapsed, widths: normalised(widths, collapsed), focused: at + 1, seq, preview };
   }
   // Make room by folding the open pane farthest from the new one, never the new one or the one it split from.
   while (openCount(next.collapsed) > MAX_OPEN) {
@@ -132,24 +149,57 @@ function closeAt(state, at) {
     
     // closing the focused one moves left, where the eye already is; closing another leaves the focus where it was
     focused: at === state.focused ? clamp(at - 1, 0, panels.length - 1) : state.focused > at ? state.focused - 1 : state.focused,
-    seq: state.seq
+    seq: state.seq,
+    preview: previewOf(state).filter(keep)
   };
   
   return collapsed.every(Boolean) ? expand(next, next.focused) : next;
 }
 
-// Opening a chat from the list (VS Code's open-editor): already a tab of the focused group, activate it there; the
-// active tab of another group, or a tab in one, focus it there rather than showing the chat twice; otherwise a new
-// tab in the focused group.
-export function activate(state, conversationId) {
+// Opening a chat from the list (VS Code's open-editor): already a tab of the focused group, activate it there; the active tab
+// of another group, or a tab in one, focus it there rather than showing the chat twice; otherwise a new tab in the focused
+// group.
+//
+// `preview` (a plain click in the list): a chat not open anywhere opens as the focused group's preview tab, taking the place
+// of the preview tab already there (same index) or, with none, opening as a new tab marked preview. A chat that is already a
+// tab is only activated, and the focused group's untouched preview tab (a different chat) closes as he clicks away from it,
+// exactly as it is replaced when the target is a new chat. The page keeps a touched preview (a draft, a staged file) before
+// this runs.
+export function activate(state, conversationId, { preview = false } = {}) {
   if (!isId(conversationId)) return state;
-  if (!state.panels.length) return initial(conversationId);
+  if (!state.panels.length) return preview ? { ...initial(conversationId), preview: [conversationId] } : initial(conversationId);
+  if (preview && isOpen(state, conversationId)) return activate(closeFocusedPreview(state, conversationId), conversationId);
   if (state.tabs[state.focused].includes(conversationId)) return setActive(state, state.focused, conversationId);
   const active = state.panels.indexOf(conversationId);
   if (active !== -1) return expand(state, active);
   const holder = state.tabs.findIndex((tabs) => tabs.includes(conversationId));
   if (holder !== -1) return setActive(state, holder, conversationId);
-  return openTabIn(state, state.focused, conversationId);
+  return preview ? previewIn(state, state.focused, conversationId) : openTabIn(state, state.focused, conversationId);
+}
+
+// The focused group's preview tab closed when it is not `keep`; the same layout when it has none.
+function closeFocusedPreview(state, keep) {
+  const old = previewOf(state)[state.focused];
+  return old && old !== keep ? closeTab(state, state.keys[state.focused], old) : state;
+}
+
+// `chat` (in no tab of group `at`) as the group's preview tab: in place of the old preview, else right after the active tab.
+function previewIn(state, at, chat) {
+  const old = previewOf(state)[at];
+  if (!old) return withPreview(openTabIn(state, at, chat), at, chat);
+  const all = [...state.tabs];
+  all[at] = state.tabs[at].map((tab) => (tab === old ? chat : tab));
+  const panels = [...state.panels];
+  panels[at] = chat;
+  return withPreview(expand({ ...state, tabs: all, panels }, at), at, chat);
+}
+
+// The preview tab `chat` of group `group` kept as a normal tab. Absolute: a tab that is not the group's preview is already
+// kept.
+export function keepPreview(state, group, chat) {
+  const at = state.keys.indexOf(group);
+  if (at < 0 || !isId(chat) || previewOf(state)[at] !== chat) return state;
+  return withPreview(state, at, null);
 }
 
 export const COMFORTABLE_PX = 480;
@@ -297,18 +347,23 @@ export function closeTab(state, group, chat) {
   const rest = tabs.filter((tab) => tab !== chat);
   const all = [...state.tabs];
   all[at] = rest;
-  if (state.panels[at] !== chat) return { ...state, tabs: all };
+  const cleared = previewOf(state)[at] === chat ? withPreview(state, at, null) : state;
+  if (state.panels[at] !== chat) return { ...cleared, tabs: all };
   // the tab that takes its place, else the one on its left
   const panels = [...state.panels];
   panels[at] = rest[Math.min(index, rest.length - 1)];
-  return { ...state, tabs: all, panels };
+  return { ...cleared, tabs: all, panels };
 }
 
 // `chat` opened as a tab of group `group`, at position `at` (default: right after the active tab), and made active. Already
 // a tab of that group: only activated, where it is.
-export function openTab(state, group, chat, at) {
+//
+// `preview`: a chat the group does not hold opens as its preview tab, replacing the preview tab there in place (`at` is
+// then unused); one it holds is only activated.
+export function openTab(state, group, chat, at, { preview = false } = {}) {
   const index = state.keys.indexOf(group);
   if (index < 0 || !isId(chat)) return state;
+  if (preview && !state.tabs[index].includes(chat)) return previewIn(state, index, chat);
   if (state.tabs[index].includes(chat) || !Number.isInteger(at)) return openTabIn(state, index, chat);
   const next = [...state.tabs[index]];
   next.splice(clamp(at, 0, next.length), 0, chat);
@@ -329,11 +384,12 @@ export function keepTabs(state, group, keep) {
   if (!kept.length) return state.panels.length > 1 ? closeAt(state, at) : initial(null);
   const all = [...state.tabs];
   all[at] = kept;
-  if (kept.includes(state.panels[at])) return { ...state, tabs: all };
+  const cleared = kept.includes(previewOf(state)[at]) ? state : withPreview(state, at, null);
+  if (kept.includes(state.panels[at])) return { ...cleared, tabs: all };
   const place = tabs.indexOf(state.panels[at]);
   const panels = [...state.panels];
   panels[at] = kept.find((tab) => tabs.indexOf(tab) > place) ?? kept.at(-1);
-  return { ...state, tabs: all, panels };
+  return { ...cleared, tabs: all, panels };
 }
 
 export function activateTab(state, group, chat) {
@@ -344,7 +400,8 @@ export function activateTab(state, group, chat) {
 
 // A tab moved to position `index` of group `to` (clamped), out of group `from`: a reorder when they are the same group.
 // The moved tab becomes the destination's active tab and the destination is focused; a source left with no tab is closed.
-// Absolute: once the tab has left `from` (or sits at `index`) a repeat finds nothing to do.
+// Absolute: once the tab has left `from` (or sits at `index`) a repeat finds nothing to do. A dragged preview tab is kept
+// (VS Code): it lands as a normal tab.
 export function moveTab(state, { chat, from, to, index } = {}) {
   const f = state.keys.indexOf(from);
   const t = state.keys.indexOf(to);
@@ -358,7 +415,7 @@ export function moveTab(state, { chat, from, to, index } = {}) {
     rest.splice(target, 0, chat);
     const all = [...state.tabs];
     all[f] = rest;
-    return { ...state, tabs: all };
+    return { ...keepPreview(state, from, chat), tabs: all };
   }
   const source = state.tabs[f].filter((tab) => tab !== chat);
   const dest = state.tabs[t].filter((tab) => tab !== chat);
@@ -369,7 +426,7 @@ export function moveTab(state, { chat, from, to, index } = {}) {
   const panels = [...state.panels];
   panels[t] = chat;
   if (state.panels[f] === chat && source.length) panels[f] = source[Math.min(state.tabs[f].indexOf(chat), source.length - 1)];
-  let next = { ...state, tabs: all, panels };
+  let next = { ...keepPreview(keepPreview(state, from, chat), to, chat), tabs: all, panels };
   if (!source.length) next = closeAt(next, f);
   return expand(next, next.keys.indexOf(to));
 }
@@ -391,7 +448,8 @@ export function movePanel(state, index, delta) {
     widths: swap(state.widths),
     
     focused: state.focused === index ? to : state.focused === to ? index : state.focused,
-    seq: state.seq
+    seq: state.seq,
+    preview: swap(previewOf(state))
   };
 }
 
@@ -443,7 +501,8 @@ export function prune(state, exists) {
     collapsed,
     widths: normalised(at(state.widths), collapsed),
     focused: stillThere === -1 ? 0 : stillThere,
-    seq: state.seq
+    seq: state.seq,
+    preview: at(previewOf(state).map((id, index) => (kept[index].includes(id) ? id : null)))
   };
   return collapsed.every(Boolean) ? expand(next, next.focused) : next;
 }
@@ -461,6 +520,12 @@ export function violations(state) {
     else if (new Set(tabs).size !== tabs.length) out.push(`group ${index} holds a tab twice`);
     else if (!tabs.includes(state.panels[index])) out.push(`group ${index} shows a chat that is not one of its tabs`);
   });
+  if (state.preview !== undefined) {
+    if (!Array.isArray(state.preview) || state.preview.length !== state.panels.length) out.push('a group missing its preview slot');
+    else state.preview.forEach((id, index) => {
+      if (id !== null && !(isId(id) && Array.isArray(state.tabs[index]) && state.tabs[index].includes(id))) out.push(`group ${index} previews a chat that is not one of its tabs`);
+    });
+  }
   if (state.panels.length > MAX_PANELS) out.push(`${state.panels.length} panels, over the cap`);
   
   

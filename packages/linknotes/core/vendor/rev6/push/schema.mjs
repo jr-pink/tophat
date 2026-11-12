@@ -11,6 +11,7 @@ CREATE TABLE raw_data(
 CREATE INDEX raw_pending ON raw_data(processed_batch, available_at);
 CREATE INDEX raw_thread ON raw_data(source, account, thread, occurred_at);
 CREATE INDEX raw_author ON raw_data(source, author);
+CREATE INDEX raw_pending_policy ON raw_data(processed_batch, json_extract(policy,'$.model'), occurred_at, available_at, claimed_until, source, account, native_id);
 CREATE VIRTUAL TABLE raw_search USING fts5(id UNINDEXED, text);
 CREATE TABLE entities(
   id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'misc',

@@ -6,12 +6,23 @@
   let busy = $state(false);
   let error = $state(null);
   let token = $state('');
+  // Opened by the desktop app (?desktop=<challenge>): after the passkey, hand a session to the app instead of
+  // opening the chat here (src/lib/server/desktop-signin.js).
+  const desktop = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('desktop') : null;
+  let handedOff = $state(false);
+
+  async function done() {
+    if (!desktop) { location.href = '/'; return; }
+    await post('/api/auth/desktop', { step: 'grant', challenge: desktop });
+    handedOff = true;
+    location.href = 'tophat://signed-in';
+  }
 
   onMount(async () => {
     const response = await fetch('/api/auth/status');
     const body = await response.json();
     enrolled = body.enrolled;
-    if (body.authenticated) location.href = '/';
+    if (body.authenticated) done().catch((cause) => { error = cause.message; });
   });
 
   async function post(path, payload) {
@@ -29,7 +40,7 @@
       const options = await post('/api/auth/authenticate', { step: 'options' });
       const response = await startAuthentication({ optionsJSON: options });
       await post('/api/auth/authenticate', { step: 'verify', response });
-      location.href = '/';
+      await done();
     } catch (cause) {
       error = cause.message;
     } finally {
@@ -43,7 +54,7 @@
       const options = await post('/api/auth/register', { step: 'options', token });
       const response = await startRegistration({ optionsJSON: options });
       await post('/api/auth/register', { step: 'verify', response, label: navigator.platform || 'device' });
-      location.href = '/';
+      await done();
     } catch (cause) {
       error = cause.message;
     } finally {
@@ -55,7 +66,9 @@
 <main>
   <div class="card rise">
     <h1>tophat chat</h1>
-    {#if enrolled}
+    {#if handedOff}
+      <p>Signed in. You can close this tab and go back to the Tophat app.</p>
+    {:else if enrolled}
       <p>Your AI agents on the Mac mini, from anywhere.</p>
       <button class="primary press focus-ring" onclick={signIn} disabled={busy} data-testid="signin">
         {busy ? 'Waiting for passkey…' : 'Sign in with passkey'}

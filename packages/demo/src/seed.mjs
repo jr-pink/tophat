@@ -1,11 +1,12 @@
 // Seed the demo instance's replica from the exported records (export.mjs), and publish its graph snapshot.
 // Runs as the demo instance's user, on the replica the runner reads (<paths.state>/runner/memory.sqlite), writing into
 // the instance's scope (the group, e.g. tophat-dev). Idempotent: a record already stored is a duplicate, and notes are
-// derived only from records nothing has been derived from yet (pending).
+// derived only from records nothing has been derived from yet (pending). The snapshot's pages are the model-written ones (pages.mjs) where they exist.
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openStore } from '@tophat-md/runner/store/memory.mjs';
 import { ENTITIES, PROJECT } from './entities.mjs';
+import { modelPageOf } from './pages.mjs';
 
 const PUSHER = 'tophat-demo-seed';
 
@@ -48,7 +49,15 @@ export async function snapshot({ db, scope, out }) {
   const entities = s.all("SELECT id, name, type, merged_into FROM entities WHERE id IN (SELECT pk FROM mc_acl WHERE t='entities' AND revoked=0 AND grp IN (SELECT value FROM json_each(?)))", [groups]);
   const note_entities = s.all('SELECT note_id, entity_id FROM note_entities').filter((r) => ids.has(r.note_id));
   const pages = {};
-  for (const e of entities) { try { const p = await b.page(e.id); if (p) pages[e.id] = { nodes: p.nodes, cached: p.cached }; } catch { /* no page */ } }
+  // A page written by the model (pages.mjs: signed PageNode records in this scope) wins; an entity without one, or whose records are not a
+  // complete tree, keeps the store's mechanical outline. `kind` tells the widget which shape it is reading (build-graph.mjs pageOf).
+  for (const e of entities) {
+    try {
+      const written = modelPageOf(await b.pageNodes({ entity: e.id }));
+      if (written) { pages[e.id] = { nodes: written.nodes, cached: true, kind: 'model' }; continue; }
+    } catch { /* no PageNode here: the mechanical page below */ }
+    try { const p = await b.page(e.id); if (p) pages[e.id] = { nodes: p.nodes, cached: p.cached }; } catch { /* no page */ }
+  }
   const snap = { kind: 'tophat-graph-snapshot', v: 1, user: s.user, scopes: s.viewer.groups, at: new Date().toISOString(), notes, entities, note_entities, pages };
   const tmp = path.join(path.dirname(out), `.${path.basename(out)}.${process.pid}`);
   writeFileSync(tmp, JSON.stringify(snap), { mode: 0o644 });

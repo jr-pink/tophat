@@ -23,3 +23,7 @@ packages/demo/test/widgets.test.mjs export-ignore
 # widget from a private graph snapshot (a release has neither, so the path-refs test cannot find its output there).
 packages/demo/test/revendor.test.mjs export-ignore
 packages/demo/widgets/build-graph.mjs export-ignore
+# Owner-only: the retired icon archive and the demo's starting-sidebar spec (his own words and dates), with the test that reads it.
+archive export-ignore
+packages/demo/test/ground-truth.json export-ignore
+packages/demo/test/ground-truth.test.mjs export-ignore

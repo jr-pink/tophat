@@ -462,7 +462,7 @@
         "note": "Regraded 2026-11-10 with judge v3 (a month and day without the year match a 2026 gold date)."
       },
       {
-        "system": "Email agent",
+        "system": "Kat",
         "score": 0.939,
         "correct": 93,
         "n": 99,

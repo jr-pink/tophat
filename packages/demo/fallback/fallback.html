@@ -57,10 +57,11 @@ img.shot{display:block;width:100%;max-width:420px;height:auto;border:1px solid v
   body{font-size:14px}
   .more{padding-left:4px}
   iframe.w{height:480px}
-  iframe.w-memory-bench{height:auto;aspect-ratio:1.05}
   iframe.w-runner-qol{height:620px}
   iframe.w-mac-desktop{height:auto;aspect-ratio:1}
 }
+/* the memory figure stacks its two plots below 638px of frame (each plot keeps its 312px width): one fixed height for the stack */
+@media (max-width:674px){iframe.w-memory-bench{height:660px;aspect-ratio:auto}}
 
 .code{position:relative;border:1px solid var(--line);border-left:3px solid var(--rose);margin-top:.6em;max-width:94ch}
 pre{margin:0;padding:12px 70px 12px 14px;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:.93em}
@@ -79,6 +80,7 @@ button:hover{border-color:var(--rose)}
 </div>
 <!--install-->
 </main>
+<script>addEventListener('message',function(e){var d=e.data;if(!d||d.tophatFigure!=='height')return;var px=Math.round(+d.px);if(!(px>=60&&px<=3000))return;document.querySelectorAll('iframe.w-runner-qol').forEach(function(f){if(f.contentWindow===e.source)f.style.height=px+2+'px'})});</script>
 <script>
 (function(){var c=document.querySelector('.code'),p=document.getElementById('install');if(!c||!p)return;var b=document.createElement('button');b.type='button';b.textContent='copy';b.onclick=function(){var t=p.textContent;var done=function(){b.textContent='copied';setTimeout(function(){b.textContent='copy'},1200)};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){})}else{var r=document.createRange();r.selectNodeContents(p);var s=getSelection();s.removeAllRanges();s.addRange(r)}};c.appendChild(b)})();
 </script>

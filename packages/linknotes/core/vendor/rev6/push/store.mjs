@@ -31,6 +31,54 @@ export const ALLOWED = "json_extract(r.policy,'$.model')='allow'";
  *  (`releaseHolds`).
  */
 export const HOLD_UNTIL = '9999-12-31T00:00:00.000Z';
+/** The pending-and-allowed index. Every hot raw query reads `processed_batch IS NULL AND json_extract(r.policy,'$.model')='allow'`
+ *  3.7 GB) to read its policy: one backlog count took 20-30 s on the live store and status() ran five such scans, so a maintenance
+ *  pass of four model calls spent ~8 CPU minutes in sqlite3_step and ran 755.9 s against a 600 s budget. The
+ *  index carries the policy expression, so counts, MIN/MAX, the fresh count and ELIGIBLE's outer columns are answered from the
+ *  index, and occurred_at third makes pendingRaw's `ORDER BY occurred_at DESC, rowid DESC LIMIT n` a backward index walk that stops at n.
+ *  SQLite maintains it on every write. Additive and idempotent, like rev5's raw_not_allowed (rev5/store.py WITHHELD_INDEX);
+ *  the writer ensures it at open (a no-op once it exists).
+ */
+/** Reverse citation index: raw id -> the notes and work that cite it in source_refs. threadEntities used to scan every note and
+ *  work row, unpack its source_refs JSON and probe raw_data per ref (or, as planned, re-scan the thread per note_entities row):
+ *  79 s for one call on the live store, 110 s over the 8 calls of one interpretation packet. Now the lookup starts
+ *  from the thread's raw rows (raw_thread index) and reaches citing notes and work through these tables. Triggers keep them in
+ *  step with every writer (rev6, rev5 Python, repairs), so no write path has to remember them; the writer creates and backfills
+ *  them once at open (additive, idempotent, like PENDING_ALLOWED_INDEX).
+ */
+const REFS = (col) => `(SELECT DISTINCT value FROM json_each(CASE WHEN json_valid(${col}) AND json_type(${col})='array' THEN ${col} ELSE '[]' END) WHERE type='text')`;
+const citeDdl = (kind, table) => `
+CREATE TABLE IF NOT EXISTS ${kind}_sources(raw_id TEXT NOT NULL, ${kind}_id TEXT NOT NULL, PRIMARY KEY(raw_id, ${kind}_id)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ${kind}_sources_${kind} ON ${kind}_sources(${kind}_id);
+CREATE TRIGGER IF NOT EXISTS ${kind}_sources_ins AFTER INSERT ON ${table} BEGIN
+  INSERT OR IGNORE INTO ${kind}_sources(raw_id, ${kind}_id) SELECT value, NEW.id FROM ${REFS('NEW.source_refs')}; END;
+CREATE TRIGGER IF NOT EXISTS ${kind}_sources_upd AFTER UPDATE OF source_refs, id ON ${table} BEGIN
+  DELETE FROM ${kind}_sources WHERE ${kind}_id=OLD.id;
+  INSERT OR IGNORE INTO ${kind}_sources(raw_id, ${kind}_id) SELECT value, NEW.id FROM ${REFS('NEW.source_refs')}; END;
+CREATE TRIGGER IF NOT EXISTS ${kind}_sources_del AFTER DELETE ON ${table} BEGIN
+  DELETE FROM ${kind}_sources WHERE ${kind}_id=OLD.id; END;`;
+export function ensureCitationIndex(db) {
+  for (const [kind, table] of [['note', 'notes'], ['work', 'work']]) {
+    const had = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(`${kind}_sources`);
+    if (had) { db.exec(citeDdl(kind, table)); continue; }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(citeDdl(kind, table));
+      db.exec(`INSERT OR IGNORE INTO ${kind}_sources(raw_id, ${kind}_id) SELECT j.value, t.id FROM ${table} t, json_each(CASE WHEN json_valid(t.source_refs) AND json_type(t.source_refs)='array' THEN t.source_refs ELSE '[]' END) j WHERE j.type='text'`);
+      db.exec('COMMIT');
+    } catch (e) { db.exec('ROLLBACK'); throw e; }
+  }
+}
+
+export const OWNER_INDEXES = ["CREATE INDEX IF NOT EXISTS raw_owner_author ON raw_data(source, author, role)", "CREATE INDEX IF NOT EXISTS raw_owner_sender_text ON raw_data(source, CAST(json_extract(locator,'$.sender_id') AS TEXT), role)"];
+/** merged_into had no index: every clusterIds() step (`WHERE merged_into=?`, 270 calls per interpretation packet) scanned the whole entities table. */
+export const ENTITY_INDEXES = ['CREATE INDEX IF NOT EXISTS entities_merged ON entities(merged_into)'];
+/** The full-text join key, covering. A search joins every FTS match to raw_data by id and reads source, occurred_at, available_at,
+ *  (10-14 s cold), then a sort. With these columns in the index the join and the eligibility probe never leave it (plan:
+ *  SEARCH r USING COVERING INDEX raw_id_cover); only the kept rows are read whole.
+ */
+export const RAW_SEARCH_JOIN_INDEX = 'CREATE INDEX IF NOT EXISTS raw_id_cover ON raw_data(id, source, occurred_at, available_at, account, native_id)';
+export const PENDING_ALLOWED_INDEX = "CREATE INDEX IF NOT EXISTS raw_pending_policy ON raw_data(processed_batch, json_extract(policy,'$.model'), occurred_at, available_at, claimed_until, source, account, native_id)";
 export const UNHELD = `COALESCE(r.claimed_until,'') <> '${HOLD_UNTIL}'`;
 const ROOTS = `(WITH RECURSIVE roots(id, root) AS (
   SELECT id, id FROM entities WHERE merged_into IS NULL
@@ -154,6 +202,10 @@ export class Store {
       this.db.exec('PRAGMA journal_mode=WAL');
       this.db.exec('PRAGMA foreign_keys=ON');
       if (!this.one("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name='raw_data'")) throw new StoreError(`${this.path} holds no rev5 schema; rev6 push never creates or migrates one`);
+      this.db.exec(PENDING_ALLOWED_INDEX);
+      for (const ddl of OWNER_INDEXES) this.db.exec(ddl);
+      for (const ddl of [...ENTITY_INDEXES, RAW_SEARCH_JOIN_INDEX]) this.db.exec(ddl);
+      ensureCitationIndex(this.db);
     }
     this.people = people ?? loadPeople();
     this._now = now;
@@ -214,9 +266,32 @@ export class Store {
   }
   inst(v) { try { return instant(v); } catch (e) { throw new StoreError(e.message); } }
 
+  /** The source-policy half of rawView's decision: the policy column and the local-only rule (needs only source and policy). */
+  sourceAllowed(row) {
+    return LOCAL_ONLY_SOURCES.has(row.source) ? (!this.cloud && [null, undefined, LOCAL_ONLY_POLICY.reason].includes(row.policy.reason)) : row.policy.model === 'allow';
+  }
+  /** rawView's whole read decision, from the five columns it depends on (source, policy, author, participants, text). */
+  rawAllowed(row) { return this.sourceAllowed(row) && !privateIn(this.people, [row.author, ...(row.participants || [])], row.text || ''); }
+  /**  them in one interpretation packet, and read every column). Inside withRawMemo() a row is read once per gather. Absent ids are absent. */
+  policyRows(ids) {
+    const out = new Map(), want = [];
+    for (const id of new Set(ids)) { if (this._rawMemo?.has(id)) { const v = this._rawMemo.get(id); if (v) out.set(id, v); } else want.push(id); }
+    for (let i = 0; i < want.length; i += 400) {
+      const chunk = want.slice(i, i + 400), seen = new Set();
+      for (const r of this.all('SELECT id,source,policy,author,participants,text FROM raw_data WHERE id IN (SELECT value FROM json_each(?))', [j(chunk)])) { out.set(r.id, r); seen.add(r.id); this._rawMemo?.set(r.id, r); }
+      for (const id of chunk) if (!seen.has(id)) this._rawMemo?.set(id, null);
+    }
+    return out;
+  }
+  /** Run a read-only gather with policy rows memoised by id; raw rows do not change inside one synchronous pass. */
+  withRawMemo(work) {
+    if (this._rawMemo) return work();
+    this._rawMemo = new Map();
+    try { return work(); } finally { this._rawMemo = null; }
+  }
   rawView(row, full = true) {
     const localOnly = LOCAL_ONLY_SOURCES.has(row.source);
-    let allowed = localOnly ? (!this.cloud && [null, undefined, LOCAL_ONLY_POLICY.reason].includes(row.policy.reason)) : row.policy.model === 'allow';
+    let allowed = this.sourceAllowed(row);
     const out = {};
     for (const k of ['id', 'source', 'account', 'native_id', 'revision', 'role', 'author', 'participants', 'thread', 'occurred_at', 'available_at', 'locator', 'policy']) out[k] = row[k];
     out.testimony = BACKGROUND_ROLES.includes(row.role) ? 'attributed-background' : 'primary';
@@ -265,6 +340,9 @@ export class Store {
     return Number(this.run('UPDATE raw_data SET claimed_until=? WHERE processed_batch IS NULL AND id IN (SELECT value FROM json_each(?))', [HOLD_UNTIL, j([...ids])]).changes);
   }
   releaseHolds() { return Number(this.run('UPDATE raw_data SET claimed_until=NULL WHERE processed_batch IS NULL AND claimed_until=?', [HOLD_UNTIL]).changes); }
+  distinctSources() {
+    return this.all('WITH RECURSIVE s(source) AS (SELECT MIN(source) FROM raw_data UNION ALL SELECT (SELECT MIN(source) FROM raw_data WHERE source > s.source) FROM s WHERE s.source IS NOT NULL) SELECT source FROM s WHERE source IS NOT NULL').map((r) => r.source);
+  }
   heldCount() { return this.one('SELECT COUNT(*) AS n FROM raw_data WHERE processed_batch IS NULL AND claimed_until=?', [HOLD_UNTIL]).n; }
   release(ids) { if (ids.length) this.run('UPDATE raw_data SET claimed_until=NULL WHERE processed_batch IS NULL AND id IN (SELECT value FROM json_each(?))', [j([...ids])]); }
 
@@ -328,10 +406,8 @@ export class Store {
       if (support.length && !support.some((n) => this.memoryVisible('note', n))) return false;
     }
     if (kind === 'mention' && row.raw_id) refs.push(row.raw_id);
-    for (const ref of refs) {
-      const raw = this.one('SELECT * FROM raw_data WHERE id=?', [ref]);
-      if (!raw || 'withheld' in this.rawView(raw)) return false;
-    }
+    const raws = this.policyRows(refs);
+    for (const ref of refs) { const raw = raws.get(ref); if (!raw || !this.rawAllowed(raw)) return false; }
     return !privateIn(this.people, [], j(row));
   }
 
@@ -454,10 +530,13 @@ export class Store {
     return parties;
   }
   ownerEntities() {
-    return [...new Set(this.all("SELECT DISTINCT i.entity_id, MIN(i.created_at) AS at FROM identities i JOIN entities e ON e.id=i.entity_id JOIN raw_data r ON r.source=i.source AND r.role='owner' AND (r.author=i.native OR json_extract(r.locator,'$.sender_id')=i.native) GROUP BY i.entity_id ORDER BY at").map((r) => this.resolveEntity(r.entity_id)))];
+    // Same set and order as the join it replaces (an identity counts once it has any owner row), as two EXISTS probes the
+    // raw_owner_author / raw_owner_sender_text indexes answer (CAST AS TEXT is the TEXT affinity the old comparison applied, so a numeric sender_id still matches); the OR inside one join scanned every row of each identity's source (47 s live).
+    return [...new Set(this.all("SELECT i.entity_id, MIN(i.created_at) AS at FROM identities i JOIN entities e ON e.id=i.entity_id WHERE EXISTS (SELECT 1 FROM raw_data r WHERE r.source=i.source AND r.author=i.native AND r.role='owner') OR EXISTS (SELECT 1 FROM raw_data r WHERE r.source=i.source AND CAST(json_extract(r.locator,'$.sender_id') AS TEXT)=i.native AND r.role='owner') GROUP BY i.entity_id ORDER BY at").map((r) => this.resolveEntity(r.entity_id)))];
   }
   threadEntities(source, account, thread, limit = 24) {
-    const rows = this.all('SELECT ne.entity_id AS e, MAX(n.created_at) AS at FROM notes n JOIN note_entities ne ON ne.note_id=n.id JOIN json_each(n.source_refs) j JOIN raw_data r ON r.id=j.value WHERE r.source=:s AND r.account=:a AND r.thread=:t GROUP BY ne.entity_id UNION SELECT we.entity_id, MAX(w.updated_at) FROM work w JOIN work_entities we ON we.work_id=w.id JOIN json_each(w.source_refs) j JOIN raw_data r ON r.id=j.value WHERE r.source=:s AND r.account=:a AND r.thread=:t GROUP BY we.entity_id ORDER BY 2 DESC LIMIT :n', { s: source, a: account, t: thread, n: limit });
+    // From the thread's raw rows (raw_thread) through the citation index (note_sources / work_sources) to the notes and work.
+    const rows = this.all('SELECT ne.entity_id AS e, MAX(n.created_at) AS at FROM raw_data r CROSS JOIN note_sources ns ON ns.raw_id=r.id CROSS JOIN notes n ON n.id=ns.note_id CROSS JOIN note_entities ne ON ne.note_id=n.id WHERE r.source=:s AND r.account=:a AND r.thread=:t GROUP BY ne.entity_id UNION SELECT we.entity_id, MAX(w.updated_at) FROM raw_data r CROSS JOIN work_sources ws ON ws.raw_id=r.id CROSS JOIN work w ON w.id=ws.work_id CROSS JOIN work_entities we ON we.work_id=w.id WHERE r.source=:s AND r.account=:a AND r.thread=:t GROUP BY we.entity_id ORDER BY 2 DESC LIMIT :n', { s: source, a: account, t: thread, n: limit });
     return [...new Set(rows.map((r) => this.resolveEntity(r.e)))].slice(0, limit);
   }
   /** Entities tied to `seeds` through shared notes, best first (rev5 Store.note_neighbors): a record
@@ -545,16 +624,21 @@ export class Store {
       records_per_hour: rate, last_consolidation_at: last?.received_at ?? null, minutes_since_consolidation: minutes(last?.received_at), oldest_recent_record_waiting_minutes: wait,
       newest_pending_record_at: newest, pending, held_by_private_person_policy: this.heldCount(), failed_calls_24h: failed.reduce((a, r) => a + r.n, 0), failed_calls_by_reason: failed, hours_to_drain_at_this_rate: rate ? Math.round((pending / rate) * 10) / 10 : null };
   }
+  /** What the push deciders need (budget.mjs decidePush/decideBackfill, interpret's receipt): index-only counts, milliseconds.
+   *  status() is the full health report (per-source sums over every raw row) and was being called for this alone. */
+  backlog() {
+    return { raw_pending: this.one(`SELECT COUNT(*) AS n FROM raw_data r WHERE processed_batch IS NULL AND ${this.allowed} AND ${UNHELD}`).n, held_by_private_person_policy: this.heldCount(),
+      raw_withheld_by_policy: this.withheldCount(),
+      pages_dirty: this.one('SELECT COUNT(*) AS n FROM pages WHERE dirty=1 AND entity_id IN (SELECT id FROM entities WHERE merged_into IS NULL)').n,
+      work_open: this.one("SELECT COUNT(*) AS n FROM work WHERE status='todo'").n };
+  }
   status() {
     const counts = Object.fromEntries(['raw_data', 'entities', 'identities', 'mentions', 'notes', 'work', 'pages', 'batches', 'changes', 'calls'].map((t) => [t, this.one(`SELECT COUNT(*) AS n FROM ${t}`).n]));
     const calls = this.one('SELECT COUNT(*) AS n, SUM(ok) AS ok, SUM(input_chars) AS input_chars, SUM(output_chars) AS output_chars FROM calls');
     calls.failed = calls.n - (calls.ok || 0);
     return { ok: true, db: this.path, counts,
       sources: this.all(`SELECT source, COUNT(*) AS records, SUM(processed_batch IS NULL AND ${this.allowed} AND ${UNHELD}) AS pending, SUM(NOT ${this.allowed}) AS withheld, MAX(available_at) AS latest FROM raw_data r GROUP BY source`),
-      backlog: { raw_pending: this.one(`SELECT COUNT(*) AS n FROM raw_data r WHERE processed_batch IS NULL AND ${this.allowed} AND ${UNHELD}`).n, held_by_private_person_policy: this.heldCount(),
-        raw_withheld_by_policy: this.withheldCount(),
-        pages_dirty: this.one('SELECT COUNT(*) AS n FROM pages WHERE dirty=1 AND entity_id IN (SELECT id FROM entities WHERE merged_into IS NULL)').n,
-        work_open: this.one("SELECT COUNT(*) AS n FROM work WHERE status='todo'").n },
+      backlog: this.backlog(),
       last_batch: this.one('SELECT id,kind,received_at FROM batches ORDER BY received_at DESC, rowid DESC LIMIT 1'),
       last_consolidation: this.one("SELECT id,kind,received_at FROM batches WHERE kind='push' ORDER BY received_at DESC,rowid DESC LIMIT 1"),
       health: this.drainHealth(), model_calls: calls, private_people: Object.keys(this.people).sort() };
@@ -712,7 +796,20 @@ class Apply {
   constructor(store, batchId, now, expected, sourceRefs) {
     Object.assign(this, { s: store, batchId, now, expected, idMap: {}, touched: new Set(), counter: 0, created: [] });
     this.batchSources = sourceRefs.map((r) => this.resolveSource(r));
-    this.taskMode = store.one('SELECT kind FROM batches WHERE id=?', [batchId]).kind === 'task';
+    this.kind = store.one('SELECT kind FROM batches WHERE id=?', [batchId]).kind;
+    this.taskMode = this.kind === 'task';
+  }
+  /** A caller-written batch (memory_apply, kind 'apply') declaring a NEW entity whose name (case-folded, exact) is already held by a live same-typed entity is refused with the candidate ids:
+   * the qualifier pass below would otherwise create the duplicate and rename the original.
+   * `name_status: 'distinct'` is the caller's explicit judgement that it is a different thing. Pipeline kinds (push, settle, seed) keep the qualifier path. */
+  refuseDuplicateName(name, etype, item) {
+    if (this.kind !== 'apply' || item.name_status === 'distinct') return;
+    const want = name.trim().toLowerCase();
+    const held = (r) => isStr(r.name) && r.name.trim().toLowerCase() === want;
+    const typed = truthy(item.type);
+    const hits = this.s.all('SELECT id,name,type,aliases FROM entities WHERE merged_into IS NULL').filter((r) => held(r) && (!typed || r.type === etype));
+    const all = hits;
+    if (all.length) throw new StoreError(`entity ${pyRepr(name)} already exists: ${all.slice(0, 8).map((h) => `${h.id} (${h.name}, ${h.type})`).join('; ')}. Name that entity (by id or exact name) in your notes instead of declaring it new; if it really is a different ${etype}, declare it with name_status:"distinct".`);
   }
   newId(prefix, temp) { this.counter++; const id = prefix + digest([this.batchId, prefix, this.counter], 10); if (temp) this.idMap[temp] = id; return id; }
   entityRef(ref) {
@@ -859,6 +956,7 @@ class Apply {
       this.s.run('UPDATE entities SET name=?,type=?,aliases=?,name_status=?,name_problem=?,version=version+1,updated_at=? WHERE id=?', [name, etype, j(aliases), status, problem, this.now, id]);
       [version, op] = [current.version + 1, 'updated'];
     } else {
+      this.refuseDuplicateName(name, etype, item);
       id = this.newId('e_', temp); [version, op] = [1, 'created'];
       this.s.run('INSERT INTO entities(id,name,type,aliases,name_status,name_problem,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)', [id, name, etype, j(aliases), status, problem, this.now, this.now]);
     }
@@ -1020,26 +1118,33 @@ class Apply {
 /** The discovery read boundary over this store's raw data (rev5 RawDataPlane). */
 export class RawDataPlane {
   constructor(store) { this.s = store; }
-  planes(requested) { const present = new Set(this.s.all('SELECT DISTINCT source FROM raw_data').map((r) => r.source)); return requested.map((p) => ({ plane: p, available: present.has(p), reason: present.has(p) ? null : 'no raw data ingested from this source', partial: false })); }
+  planes(requested) { const present = new Set(this.s.distinctSources()); return requested.map((p) => ({ plane: p, available: present.has(p), reason: present.has(p) ? null : 'no raw data ingested from this source', partial: false })); }
   static record(r) { return { plane: r.source, account: r.account, native_id: r.native_id, revision: r.revision, event_time: r.occurred_at, observed_time: r.available_at, text: r.text, thread_id: r.thread, author: r.author, recipients: [...(r.participants || [])], role: r.role, quotes: [], tool: null, observed_inferred: false }; }
+  /** Two stages: the ranked and the recent top-n are chosen on (id, source) alone, so the planner never reads a full row (text is
+   *  overflow pages) for a match that is then sorted away, and only the rows kept per source (at most `limit` each) are read whole. */
   search(planes, terms, asOf, limit) {
     const expr = terms.filter((t) => t && t.trim()).map((t) => `"${t.replace(/"/gu, '""')}"`).join(' OR ');
     let rows = [], excluded = 0; const taken = new Map();
     if (expr && planes.length) {
       const args = { q: expr, pl: j(planes), as_of: instant(asOf), n: limit };
-      const base = `SELECT r.* FROM raw_search s JOIN raw_data r ON r.id=s.id WHERE raw_search MATCH :q AND r.source IN (SELECT value FROM json_each(:pl)) AND ${this.s.localOnlyCut} AND ${ELIGIBLE}`;
-      const ranked = this.s.all(base + ' ORDER BY rank LIMIT :n', { ...args, n: limit * planes.length });
-      const recent = this.s.all(base + ' ORDER BY r.occurred_at DESC, r.rowid DESC LIMIT :n', { ...args, n: limit * planes.length });
-      for (const r of [...ranked, ...recent]) { if (!taken.has(r.source)) taken.set(r.source, []); const b = taken.get(r.source); if (b.length < limit && b.every((x) => x.id !== r.id)) b.push(r); }
-      rows = [...taken.values()].flat().map(RawDataPlane.record);
+      const from = `FROM raw_search s JOIN raw_data r ON r.id=s.id WHERE raw_search MATCH :q AND r.source IN (SELECT value FROM json_each(:pl)) AND ${this.s.localOnlyCut} AND ${ELIGIBLE}`;
+      const ranked = this.s.all(`SELECT r.id, r.source ${from} ORDER BY rank LIMIT :n`, { ...args, n: limit * planes.length });
+      const recent = this.s.all(`SELECT r.id, r.source ${from} ORDER BY r.occurred_at DESC, r.rowid DESC LIMIT :n`, { ...args, n: limit * planes.length });
+      for (const r of [...ranked, ...recent]) { if (!taken.has(r.source)) taken.set(r.source, []); const b = taken.get(r.source); if (b.length < limit && b.every((x) => x !== r.id)) b.push(r.id); }
+      const whole = new Map(this.s.all('SELECT r.* FROM raw_data r WHERE r.id IN (SELECT value FROM json_each(:ids))', { ids: j([...taken.values()].flat()) }).map((r) => [r.id, r]));
+      rows = [...taken.values()].flat().map((id) => RawDataPlane.record(whole.get(id)));
       excluded = this.s.one(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM raw_search s JOIN raw_data r ON r.id=s.id WHERE raw_search MATCH :q AND r.source IN (SELECT value FROM json_each(:pl)) AND NOT (${this.s.localOnlyCut} AND ${ELIGIBLE}) LIMIT :n)`, args).n;
     }
     const atCap = rows.length ? [...taken.entries()].filter(([, b]) => b.length >= limit).map(([p]) => p).sort() : [];
     return { records: rows, excluded, excluded_capped: excluded >= limit, planes_at_cap: atCap, candidates_capped: false, recency_window: null, recency_cut: null };
   }
+  /** The party test is written before the eligibility subquery on purpose: SQLite evaluates a row's terms in written order, and the
+   *  eligibility NOT EXISTS is an index probe plus a table fetch per row, so with it first every row of a plane
+   *  paid for it and a rare person cost 6 s; with the cheap author/participant test first only the matches do.
+   */
   searchParties(planes, aliases, asOf, limit) {
     const rows = [];
-    for (const plane of planes) if (aliases.length) rows.push(...this.s.all(`SELECT r.* FROM raw_data r WHERE r.source=:p AND ${this.s.allowed} AND ${ELIGIBLE} AND (lower(r.author) IN (SELECT value FROM json_each(:al)) OR EXISTS (SELECT 1 FROM json_each(r.participants) WHERE lower(value) IN (SELECT value FROM json_each(:al)))) ORDER BY r.occurred_at DESC LIMIT :n`,
+    for (const plane of planes) if (aliases.length) rows.push(...this.s.all(`SELECT r.* FROM raw_data r WHERE r.source=:p AND (lower(r.author) IN (SELECT value FROM json_each(:al)) OR EXISTS (SELECT 1 FROM json_each(r.participants) WHERE lower(value) IN (SELECT value FROM json_each(:al)))) AND ${this.s.allowed} AND ${ELIGIBLE} ORDER BY r.occurred_at DESC LIMIT :n`,
       { p: plane, as_of: instant(asOf), al: j(aliases.map((a) => a.toLowerCase())), n: limit }));
     return [rows, null];
   }

@@ -25,6 +25,7 @@
   import { nextAfterArchive } from '$lib/core/archive-select.js';
   import { isMod, isMacTextBinding } from '$lib/core/keys.js';
   import { SEEN_KEY, startsSidebarHidden } from '$lib/core/window-start.js';
+  import { resizeDrag, SIDEBAR_MIN_PX, SIDEBAR_MAX_PX, SIDEBAR_DEFAULT_PX } from '$lib/core/sidebar-resize.js';
   import UndoBar from '$lib/ui/UndoBar.svelte';
   import { createUndoStack, isUndoShortcut, watchEditedFields } from '$lib/core/undo.js';
   import { isSpaceKey } from '$lib/services/voice/core/pushtotalk.js';
@@ -70,15 +71,20 @@
   // Every chat that is a tab of some group (the sidebar marks these as open); `layout.panels` is the active one of each group.
   const openChatIds = $derived(layout.tabs.flat());
   const restored = layout.panels.length > 0;
-  let activeId = $state(layout.panels[layout.focused] ?? null);
+  // The focused chat is a fact of the pane layout and nothing else: derived, never written.
+  const activeId = $derived(layout.panels[layout.focused] ?? null);
   let viewportPx = $state(1400);
   let sidebarOpen = $state(false);
-  let sidebarHidden = $state(false);
-  // Drag the list's right edge to resize it; dragged narrower than SIDEBAR_COLLAPSE_PX it collapses as
-  // Cmd-B would, and dragging back out reopens it. Width persists per browser.
-  const SIDEBAR_MIN_PX = 200, SIDEBAR_MAX_PX = 560, SIDEBAR_COLLAPSE_PX = 140, SIDEBAR_DEFAULT_PX = 280;
-  // Device UI state is declared once (core/sidebar-state.js) on the kit's state core, hydrated here synchronously so the
-  // first paint already has his width and workspace; the old code read the width in onMount, a frame late.
+  // The list is collapsed (wide windows): a fact of the sidebar's device state in the kit store, never a bare flag here, so the corner
+  // tab, the edge hit area, the resize handle and the first pane's tab strip all read the one value.
+  const sidebarHidden = $derived($sidebarStore.hidden);
+  const setSidebarHidden = (hidden) => sidebarStore.dispatch('hidden.set', { hidden });
+  // Width of the corner tab the collapsed list leaves (measured), so the first pane's tab strip makes room beside it.
+  let cornerW = $state(0);
+  // Drag the list's right edge to resize it; dragged narrower than SIDEBAR_COLLAPSE_PX it collapses as Cmd-B would, and
+  // dragging back out reopens it. Width persists per browser. Device UI state is declared once (core/sidebar-state.js)
+  // on the kit's state core, hydrated here synchronously so the first paint already has his width and workspace; the old
+  // code read the width in onMount, a frame late.
   const sidebarStore = uiApp().use(sidebarDecl);
   let dragWidth = $state(null);
   const sidebarWidth = $derived(dragWidth ?? ($sidebarStore.width >= SIDEBAR_MIN_PX && $sidebarStore.width <= SIDEBAR_MAX_PX ? $sidebarStore.width : SIDEBAR_DEFAULT_PX));
@@ -157,7 +163,7 @@
 
   function toggleSidebar() {
     sidebarPeek = false;
-    if (wide) sidebarHidden = !sidebarHidden;
+    if (wide) setSidebarHidden(!sidebarHidden);
     else sidebarOpen = !sidebarOpen;
   }
 
@@ -167,12 +173,18 @@
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
     sidebarDragging = true;
+    // The drag moves the width by the pointer's movement from the width the list has right now (its rendered box, not the stored
+    // number and not clientX); see core/sidebar-resize.js. A press that never moves changes nothing.
+    const rendered = handle.parentElement?.querySelector('[data-testid="sidebar"]')?.getBoundingClientRect().width;
+    const drag = resizeDrag({ startWidth: rendered > 0 ? rendered : sidebarWidth, startX: event.clientX });
     let frame = 0, x = event.clientX;
     const apply = () => {
       frame = 0;
-      if (x < SIDEBAR_COLLAPSE_PX) { sidebarHidden = true; return; }
-      sidebarHidden = false;
-      dragWidth = Math.round(Math.max(SIDEBAR_MIN_PX, Math.min(SIDEBAR_MAX_PX, x)));
+      const next = drag.move(x);
+      if (next.hidden) { setSidebarHidden(true); return; }
+      if (next.width === null) return;
+      setSidebarHidden(false);
+      dragWidth = next.width;
     };
     const move = (e) => { x = e.clientX; if (!frame) frame = requestAnimationFrame(apply); };
     const end = () => {
@@ -181,7 +193,8 @@
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', end);
       handle.removeEventListener('pointercancel', end);
-      if (dragWidth !== null) sidebarStore.dispatch('width.set', { px: dragWidth });
+      const saved = drag.end();
+      if (saved !== null) sidebarStore.dispatch('width.set', { px: saved });
       dragWidth = null;
     };
     handle.addEventListener('pointermove', move);
@@ -196,7 +209,7 @@
   function navPick(id) {
     if (id === 'chatlist') toggleSidebar();
     if (id === 'show-chatlist') {
-      sidebarHidden = false;
+      setSidebarHidden(false);
       sidebarOpen = true;
     }
     if (id === 'search') searching = true;
@@ -209,9 +222,9 @@
     try {
       const seen = sessionStorage.getItem(SEEN_KEY) === '1';
       sessionStorage.setItem(SEEN_KEY, '1');
-      sidebarHidden = startsSidebarHidden({
+      setSidebarHidden(startsSidebarHidden({
         chatInUrl: new URLSearchParams(location.search).get('chat'), opener: window.opener, seen
-      });
+      }));
     } catch { /* storage refused: the list stays where it was */ }
     const unsubscribeIncognito = incognito.session.subscribe((next, nextStatus) => {
       incognitoState = next;
@@ -223,7 +236,7 @@
       if (nextStatus.readyMs !== undefined) {
         window.__webchatBoot = { firstPaintMs: nextStatus.firstPaintMs, readyMs: nextStatus.readyMs, cached: nextStatus.cached };
       }
-      if (!activeId && wide) {
+      if (!activeId && wide && !selecting) {
         const first = rankConversations(next.conversations, { now: Date.now() })[0];
         if (first) select(first.id, { touch: false });
       }
@@ -531,16 +544,34 @@
     }
   }
 
-  function select(id, { touch = true } = {}) {
-    releaseTransient(id);
+  // `preview` (a plain click in the sidebar): the chat opens as the focused group's preview tab, replacing the untouched one
+  // there. `selecting`: the blank chat released here publishes while no pane is focused, which would wake the boot fallback
+  // above into opening the newest chat as a normal tab ahead of this one (a sidebar click then never opened a preview tab).
+  let selecting = false;
+  function select(id, { touch = true, preview = false } = {}) {
+    selecting = true;
+    try { releaseTransient(id); } finally { selecting = false; }
+    if (preview) keepTouchedPreview(id);
     const before = layout.panels[layout.focused];
-    pane('pane.activate', { id });
+    pane('pane.activate', preview ? { id, preview: true } : { id });
     const focusedId = layout.panels[layout.focused] ?? null;
-    activeId = focusedId;
     sidebarOpen = false;
     for (const panel of layout.panels) session.hydrate(panel);
     if (touch && focusedId && focusedId !== before) session.touch(focusedId);
     if (focusedId) replaceState(`?chat=${encodeURIComponent(focusedId)}`, {});
+  }
+
+  // The focused group's preview tab, kept when he has left something in it that a replacement would hide.
+  function keepTouchedPreview(nextId) {
+    const at = layout.focused;
+    const chat = layout.preview?.[at];
+    if (!chat || chat === nextId) return;
+    const uploads = layout.panels[at] === chat ? (paneRefs[at]?.stagedUploads?.() ?? []) : [];
+    if (String(readDraft(chat) ?? '').trim() || uploads.length) pane('tab.keepPreview', { group: layout.keys[at], chat });
+  }
+  // He did something with a chat (typed, sent, double-clicked its tab or its sidebar row): every group's preview of it is kept.
+  function keepPreview(chat) {
+    (layout.preview ?? []).forEach((id, index) => { if (id === chat) pane('tab.keepPreview', { group: layout.keys[index], chat }); });
   }
 
   function openFork(id, { split = true } = {}) {
@@ -549,14 +580,12 @@
     // An explicit split is always a new pane, even when the chat is already open in another one.
     if (split === true && layout.panels.length) paneGesture(paneStore, 'split', { chat: id });
     else pane('pane.openFor', { id, split, viewportPx });
-    activeId = layout.panels[layout.focused] ?? id;
     for (const panel of layout.panels) session.hydrate(panel);
     replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
 
   function focusPane(index) {
     pane('pane.focus', { index });
-    activeId = layout.panels[layout.focused] ?? null;
     if (activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
 
@@ -569,7 +598,6 @@
   function closePane(index) {
     if (!confirmLoss(layout.tabs[index] ?? [])) return;
     paneGesture(paneStore, 'close', { index });
-    activeId = layout.panels[layout.focused] ?? null;
     if (activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
 
@@ -606,7 +634,7 @@
     closeToRight: (group, chat) => { const tabs = tabsOfGroup(group); if (tabs.includes(chat)) keepTabsOf(group, tabs.slice(0, tabs.indexOf(chat) + 1)); },
     closeAll: (group) => keepTabsOf(group, []),
     // the tab shown again in a new group on the right of its group
-    splitRight: (group, chat) => { if (paneGesture(paneStore, 'splitTab', { group, chat })) activateAfter(); },
+    splitRight: (group, chat) => { pane('tab.keepPreview', { group, chat }); if (paneGesture(paneStore, 'splitTab', { group, chat })) activateAfter(); },
     // the tab moved out of its group into a new one on the right (a group's only tab has nowhere to move from)
     moveToNewGroup: (group, chat) => {
       if (tabsOfGroup(group).length < 2 || !tabsOfGroup(group).includes(chat)) return;
@@ -630,6 +658,8 @@
     if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
   }
   function splitActiveTab() {
+    const group = layout.keys[layout.focused];
+    if (group) pane('tab.keepPreview', { group, chat: layout.panels[layout.focused] });
     if (paneGesture(paneStore, 'splitActive')) activateAfter();
   }
 
@@ -747,7 +777,6 @@
 
   // After a pane action changed the layout: follow the focus, load every open chat, point the address at it.
   function settlePanes() {
-    activeId = layout.panels[layout.focused] ?? null;
     for (const panel of layout.panels) session.hydrate(panel);
     if (activeId) replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
@@ -835,7 +864,6 @@
     const gone = new Set(session.dropRevoked());
     if (!gone.size) return;
     if (pane('pane.drop', { ids: [...gone] })) settlePanes();
-    activeId = layout.panels[layout.focused] ?? null;
   });
 
   let lastNewChatId = $state(null);
@@ -862,7 +890,6 @@
     // focused wakes the boot fallback below, which selects the newest chat and calls
     // replaceState from inside onMount, before SvelteKit's router exists.
     pane('pane.activate', { id });
-    activeId = layout.panels[layout.focused] ?? id;
     sidebarOpen = false;
     session.createProvisional(id, { title: 'New chat', ...newChatSettings(), ...inheritedScope, ...workspacePayload() });
   }
@@ -895,7 +922,6 @@
     if (lastNewChatId === id) lastNewChatId = null;
     pane('pane.drop', { ids: [id] });
     session.discardProvisional(id);
-    if (activeId === id) activeId = layout.panels[layout.focused] ?? null;
   }
 
   // The first send commits it behind the composer's back, so the pane itself notices and the
@@ -916,7 +942,6 @@
     await incognito.start();
     const id = incognito.session.newConversationId();
     if (split) pane('pane.openBeside', { id }); else pane('pane.activate', { id });
-    activeId = layout.panels[layout.focused] ?? id;
     sidebarOpen = false;
     incognito.open(id, newChatSettings());
     replaceState(location.pathname, {});
@@ -966,7 +991,6 @@
     session.create(id, { title: 'New chat', ...newChatSettings(), ...scopePayload(focusedId), ...workspacePayload() });
     pane('pane.openFor', { id, split, viewportPx });
     onboard('chat.created', { chat: id, split });
-    activeId = layout.panels[layout.focused] ?? id;
     sidebarOpen = false;
     replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
     await tick();
@@ -1074,6 +1098,7 @@
     {navItems}
     onnavpick={navPick}
     onselect={select}
+    onkeep={keepPreview}
     onopenbeside={(id) => openFork(id)}
     onnew={newChat}
     onsearch={() => (searching = true)}
@@ -1081,7 +1106,7 @@
     onarchive={archiveChat}
     onaside={asideChat}
     ondefer={deferChat}
-    onread={(id, read) => session.markRead(id, read)}
+    onread={(id, read, opts) => session.markRead(id, read, opts)}
     onclose={() => (sidebarOpen = false)}
     onworkspace={(id, name) => session.setWorkspace(id, name)}
   />
@@ -1095,8 +1120,9 @@
 
   <div class="stage">
     {#if !navInSidebar}
-      
-      <div class="stagenav" data-testid="stage-nav">
+      <!-- Wide window, list collapsed: the pill and its menu sit in a small tab in the top-left corner, over the first pane's tab
+           strip (which leaves room for it), so the transcript keeps the whole height. A phone keeps the floating pill. -->
+      <div class="stagenav" class:corner={wide} data-testid="stage-nav" bind:offsetWidth={cornerW}>
         <Nav current="chats" items={navItems} drop={wide ? 'down' : 'up'} align={wide ? 'left' : 'right'}
           onpick={navPick} onactivate={() => navPick('show-chatlist')} />
       </div>
@@ -1148,11 +1174,14 @@
               group={layout.keys[index]}
               tabs={tabsOf(index)}
               active={panelId}
+              preview={layout.preview?.[index] ?? null}
               focused={index === layout.focused}
+              inset={index === 0 && !navInSidebar ? cornerW : 0}
               drag={dragState}
               ondown={(chat, event) => tabDown(layout.keys[index], chat, event)}
               onclose={(chat) => closeTab(layout.keys[index], chat)}
               onnew={() => { focusPane(index); newChat(); }}
+              onkeep={(chat) => pane('tab.keepPreview', { group: layout.keys[index], chat })}
             />
           {/if}
           <div class="group-body">
@@ -1170,6 +1199,7 @@
             onselect={(id, options) => select(id, options)}
             onforkopen={(id, options) => openFork(id, options)}
             onnewchat={(opts) => newChat(opts)}
+            onengage={() => pane('tab.keepPreview', { group: layout.keys[index], chat: panelId })}
             onfocus={() => focusPane(index)}
             onclosepane={layout.panels.length > 1 ? () => closePane(index) : null}
             jump={jump && jump.conversationId === panelId ? jump : null}
@@ -1234,11 +1264,26 @@
   .app.resizing :global(main) { pointer-events: none; }
   .edge { position: fixed; inset: 0 auto 0 0; width: 8px; z-index: 39; }
   .stage { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .stage { position: relative; }
   .stagenav {
     flex: none;
     padding: 20px clamp(12px, 4vw, 20px) 6px;
     padding-top: max(20px, env(safe-area-inset-top));
   }
+  /* The collapsed list's tab: hugs the top-left corner, as tall as the tab strip it sits in, only its top-right corner
+     rounded (a folder tab), sized to the pill and menu button inside. It takes no height from the transcript. Appears by
+     opacity and a short slide on the compositor, one easing; the pill drops its own outline inside it. */
+  .stagenav.corner {
+    position: absolute; z-index: 6; top: 0; left: 0; padding: 0; height: 28px;
+    display: flex; align-items: center; padding: 0 8px 0 4px;
+    background: var(--bg-raised); border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
+    border-radius: 0 10px 0 0;
+    animation: corner-in var(--panel) var(--ease);
+  }
+  .stagenav.corner :global(.pill) { border-color: transparent; background: transparent; padding: 0; }
+  .stagenav.corner :global(.pill .tab) { padding: 5px 10px; }
+  @keyframes corner-in { from { opacity: 0; transform: translateX(-8px); } }
+  @media (prefers-reduced-motion: reduce) { .stagenav.corner { animation: none; } }
   /* A phone is held at the bottom, so the chat list lives within thumb reach there.
      It floats over the transcript rather than taking a bar out of it: a bar of its own
      cost 43px of reading space and made the pill look like part of the new-chat button's

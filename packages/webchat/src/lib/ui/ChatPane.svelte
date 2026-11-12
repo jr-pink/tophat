@@ -41,6 +41,8 @@
     onpath = () => {},
     onselect = () => {},
     onnewchat = () => {},
+    // He did something in this chat (typed in the composer, sent): the page keeps a preview tab (core/panels.js).
+    onengage = () => {},
     autofocus = false,
     primary = true,
     onfocus = () => {},
@@ -821,6 +823,7 @@
   });
 
   function send(text, attachments = []) {
+    onengage();
     uploadFailures = [];
     onboard('message.sent', { chat: conversationId, n: (conversation?.turns || 0) + 1 });
     session.send(conversationId, text, uploadRefs(attachments));
@@ -830,6 +833,7 @@
   }
 
   function forkSend(text, attachments = [], { split = false } = {}) {
+    onengage();
     const id = fork(null, { beside: split });
     uploadFailures = [];
     onboard('chat.created', { chat: id, split });
@@ -1160,7 +1164,7 @@
     {noteAt}
     {autofocus}
     draftKey={conversationId}
-    ondraft={() => session?.commitProvisional?.(conversationId)}
+    ondraft={() => { onengage(); session?.commitProvisional?.(conversationId); }}
     queued={status.unsentByConversation ? (status.unsentByConversation[conversationId] || 0) : (status.unsentMessages ?? status.queued ?? 0)}
     online={status.online !== false && !status.offline}
     placeholder={running ? 'Correct it mid-run…' : 'Message…'}

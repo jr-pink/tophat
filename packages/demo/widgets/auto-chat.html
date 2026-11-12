@@ -1,0 +1,47 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<style>
+/* the one shared element: the figure caption (identical in all six widgets) */
+:root{--cap-bg:#f7f6f2;--cap-ink:#3d3b36;--cap-label:#8a867b;--cap-rule:#d8d5cb}
+@media (prefers-color-scheme:dark){:root{--cap-bg:#171716;--cap-ink:#bdb9ae;--cap-label:#7d796f;--cap-rule:#32312d}}
+html,body{margin:0;height:100%}body{display:flex;flex-direction:column;overflow:hidden}*{box-sizing:border-box}
+figure{margin:0;flex:1;min-height:0;display:flex;flex-direction:column}
+figcaption{flex:none;padding:7px 14px 9px;border-top:1px solid var(--cap-rule);background:var(--cap-bg);color:var(--cap-ink);font:12px/1.45 Georgia,"Iowan Old Style","Times New Roman",serif}
+figcaption b{font:600 10.5px/1 ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.06em;text-transform:uppercase;margin-right:8px;color:var(--cap-label)}
+/* this figure: one auto chat, drawn in HTML: an inbound message, what the agent found in memory, and the reply it drafted, ready to send. Static. All names and files are made up. */
+:root{--bg:#fbfaf6;--card:#fffefb;--line:#d9d5c9;--g:#e8e4d9;--hint:#8a867b;--ink:#2f2d28;--rose:#e6a0a6;--rt:#b45c6e;--rw:#f6e4e5}
+@media (prefers-color-scheme:dark){:root{--bg:#131312;--card:#191918;--line:#34332f;--g:#2b2a26;--hint:#7d796f;--ink:#d6d2c7;--rt:#e6a0a6;--rw:#2a1f21}}
+html,body{height:auto}body{overflow:visible;background:var(--bg);color:var(--ink);font:12.5px/1.5 ui-monospace,"SF Mono",Menlo,monospace}figure{flex:none}
+.w{display:grid;grid-template-columns:minmax(150px,200px) 1fr;gap:0;margin:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);overflow:hidden}
+.sb{background:var(--g);padding:10px;border-right:1px solid var(--line);font-size:11px;color:var(--hint)}
+.sb .row{padding:5px 7px;border-radius:5px;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb .on{background:var(--rw);border:1px solid var(--rose);color:var(--ink)}.sb .on:before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--rose);margin-right:6px}
+.main{padding:12px 14px;min-width:0}
+.lab{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--hint);margin:0 0 4px}
+.in{background:var(--g);border-radius:10px;padding:8px 11px;max-width:92%;margin-bottom:10px}
+.in small{display:block;color:var(--hint);font-size:10.5px}
+.step{border:1px dashed var(--rose);border-radius:7px;padding:6px 9px;margin:0 0 6px;font-size:11.5px}
+.step b{color:var(--rt);font-weight:600}
+.warn{border-color:var(--rt);background:var(--rw)}
+.file{display:inline-block;border:1px solid var(--line);border-radius:5px;padding:2px 8px;font-size:11px;margin-top:4px}
+.draft{border:1px solid var(--rose);background:var(--rw);border-radius:10px;padding:9px 11px;margin-top:10px}
+.draft p{margin:0 0 6px}.bar{display:flex;gap:8px;align-items:center;margin-top:4px}
+.btn{border:1px solid var(--rt);color:var(--rt);border-radius:12px;padding:2px 12px;font-size:11px}.btn.p{background:var(--rt);color:var(--card)}
+@media (max-width:520px){.w{grid-template-columns:1fr}.sb{display:none}}
+</style></head><body>
+<figure>
+<div class="w">
+<div class="sb"><div class="row on">Dana: can we meet Thursday?</div><div class="row">Plumbing quote</div><div class="row">Permit status</div><div class="row">Weekly review</div></div>
+<div class="main">
+<p class="lab">A message arrives, a chat opens by itself</p>
+<div class="in"><small>Dana (contractor), 9:12 AM</small>Hi, can I come by Thursday at 2 to walk the bathroom? Also, can you send me the latest building plans?</div>
+<p class="lab">What the agent did</p>
+<div class="step"><b>Memory:</b> Dana is the contractor on the bathroom remodel; the current set is plans v3, filed Oct 28, replacing v2.</div>
+<div class="step warn"><b>Calendar conflict:</b> Thursday 2:00 PM overlaps a dentist appointment (1:30 to 2:30). Free Thursday after 3:00 PM, or Friday morning.</div>
+<p class="lab">Reply, ready to send</p>
+<div class="draft"><p>Hi Dana, Thursday at 2 doesn't work for me. Could you do 3:30 instead, or Friday at 10? Plans v3 are attached, the latest set.</p><span class="file">bathroom-plans-v3.pdf</span>
+<div class="bar"><span class="btn p">Send</span><span class="btn">Edit</span><span class="btn">Not now</span></div></div>
+</div></div>
+<figcaption><b>Fig. 3</b>An auto chat. A message from a contractor opens its own chat: the agent finds the right plans in memory, checks your calendar and flags the conflict, then drafts a reply with the file attached. Nothing is sent until you press send. The names and files here are made up.</figcaption>
+</figure>
+<script>(function(){function tell(){parent.postMessage({tophatFigure:'height',px:Math.ceil(document.body.getBoundingClientRect().height)},'*')}addEventListener('load',tell);addEventListener('resize',tell)})()</script>
+</body></html>

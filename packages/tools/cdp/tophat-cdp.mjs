@@ -80,7 +80,7 @@ const VERBS = {
   html: v('outerHTML of a selector (default: the whole document).', [TARGET, pos('selector', { nargs: '?' })], [opt('--max-chars', { type: 'int', default: 200000 })]),
   text: v('innerText of a selector (default: body).', [TARGET, pos('selector', { nargs: '?' })], [opt('--max-chars', { type: 'int', default: 200000 })]),
   screenshot: v('PNG of a target to a file.', [TARGET, soft('out')], [opt(['--out', '--output', '-o'], { dest: 'out_opt', metavar: 'PATH' }), opt('--clip'),
-    flag('--full-page'), opt('--scale', { type: 'float', default: 1.0 }), opt('--timeout', { type: 'float', default: 30.0 }), flag('--allow-secret-fields')]),
+    flag('--full-page'), opt('--scale', { type: 'float', default: 1.0 }), opt('--timeout', { type: 'float', default: 30.0 }), flag('--allow-secret-fields'), opt('--color-scheme', { choices: ['light', 'dark'] })]),
   pdf: v('Print a target to a PDF file (Page.printToPDF). Added 2026-11-02 for gmail-pdf-filer: a portal that shows a document only as a page has no file to download.', [TARGET, pos('out', { help: 'output .pdf path' })], [opt('--timeout', { type: 'float', default: 30.0 })]),
   download: v('Fetch URL inside the tab (its cookies) and write the bytes to OUT; exit 3 on a non-2xx answer or, with --expect-pdf, bytes that do not start with %PDF-. Added 2026-11-02 for gmail-pdf-filer (a statement behind a login is a same-origin GET).', [TARGET, pos('url', { help: 'absolute, or relative to the tab' }), pos('out', { help: 'output path' })], [flag('--expect-pdf'), opt('--timeout', { type: 'float', default: 40.0 })]),
   click: v('Mouse click at x,y in CSS pixels; a frame target is clicked through its embedding page.', [TARGET, pos('x', { type: 'float' }), pos('y', { type: 'float' })],
@@ -473,7 +473,10 @@ const CMD = {
     const r = await K.withTarget(ep, target, async (c) => {
       // no requestAnimationFrame wait: a background tab never runs one; the capture itself renders a frame
       if (mask) await K.evalValue(c, `(()=>{const s=document.createElement('style');s.id='__tophat_cdp_mask';s.textContent=${JSON.stringify(S.MASK_CSS)};document.documentElement.appendChild(s);void document.documentElement.offsetHeight;return 1})()`);
+      // --color-scheme: prefers-color-scheme emulated for this capture only (it is session-scoped, so it is set and cleared here), reaching sandboxed widget iframes too
+      if (a.color_scheme) await c.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: a.color_scheme }] });
       try { return await capture(c); } finally {
+        if (a.color_scheme) await c.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: '' }] }).catch(() => {});
         if (mask) await K.evalValue(c, `(()=>{const s=document.getElementById('__tophat_cdp_mask');if(s)s.remove();return 1})()`).catch(() => {});
       }
     }, Math.max(a.timeout, 30));

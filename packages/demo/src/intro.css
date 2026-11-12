@@ -4,7 +4,7 @@
    html.demo-intro      the opening is owed (set by the page's first script, before the app paints)
    html.demo-intro-out  the flight has started */
 
-html.demo-intro, html.demo-intro body { background: #000 !important; overflow: hidden !important; }
+html.demo-intro, html.demo-intro body { overflow: hidden !important; }
 #demo-intro { position: fixed; inset: 0; z-index: 2147482000; pointer-events: auto; contain: strict; }
 #demo-intro .bg { position: absolute; inset: 0; background: #000; will-change: opacity; }
 #demo-intro .line { position: absolute; left: 50%; width: 0; height: 0; top: 50%; transform: translateY(-50%); will-change: transform, opacity;
@@ -43,3 +43,11 @@ html.demo-intro [data-testid="activity"][data-phase="reconnecting"], html.demo-i
 html.demo-opener [data-testid="activity"][data-phase="reconnecting"], html.demo-opener [data-testid="activity"][data-phase="offline"] { visibility: hidden; }
 
 #demo-intro .send.on { opacity: 1; }
+
+/* the opener's answer waits for the message to land: hidden while the intro plays and during the flight, shown (and risen in, shim.js) at landing */
+html.demo-intro main [data-role="assistant"], html.demo-intro-out:not(.demo-landed) main [data-role="assistant"] { opacity: 0; }
+
+/* the zoom load-in (shim.js zoomIntro): the page opens hidden, then shows the real app zoomed onto its message bar, types, sends, zooms out.
+   The page stays hidden until the zoom is set so the first frame is already zoomed. */
+/* the app's own background stays put the whole time: only the page content waits for the zoom */
+html.demo-intro:not(.demo-zoomed) body > * { opacity: 0; }

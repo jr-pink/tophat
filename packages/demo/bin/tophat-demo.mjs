@@ -3,7 +3,8 @@
 //   tophat-demo export --repo DIR --out DIR [--since 8.days] [--deny FILE]     project docs + commit log -> records.jsonl, manifest.json (private-data gate)
 //   tophat-demo seed --config demo.json                           records -> the instance replica (the group scope), then the graph snapshot
 //   tophat-demo ask --config demo.json --slot NAME [--prompt TEXT] run one real turn on the instance and cache its answer for the slot
-//   tophat-demo daily --config demo.json                          seed, then re-run every slot marked daily
+//   tophat-demo pages --config demo.json [--force]                 write the model-written entity pages (at most once a day; --force overrides), then the graph snapshot
+//   tophat-demo daily --config demo.json                          seed, write the day's pages (once a day), then re-run every slot marked daily
 //   tophat-demo widgets|instructions --config demo.json           regenerate the memory-graph widget / the agent's standing context from their sources
 //   tophat-demo release --repo DIR [--revendor]                    (maintainer) build main and publish it for the demo user; --revendor first re-assembles packages/webchat from the upstream app when it drifted and has been quiet 2 minutes (the timer job only)
 //   tophat-demo instance --config demo.json [--check]            write seed/instance-policy.json into the instance file (--check: report only; exit 1 on a difference or any webchat row in memory)
@@ -42,14 +43,25 @@ if (cmd === 'export') {
   const c = config();
   const { ask } = await import('../src/ask.mjs');
   print(await ask(c, flags.slot || die('--slot'), flags.prompt || null));
+} else if (cmd === 'pages') {
+  const c = config();
+  const { snapshot } = await import('../src/seed.mjs');
+  const { buildPagesFromConfig } = await import('../src/pages.mjs');
+  const pages = await buildPagesFromConfig(c, { force: Boolean(flags.force) });
+  print({ pages, snapshot: await snapshot({ ...c, out: c.snapshot }) });
 } else if (cmd === 'daily') {
   const c = config();
   const { seed, snapshot } = await import('../src/seed.mjs');
   const { ask } = await import('../src/ask.mjs');
-  const out = { seed: await seed(c), snapshot: await snapshot({ ...c, out: c.snapshot }), asked: [] };
+  const { buildPagesFromConfig } = await import('../src/pages.mjs');
+  const out = { seed: await seed(c) };
+  // the day's model-written pages come after the seed (they read its notes) and before the snapshot (which prefers them); a pages problem is reported and the rest still runs
+  out.pages = await buildPagesFromConfig(c).catch((e) => ({ error: e.message }));
+  out.snapshot = await snapshot({ ...c, out: c.snapshot });
+  out.asked = [];
   for (const s of c.slots.filter((x) => x.daily)) out.asked.push(await ask(c, s.id, null).catch((e) => ({ slot: s.id, error: e.message })));
   print(out);
-  if (out.asked.some((a) => a.error)) process.exit(1);
+  if (out.pages.error || out.asked.some((a) => a.error)) process.exit(1);
 } else if (cmd === 'widgets') {
   const c = config();
   // the builder is source-only in the public archive; the demo host's release carries it (release.mjs). A tree without it keeps the widget it has.

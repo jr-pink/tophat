@@ -1,5 +1,5 @@
 {
-  "note": "What every demo instance file must carry, applied by `tophat-demo instance` (and on every update). Machine-specific values (paths, ports, PATH, keys, the token budget) stay in the instance file itself.",
+  "note": "What every demo instance file must carry, applied by `tophat-demo instance` (and on every update). Machine-specific values (paths, ports, PATH, keys, the token budget) stay in the instance file itself. models.fast is the cheap OpenAI-compatible model the webchat's chat titles and folder auto-routing call; without it a guest's new chat is never filed (every route attempt failed 'no fast-model-api-key'). Its key is the demo keyring entry fast-model-api-key.",
   "runner": {
     "env": {
       "TOPHAT_RUNNER_TOOLS_ALLOW": "memory_search,memory_read",
@@ -9,6 +9,15 @@
       "TOPHAT_RUNNER_INSTRUCTIONS_MAX_BYTES": "120000",
       "TOPHAT_RUNNER_PROMPT_MODE": "public",
       "TOPHAT_RUNNER_TRANSCRIPTS": "0"
+    }
+  },
+  "models": {
+    "fast": {
+      "baseUrl": "https://api.cerebras.ai/v1",
+      "model": "gpt-oss-120b",
+      "credential": {
+        "keyring": "fast-model-api-key"
+      }
     }
   }
 }

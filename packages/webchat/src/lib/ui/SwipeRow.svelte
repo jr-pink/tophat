@@ -264,7 +264,8 @@
     opacity: 0;
     pointer-events: none;
     padding-left: 18px;
-    background: linear-gradient(90deg, transparent, var(--swipe-bg, transparent) 22%);
+    /* --rowactions-bg: the row's own painted colour (a highlighted row is not --swipe-bg), so the cluster never shows a box edge over a highlight */
+    background: linear-gradient(90deg, transparent, var(--rowactions-bg, var(--swipe-bg, transparent)) 22%);
     transition: opacity var(--tap, 120ms) var(--ease, ease);
   }
   /* The cluster itself never takes a pointer, only its buttons do: a strip of padding and

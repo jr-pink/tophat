@@ -1,6 +1,7 @@
 <script>
   import { widgetDocument } from '$lib/core/rich-content.js';
   import VideoPlayer from './VideoPlayer.svelte';
+  import { openWidget } from './lightbox.svelte.js';
   import { fetchFileVersion, withFileVersion } from '$lib/core/file-version.js';
 
   const MAX_WIDGET_CHARS = 16_000_000;
@@ -30,14 +31,31 @@
   const url = $derived(withFileVersion(withConversation(contentUrl), versioned ? version : null));
   const ready = $derived(!versioned || version !== null);
   let state = $state({ status: 'ready', source: '', error: '' });
-  let expanded = $state(false);
+  let frame = $state();
+  // The height a figure asked for (see the message handler below); null keeps the stylesheet's 420px.
+  let fitted = $state(null);
   // An image that will not load (host gone, refused address, signed out, offline with nothing cached)
   // shows its caption as a link to the original, never a broken box.
   let broken = $state(false);
   const remote = $derived(content.remote || null);
   let showSource = $state(false);
   const source = $derived(kind === 'widget' ? content.source : state.source);
-  const document = $derived(widgetDocument(source));
+  // In the chat a click on a part of the figure that is not a control opens it in the figure viewer (Lightbox):
+  // the frame's bridge script posts it, since a frame swallows the click. The viewer gets its own document, with
+  // the zoom bridge, and renders it large.
+  const document = $derived(widgetDocument(source, { bridge: 'open' }));
+  const openLarge = () => openWidget({ title: content.title, doc: widgetDocument(source, { bridge: 'zoom' }), el: frame });
+  $effect(() => {
+    if (!frame) return;
+    const on = (event) => {
+      if (event.source !== frame.contentWindow) return;
+      if (event.data?.tophatFigure === 'open') openLarge();
+      // A figure that knows its own height says so ({ tophatFigure: 'height', px }): the frame is then exactly that tall, so it never scrolls inside the chat.
+      else if (event.data?.tophatFigure === 'height') { const px = Math.round(Number(event.data.px)); if (px >= 60 && px <= 3000) fitted = px; }
+    };
+    window.addEventListener('message', on);
+    return () => window.removeEventListener('message', on);
+  });
   $effect(() => {
     if (kind !== 'widget-file') return;
     const target = url;
@@ -63,7 +81,7 @@
 {:else if kind === 'image' && broken}
   <p class="broken" data-testid="rich-content-broken">{#if remote}<a href={remote} target="_blank" rel="noreferrer noopener">{content.title}</a>{:else}{content.title} (image unavailable){/if}</p>
 {:else}
-<figure class:expanded data-testid="rich-content">
+<figure data-testid="rich-content">
   <figcaption>
     <span class="title" title={content.title}>{content.title}</span>
     <div class="actions">
@@ -71,8 +89,8 @@
         <button type="button" title={showSource ? 'Preview' : 'Source'} aria-label={showSource ? 'Preview' : 'Source'} aria-pressed={showSource} onclick={() => showSource = !showSource}>
           <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">{#if showSource}<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" /><circle cx="8" cy="8" r="2" />{:else}<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />{/if}</svg>
         </button>
-        <button type="button" title={expanded ? 'Collapse' : 'Expand'} aria-label={expanded ? 'Collapse' : 'Expand'} aria-pressed={expanded} onclick={() => expanded = !expanded}>
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">{#if expanded}<path d="M6.5 2v4.5H2M9.5 14V9.5H14" />{:else}<path d="M9.5 2H14v4.5M6.5 14H2V9.5M14 2 9.5 6.5M2 14l4.5-4.5" />{/if}</svg>
+        <button type="button" title="Expand" aria-label="Expand" onclick={openLarge} disabled={state.status !== 'ready'}>
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M9.5 2H14v4.5M6.5 14H2V9.5M14 2 9.5 6.5M2 14l4.5-4.5" /></svg>
         </button>
       {/if}
       {#if remote}
@@ -99,7 +117,7 @@
   {:else if showSource}
     <pre><code>{source}</code></pre>
   {:else}
-    <iframe title={content.title} srcdoc={document} sandbox="allow-scripts" referrerpolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"></iframe>
+    <iframe bind:this={frame} title={content.title} srcdoc={document} sandbox="allow-scripts" referrerpolicy="no-referrer" style:height={fitted ? fitted + 'px' : null} allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"></iframe>
   {/if}
 </figure>
 {/if}
@@ -120,7 +138,6 @@
   img, video { display: block; max-width: 100%; max-height: 75vh; margin: auto; object-fit: contain; }
   audio { display: block; width: 100%; }
   iframe { display: block; width: 100%; height: 420px; margin: 0 !important; border: 0; background: white; }
-  .expanded iframe { height: 80vh; }
   pre { max-height: 65vh; overflow: auto; padding: 1rem; font-size: .8rem; }
   p { padding: 1rem; }
   p.broken { padding: .4rem 0; margin: 1rem 0; font-size: .85rem; overflow-wrap: anywhere; }

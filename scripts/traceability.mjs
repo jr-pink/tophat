@@ -26,11 +26,20 @@ export function loadDeny(file = DENY_FILE) {
   return readFileSync(file, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).map((src) => ({ src, re: new RegExp(src, 'i') }));
 }
 
+
+/** True when the 40 characters around a match read as text: a short deny word inside the noise of a compressed image is not a leak. */
+export function readsAsText(text, index, length) {
+  const w = String(text).slice(Math.max(0, index - 20), index + length + 20);
+  let printable = 0;
+  for (const ch of w) { const c = ch.charCodeAt(0); if ((c >= 32 && c < 127) || c === 9 || c === 10 || c === 13 || c > 255) printable++; }
+  return printable / Math.max(1, w.length) >= 0.9;
+}
+
 /** Hits of the deny list in one file's path and text: [{ file, line, pattern, text }]. */
 export function scanText(rel, text, deny) {
   const hits = [];
   for (const d of deny) if (d.re.test(rel)) hits.push({ file: rel, line: 0, pattern: d.src, text: '(path)' });
-  String(text).split('\n').forEach((l, i) => { for (const d of deny) if (d.re.test(l)) hits.push({ file: rel, line: i + 1, pattern: d.src, text: l.trim().slice(0, 160) }); });
+  String(text).split('\n').forEach((l, i) => { for (const d of deny) { const m = d.re.exec(l); if (m && readsAsText(l, m.index, m[0].length)) hits.push({ file: rel, line: i + 1, pattern: d.src, text: l.trim().slice(0, 160) }); } });
   return hits;
 }
 
@@ -92,7 +101,7 @@ export function scanBytes(tarball, deny) {
   const hits = [];
   for (const [label, buf] of [['compressed', raw], ['tar stream', plain]]) {
     const text = buf.toString('latin1');
-    for (const d of deny) { const g = new RegExp(d.src, 'gi'); let m; while ((m = g.exec(text))) { if (label === 'compressed' && m[0].length < MIN_COMPRESSED_MATCH) { if (!m[0].length) g.lastIndex++; continue; } hits.push({ file: `${path.basename(tarball)} (${label})`, line: m.index, pattern: d.src, text: JSON.stringify(text.slice(Math.max(0, m.index - 40), m.index + 40)) }); if (!m[0].length) g.lastIndex++; } }
+    for (const d of deny) { const g = new RegExp(d.src, 'gi'); let m; while ((m = g.exec(text))) { if (!readsAsText(text, m.index, m[0].length)) { if (!m[0].length) g.lastIndex++; continue; } if (label === 'compressed' && m[0].length < MIN_COMPRESSED_MATCH) { if (!m[0].length) g.lastIndex++; continue; } hits.push({ file: `${path.basename(tarball)} (${label})`, line: m.index, pattern: d.src, text: JSON.stringify(text.slice(Math.max(0, m.index - 40), m.index + 40)) }); if (!m[0].length) g.lastIndex++; } }
   }
   return { bytes: raw.length, plainBytes: plain.length, hits };
 }

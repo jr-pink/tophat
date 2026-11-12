@@ -33,7 +33,7 @@ function figure(n) {
 }
 
 /** The boxes: one per <details> section of the copy, its summary the bold numbered line, its body the copy and figures in order. */
-const DETAILS = /^<details(?:\s+open)?>\s*\n<summary>\*\*(\d+)\.\s+(.+?)\*\*<\/summary>\s*\n([\s\S]*?)^<\/details>\s*$/gm;
+const DETAILS = /^<details(?:\s+open)?(?:\s+data-stream="closed")?>\s*\n<summary>\*\*(\d+)\.\s+(.+?)\*\*<\/summary>\s*\n([\s\S]*?)^<\/details>\s*$/gm;
 export function boxes(s = sections(DESCRIPTION)) {
   return [...s.intro.matchAll(DETAILS)].map((m) => {
     const bits = m[3].split(/^<!--\s*figure:([\w-]+)\s*-->\s*$/m);

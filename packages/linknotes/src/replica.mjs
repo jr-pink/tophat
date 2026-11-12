@@ -9,6 +9,7 @@ import { SCHEMA } from '../core/vendor/rev6/push/schema.mjs';
 import { deviceKeys } from '../core/src/crypto.mjs';
 import { normAcl } from '../core/src/policy.mjs';
 import { loadPeople } from '../core/vendor/rev6/push/identity.mjs';
+import { migrateLegacySupport } from '../core/vendor/rev6/push/support.mjs';
 
 export { StoreError, PAGE_PROMPT };
 
@@ -22,6 +23,8 @@ export class LinkNotesStore extends TenantStore {
   /** opts as TenantStore, plus opts.screens: Screen[] */
   constructor(file, opts = {}) {
     super(file, opts);
+    // note support's own table moved off the name the store's citation index now holds (support.mjs migrateLegacySupport)
+    if (!opts.readOnly) migrateLegacySupport(this.db);
     this.screens = (opts.screens || []).map((s) => ({ groups: normAcl(s.groups), re: new RegExp(s.pattern, s.flags ?? 'i'), label: s.label || 'screen' }));
   }
   screenAcl(acl, text, what) {

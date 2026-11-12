@@ -3,7 +3,7 @@
 // Three parts, one module:
 //   1. Reinforcement. A push that sees an arrival restate a fact an earlier note already holds, with the same value,
 //      emits {"reinforce": [{"note": N, "sources": [R..]}]} instead of a second note. The cited raw records are appended
-//      to note_sources (append-only, one row per note and record). A note's support is then every distinct raw record
+//      to note_support (append-only, one row per note and record). A note's support is then every distinct raw record
 //      it cites or was reinforced by: `sources` (the count), `first_seen` and `last_seen` (min and max of those records'
 //      occurred_at, never the wall clock). A changed value is a new note linked by note_refs (supersede), never a
 //      reinforcement: two values are never merged into one row.
@@ -16,22 +16,51 @@
 // (how often this ytpe of fact comes up)".
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
+import { ensureCitationIndex } from './store.mjs';
 
 const APPEND_ONLY = (t) => ['UPDATE', 'DELETE'].map((op) => `CREATE TRIGGER IF NOT EXISTS ${t}_append_only_${op.toLowerCase()} BEFORE ${op} ON ${t} BEGIN SELECT RAISE(ABORT, 'append-only: ${t}'); END;`).join('\n');
 
-/** Additive schema: new tables only, no existing row or column is touched (safe on a live store; CREATE IF NOT EXISTS). */
+/** Additive schema: new tables only, no existing row or column is touched (safe on a live store; CREATE IF NOT EXISTS).
+ *  The reinforcement table is note_support: the name note_sources belongs to the push store's citation index (store.mjs
+ *  ensureCitationIndex: raw id -> citing note, kept by triggers on notes). Stores written before the split hold this table under
+ *  that name; migrateLegacySupport renames it at open. */
 export const SUPPORT_SCHEMA = `
-CREATE TABLE IF NOT EXISTS note_sources(note_id TEXT NOT NULL, raw_id TEXT NOT NULL, occurred_at TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS note_support(note_id TEXT NOT NULL, raw_id TEXT NOT NULL, occurred_at TEXT NOT NULL,
   batch_id TEXT, created_at TEXT NOT NULL, PRIMARY KEY(note_id, raw_id));
-CREATE INDEX IF NOT EXISTS note_sources_raw ON note_sources(raw_id);
+CREATE INDEX IF NOT EXISTS note_support_raw ON note_support(raw_id);
 CREATE TABLE IF NOT EXISTS note_usage(key TEXT PRIMARY KEY, note_id TEXT NOT NULL, event TEXT NOT NULL CHECK(event IN ('shown','opened','cited')),
   at TEXT NOT NULL, session TEXT, turn TEXT);
 CREATE INDEX IF NOT EXISTS note_usage_note ON note_usage(note_id, event);
 CREATE TABLE IF NOT EXISTS note_usage_cursor(source TEXT PRIMARY KEY, seq INTEGER NOT NULL, at TEXT NOT NULL);
-${APPEND_ONLY('note_sources')}
+${APPEND_ONLY('note_support')}
 ${APPEND_ONLY('note_usage')}`;
 
 export const ensureSupportSchema = (db) => db.exec(SUPPORT_SCHEMA);
+
+/**
+ * A store whose note_sources is the old reinforcement table (it has occurred_at) gets it renamed to note_support, with
+ * every row kept, and the citation index rebuilt under its own name. Without this, the citation triggers the store adds at
+ * open would insert (raw_id, note_id) into the old table and every note write would fail on its NOT NULL occurred_at.
+ * Run by the writer at open, outside any transaction, after the store's own open (which may already have attached citation
+ * triggers and an index to the old table: they are dropped here). Returns true when it migrated.
+ */
+export function migrateLegacySupport(db) {
+  const cols = db.prepare("SELECT name FROM pragma_table_info('note_sources')").all().map((r) => r.name);
+  if (!cols.includes('occurred_at')) return false;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const t of ['note_sources_ins', 'note_sources_upd', 'note_sources_del', 'note_sources_append_only_update', 'note_sources_append_only_delete']) db.exec(`DROP TRIGGER IF EXISTS ${t}`);
+    for (const i of ['note_sources_note', 'note_sources_raw']) db.exec(`DROP INDEX IF EXISTS ${i}`);
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='note_support'").get()) {
+      db.exec('INSERT OR IGNORE INTO note_support(note_id,raw_id,occurred_at,batch_id,created_at) SELECT note_id,raw_id,occurred_at,batch_id,created_at FROM note_sources');
+      db.exec('DROP TABLE note_sources');
+    } else db.exec('ALTER TABLE note_sources RENAME TO note_support');
+    db.exec(SUPPORT_SCHEMA);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  ensureCitationIndex(db);
+  return true;
+}
 const hasTable = (store, t) => Boolean(store.one("SELECT 1 AS ok FROM sqlite_master WHERE type='table' AND name=?", [t]));
 
 // ---- 1. reinforcement
@@ -48,7 +77,7 @@ export function reinforceNote(store, noteId, sourceRefs, { batchId = null, now }
     if (cited.has(rid)) continue;
     const raw = store.one('SELECT occurred_at FROM raw_data WHERE id=?', [rid]);
     if (!raw) throw new Error(`reinforce: source ref ${JSON.stringify(rid)} does not name stored raw data`);
-    added += Number(store.run('INSERT OR IGNORE INTO note_sources(note_id,raw_id,occurred_at,batch_id,created_at) VALUES(?,?,?,?,?)', [noteId, rid, raw.occurred_at, batchId, now]).changes);
+    added += Number(store.run('INSERT OR IGNORE INTO note_support(note_id,raw_id,occurred_at,batch_id,created_at) VALUES(?,?,?,?,?)', [noteId, rid, raw.occurred_at, batchId, now]).changes);
   }
   return { id: noteId, op: added ? 'reinforced' : 'unchanged', added, ...(supportOf(store, [noteId]).get(noteId) || {}) };
 }
@@ -59,7 +88,7 @@ export function supportOf(store, ids) {
   ids = [...new Set(ids)].filter(Boolean);
   if (!ids.length) return out;
   const list = JSON.stringify(ids);
-  const extra = hasTable(store, 'note_sources') ? 'UNION SELECT note_id, raw_id FROM note_sources WHERE note_id IN (SELECT value FROM json_each(:ids))' : '';
+  const extra = hasTable(store, 'note_support') ? 'UNION SELECT note_id, raw_id FROM note_support WHERE note_id IN (SELECT value FROM json_each(:ids))' : '';
   const rows = store.all(`SELECT s.nid AS id, COUNT(DISTINCT s.rid) AS n, MIN(COALESCE(r.occurred_at, n.at)) AS first_seen, MAX(COALESCE(r.occurred_at, n.at)) AS last_seen
     FROM (SELECT n2.id AS nid, j.value AS rid FROM notes n2, json_each(n2.source_refs) j WHERE n2.id IN (SELECT value FROM json_each(:ids)) ${extra}) s
     JOIN notes n ON n.id=s.nid LEFT JOIN raw_data r ON r.id=s.rid GROUP BY s.nid`, { ids: list });

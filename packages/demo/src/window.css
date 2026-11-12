@@ -1,0 +1,37 @@
+/* The desktop window of very large screens (the same media query as the frame in serve.mjs BIGSCREEN_CSS): its title bar with the three traffic lights,
+   the dock chip a minimized window leaves, and the screen a closed window leaves. window.js owns the state and sets, on <html>:
+   data-th-full    the window fills the viewport
+   data-th-view    open | min | closed (what the visitor asked for: drives the chip and the closed screen)
+   data-th-hidden  the window is painted away (set once its leaving motion has ended) */
+@media (min-width:1900px) and (min-height:950px){
+  :root{--th-ease:cubic-bezier(.4,0,.2,1)}
+  :root[data-th-full]{--th-ww:100vw;--th-wh:100vh}
+  :root[data-th-full] body>div[style*="contents"]{border-radius:0;box-shadow:none}
+  :root[data-th-hidden] body>*:not(#th-chip):not(#th-closed){visibility:hidden}
+  #th-bar{position:fixed;left:calc(50vw - var(--th-ww) / 2);top:calc(50vh - var(--th-wh) / 2);width:var(--th-ww);height:var(--th-tb);z-index:1;display:block}
+  #th-bar .bg{position:absolute;inset:0;border-radius:10px 10px 0 0;box-shadow:0 0 0 1px rgba(0,0,0,.14);background:var(--th-chrome)}
+  :root[data-th-full] #th-bar .bg{border-radius:0;box-shadow:none}
+  /* full screen: the app is the whole screen, as on a small display; no title bar, no lights (Escape restores) */
+  :root[data-th-full] #th-bar{display:none}
+  #th-bar .lights{position:absolute;left:0;top:0;height:100%;display:flex;align-items:center;gap:8px;padding-left:12px}
+  #th-bar .lights button{all:unset;box-sizing:border-box;width:12px;height:12px;border-radius:50%;cursor:default}
+  #th-bar .lights button:hover{filter:brightness(.88)}
+  #th-bar .lights button:active{filter:brightness(.74)}
+  #th-bar .lights button:focus-visible{outline:2px solid var(--th-ink);outline-offset:2px}
+  #th-bar .lights [data-act=close]{background:#ff5f57}
+  #th-bar .lights [data-act=min]{background:#febc2e}
+  #th-bar .lights [data-act=full]{background:#28c840}
+  #th-bar .title{position:absolute;left:0;right:0;top:0;text-align:center;pointer-events:none;font:12px/30px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink)}
+  /* the minimized window: the tophat app icon, as it sits in a dock */
+  #th-chip{all:unset;box-sizing:border-box;position:fixed;left:0;right:0;bottom:22px;margin:0 auto;width:64px;height:64px;z-index:1;cursor:pointer;
+    opacity:0;pointer-events:none;transition:opacity 360ms var(--th-ease)}
+  #th-chip img{display:block;width:100%;height:100%;-webkit-user-drag:none;filter:drop-shadow(0 6px 10px rgba(0,0,0,.28));transition:transform 160ms var(--th-ease)}
+  #th-chip:hover img{transform:translateY(-3px)}
+  #th-chip:active img{transform:translateY(0) scale(.96)}
+  #th-chip:focus-visible{outline:2px solid var(--th-ink);outline-offset:4px;border-radius:14px}
+  :root[data-th-view=min] #th-chip{opacity:1;pointer-events:auto}
+  #th-closed{all:unset;position:fixed;inset:0;z-index:2;display:grid;place-items:center;cursor:default;user-select:none;
+    font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--th-ink);opacity:0;pointer-events:none;transition:opacity 240ms var(--th-ease)}
+  :root[data-th-view=closed] #th-closed{opacity:1;pointer-events:auto;transition-delay:120ms}
+}
+@media not all and (min-width:1900px) and (min-height:950px){#th-bar,#th-chip,#th-closed{display:none}}

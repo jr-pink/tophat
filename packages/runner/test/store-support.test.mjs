@@ -103,6 +103,32 @@ test('kit replicas: reinforcement counts on the replica that wrote it; a reader 
     const r = withPriors(sam.store, () => hybridSearch(sam.store, 'squat rack bay', { kind: 'note', limit: 5 }), { limit: 5 });
     const hit = r.hits.find((x) => x.id === nid);
     assert.ok(hit, 'the shared note reaches sam');
-    assert.equal(hit.support.sources, 1, 'note_sources is a local derived table: not replicated (a known gap)');
+    assert.equal(hit.support.sources, 1, 'note_support is a local derived table: not replicated (a known gap)');
   } finally { await w.close(); }
+});
+
+test('runner store: a store holding the old reinforcement table under note_sources is migrated at open; support rows kept, citation index rebuilt, note writes work', () => {
+  const file = db();
+  const { raws, notes: [broke] } = seed(file);
+  closeAll();
+  // the pre-split shape: reinforcement rows in note_sources (append-only), as stores written before the citation index hold it
+  const raw = new DatabaseSync(file);
+  raw.exec(`DROP TRIGGER IF EXISTS note_sources_ins; DROP TRIGGER IF EXISTS note_sources_upd; DROP TRIGGER IF EXISTS note_sources_del;
+    DROP TABLE note_sources; DROP TABLE IF EXISTS note_support;
+    CREATE TABLE note_sources(note_id TEXT NOT NULL, raw_id TEXT NOT NULL, occurred_at TEXT NOT NULL, batch_id TEXT, created_at TEXT NOT NULL, PRIMARY KEY(note_id, raw_id));
+    CREATE INDEX note_sources_raw ON note_sources(raw_id);
+    CREATE TRIGGER note_sources_append_only_delete BEFORE DELETE ON note_sources BEGIN SELECT RAISE(ABORT, 'append-only: note_sources'); END;`);
+  raw.prepare('INSERT INTO note_sources VALUES(?,?,?,?,?)').run(broke, raws.rd, '2026-10-01T17:00:00.000Z', 'old', '2026-10-02T00:00:00Z');
+  raw.close();
+  const h = ok(answer('search', { query: 'bike rack clip', kind: 'note', limit: 5 }, { db: file, env }));
+  assert.equal(h.hits.find((x) => x.id === broke).support.sources, 2, 'the old reinforcement row still counts');
+  const n = ok(answer('apply', { batch_id: 'n2', changes: { notes: [{ body: 'The bike rack clip was replaced in October', entities: ['Bike Rack Clip Test'], source_refs: [raws.rd] }] } }, { db: file, env }));
+  closeAll();
+  const after = new DatabaseSync(file, { readOnly: true });
+  try {
+    assert.deepEqual(after.prepare("SELECT name FROM pragma_table_info('note_sources') ORDER BY cid").all().map((r) => r.name), ['raw_id', 'note_id'], 'note_sources is the citation index again');
+    assert.equal(after.prepare('SELECT COUNT(*) AS n FROM note_support').get().n, 1);
+    assert.ok(after.prepare('SELECT 1 AS ok FROM note_sources WHERE raw_id=? AND note_id=?').get(raws.rd, n.notes[0].id), 'the new note is in the citation index');
+    assert.ok(after.prepare('SELECT 1 AS ok FROM note_sources WHERE raw_id=? AND note_id=?').get(raws.ra, broke), 'existing notes are backfilled');
+  } finally { after.close(); }
 });

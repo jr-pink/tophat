@@ -61,6 +61,17 @@ for (const mode of ['single replica', 'replicas A<->B through the hub']) {
       assert.equal(p3.note_ids.length, 2);
     });
 
+    test('declaring a $new entity whose name a live same-typed entity holds is refused with its id; the original keeps its name', async () => {
+      const m = await make('hal');
+      await m.createScope('hal');
+      const first = await m.apply({ entities: [{ id: '$p', name: 'Pat Moreno', type: 'person' }] });
+      const id = first.id_map.$p;
+      await assert.rejects(m.apply({ entities: [{ id: '$q', name: 'pat moreno', type: 'person' }], notes: [{ body: 'Hal met Pat.', entities: ['$q'] }] }), (e) => e.constructor.name === 'StoreError' && e.message.includes(`already exists: ${id} (Pat Moreno, person)`));
+      assert.equal((await m.entity(id)).entity.name, 'Pat Moreno');
+      assert.equal((await m.apply({ entities: [{ id: '$t', name: 'Pat Moreno', type: 'topic' }] })).ok, true);
+      assert.equal((await m.apply({ entities: [{ id: '$d', name: 'Pat Moreno', type: 'person', name_status: 'distinct' }] })).ok, true);
+    });
+
     test('ingest, pending, apply with ackRaw clears pending; duplicates are idempotent', async () => {
       const m = await make('gus');
       await m.createScope('gus');

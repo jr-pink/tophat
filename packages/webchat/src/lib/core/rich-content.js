@@ -146,7 +146,22 @@ export function remoteImageSources(text) {
   return [...seen];
 }
 
-export function widgetDocument(source) {
-  const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
-  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light;background:#fff;color:#171717}body{margin:16px;font:15px system-ui,sans-serif}img,video,svg,canvas{max-width:100%}*{box-sizing:border-box}</style></head><body>${source}</body></html>`;
+// A widget frame swallows every pointer event, so a click on it never reaches the page. These small scripts run inside
+// the frame (inline scripts are allowed by the policy below) and tell the page about two gestures only: `open`, a plain
+// click on a part of the figure that is not itself a control, and `zoom`, the pinch / ctrl-wheel / double click of the
+// figure viewer. Controls (links, buttons, inputs, canvases, anything marked data-no-figure) keep their click.
+const BRIDGE_SKIP = "a,button,input,select,textarea,label,summary,canvas,video,audio,[role=button],[contenteditable],[data-no-figure]";
+const BRIDGES = {
+  open: `(function(){var skip=${JSON.stringify(BRIDGE_SKIP)},d=null;addEventListener('pointerdown',function(e){d={x:e.clientX,y:e.clientY}},true);addEventListener('click',function(e){if(e.defaultPrevented||e.button||!d)return;if(Math.hypot(e.clientX-d.x,e.clientY-d.y)>6)return;if(String(getSelection()).length)return;var t=e.target;if(t&&t.closest&&t.closest(skip))return;parent.postMessage({tophatFigure:'open'},'*')})})();`,
+  zoom: `(function(){var skip=${JSON.stringify(BRIDGE_SKIP)},last=0;function send(m){parent.postMessage(m,'*')}addEventListener('wheel',function(e){if(!(e.ctrlKey||e.metaKey))return;e.preventDefault();send({tophatFigure:'wheel',dy:e.deltaY*(e.ctrlKey?1:0.15),x:e.clientX,y:e.clientY})},{passive:false});addEventListener('keydown',function(e){if(e.key==='Escape'||e.key==='0'||e.key==='1')send({tophatFigure:'key',key:e.key})});addEventListener('dblclick',function(e){var t=e.target;if(t&&t.closest&&t.closest(skip))return;send({tophatFigure:'dblclick',x:e.clientX,y:e.clientY})});function gap(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY)}addEventListener('touchmove',function(e){if(e.touches.length!==2){last=0;return}e.preventDefault();var g=gap(e.touches);if(last)send({tophatFigure:'pinch',ratio:g/last,x:(e.touches[0].clientX+e.touches[1].clientX)/2,y:(e.touches[0].clientY+e.touches[1].clientY)/2});last=g},{passive:false});addEventListener('touchend',function(){last=0})})();`
+};
+
+/** The sandboxed document a widget runs in. `bridge`: 'open' (in the chat: a click opens the figure viewer) or 'zoom' (in the viewer: pinch, ctrl-wheel and double click zoom it); none by default. */
+export function widgetDocument(source, { bridge = null } = {}) {
+  // The one page a widget may frame is the app's own memory viewer (its /graph path, exact): the memory-graph widget is an iframe of it. A srcdoc frame is
+  // sandboxed, so 'self' matches nothing there; the page's own origin is named instead (none outside a browser, so the policy stays closed).
+  const frame = typeof location !== 'undefined' && /^https?:\/\//.test(location.origin) ? `${location.origin}/graph` : "'none'";
+  const policy = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src ${frame}; object-src 'none'; base-uri 'none'; form-action 'none'`;
+  const script = BRIDGES[bridge] ? `<script>${BRIDGES[bridge]}</script>` : '';
+  return `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width, initial-scale=1"><style>html{color-scheme:light;background:#fff;color:#171717}body{margin:16px;font:15px system-ui,sans-serif}img,video,svg,canvas{max-width:100%}*{box-sizing:border-box}</style></head><body>${source}${script}</body></html>`;
 }

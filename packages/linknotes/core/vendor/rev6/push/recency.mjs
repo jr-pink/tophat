@@ -111,7 +111,7 @@ export function searchIntent(query, anchorMs, tz = 'UTC') {
  *  exactly or when its naming words are at least half the topic: "bodyweight" or "weigh" is about the scale log, while in
  *  "hip thrust weight" the word "weight" qualifies a topic the text carries, so the scale log is not pulled in. */
 export function namedSources(store, topic) {
-  const all = store.all('SELECT DISTINCT source FROM raw_data').map((r) => String(r.source));
+  const all = store.distinctSources().map((r) => String(r));
   const by = new Map(), exactly = new Set();
   const add = (src, w) => { if (!by.has(src)) by.set(src, new Set()); by.get(src).add(w); };
   for (const w of topic) {

@@ -30,6 +30,7 @@ export const FIGURES = {
   'memory-bench': ['memory-bench.html', 'Memory benchmarks'], // a 300 dpi matplotlib plot inside the shared caption frame: widgets/memory-bench-plot.py
   'memory-graph': ['memory-graph.html', 'Memory graph'],
   'runner-qol': ['runner-qol.html', 'The chat interface, in detail'],
+  'auto-chat': ['auto-chat.html', 'An auto chat'],
   'mac-desktop': ['mac-desktop.html', 'A Mac, driven'],
   pushover: ['pushover.jpg', 'A notification'],
   connectors: ['connectors.html', 'Connectors'],

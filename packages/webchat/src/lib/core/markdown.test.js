@@ -264,6 +264,15 @@ describe('details blocks', () => {
     expect(out[0].children[1].details).toBe(true);
     expect(out[0].children[1].children[0].html).toContain('y');
   });
+  it('marks a data-stream="closed" section so it stays folded while it streams', () => {
+    const out = compileMarkdown('<details>\n<summary>a</summary>\n\nx\n\n</details>\n\n<details data-stream="closed">\n<summary>b</summary>\n\ny');
+    expect(out[0].streamClosed).toBe(false);
+    expect(out[1].details).toBe(true);
+    expect(out[1].streamClosed).toBe(true);
+    expect(out[1].closed).toBe(false);
+    expect(out[1].summary).toBe('b');
+    expect(out[1].children[0].html).toContain('y');
+  });
   it('leaves a details tag inside a code fence alone', () => {
     const out = compileMarkdown('```html\n<details>\n<summary>s</summary>\n</details>\n```');
     expect(out).toHaveLength(1);

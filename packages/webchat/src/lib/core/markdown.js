@@ -230,7 +230,8 @@ export function renderBlock(block) {
     
     
     const inner = lang ? highlightHtml(body, LANG_ALIAS[lang.toLowerCase()] || null) : escapeHtml(body);
-    return `<pre class="md-code${closed ? '' : ' md-code-open'}"${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}><button type="button" class="md-copy" data-copy aria-label="Copy code" title="Copy"><svg class="md-copy-i" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg><svg class="md-copy-ok" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8"/></svg></button><code>${inner}</code></pre>`;
+    // the copy button sits beside the <pre>, in a box that does not scroll, so it stays in the block's corner when the code scrolls sideways
+    return `<div class="md-code-box"><pre class="md-code${closed ? '' : ' md-code-open'}"${lang ? ` data-lang="${escapeHtml(lang)}"` : ''}><code>${inner}</code></pre><button type="button" class="md-copy" data-copy aria-label="Copy code" title="Copy"><svg class="md-copy-i" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1.5 1.5 0 0 0-1.5-1.5H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg><svg class="md-copy-ok" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8"/></svg></button></div>`;
   }
   
   
@@ -284,13 +285,15 @@ function softBreaks(html) {
 
 // <details> / <summary> blocks: a collapsible section whose body is ordinary markdown (widgets and
 // figures included), written flush-left on lines of their own:
-//   <details>            (or <details open>)
+//   <details>            (or <details open>, or <details data-stream="closed">)
 //   <summary>**1. Memory**</summary>
 //   ...any blocks...
 //   </details>
 // They nest, and an unclosed one (a reply still streaming) shows what has arrived. The summary is
 // inline markdown; the body is compiled like a message, so a widget inside stays a live widget.
-const DETAILS_OPEN = /^<details(\s+open)?\s*>\s*$/iu;
+// A section shows its body while it streams; data-stream="closed" keeps it at its stored fold instead
+// (the landing-page opener streams only its first section open).
+const DETAILS_OPEN = /^<details(\s+open)?(\s+data-stream="closed")?\s*>\s*$/iu;
 const DETAILS_SUMMARY = /^<summary>(.*)<\/summary>\s*$/iu;
 const DETAILS_CLOSE = /^<\/details>\s*$/iu;
 
@@ -302,7 +305,7 @@ function detailsTokens(blocks) {
     const flush = () => { if (run.length) tokens.push({ text: run.join('\n') }); run = []; };
     for (const line of block.split('\n')) {
       let m;
-      if ((m = line.match(DETAILS_OPEN))) { flush(); tokens.push({ open: Boolean(m[1]) }); }
+      if ((m = line.match(DETAILS_OPEN))) { flush(); tokens.push({ open: Boolean(m[1]), streamClosed: Boolean(m[2]) }); }
       else if ((m = line.match(DETAILS_SUMMARY))) { flush(); tokens.push({ summary: m[1] }); }
       else if (DETAILS_CLOSE.test(line)) { flush(); tokens.push({ close: true }); }
       else run.push(line);
@@ -336,15 +339,15 @@ export function compileMarkdown(text, cache = new Map()) {
     if ('text' in token) { top.pending.push(token.text); continue; }
     if ('open' in token) {
       settle(top);
-      const node = { key: `${top.prefix}d${top.items.length}`, details: true, open: token.open, summary: '', items: [], pending: [] };
+      const node = { key: `${top.prefix}d${top.items.length}`, details: true, open: token.open, streamClosed: token.streamClosed, summary: '', items: [], pending: [] };
       node.prefix = node.key + '/';
       top.items.push(node); stack.push(node); continue;
     }
     if ('summary' in token) { if (stack.length > 1 && !top.summary && !top.items.length && !top.pending.length) top.summary = renderInline(token.summary); else top.pending.push(`<summary>${token.summary}</summary>`); continue; }
-    if (stack.length > 1) { settle(top); stack.pop(); } // a stray </details> outside any section is dropped
+    if (stack.length > 1) { settle(top); top.closed = true; stack.pop(); } // a stray </details> outside any section is dropped
   }
   for (const node of stack) settle(node);
-  const finish = (items) => items.map((it) => (it.details ? { key: it.key, details: true, open: it.open, summary: it.summary || 'Details', children: finish(it.items) } : it));
+  const finish = (items) => items.map((it) => (it.details ? { key: it.key, details: true, open: it.open, closed: Boolean(it.closed), streamClosed: Boolean(it.streamClosed), summary: it.summary || 'Details', children: finish(it.items) } : it));
   return finish(root.items);
 }
 

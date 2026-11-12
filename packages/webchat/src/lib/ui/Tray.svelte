@@ -15,6 +15,7 @@
   let {
     label = '',
     count = 0,
+    countWhenClosed = true,   // false: the number shows only while the tray is open
     open = false,
     onopen = () => {},
     icon = null,
@@ -38,7 +39,7 @@
       <span class="caret" class:down={open}><Icon name="chevron" size={12} /></span>
       {#if icon}<span class="glyph"><Icon name={icon} size={12} /></span>{/if}
       <span class="label">{label}</span>
-      <span class="count">{count}</span>
+      {#if open || countWhenClosed}<span class="count">{count}</span>{/if}
       {#if note}<span class="note">{note}</span>{/if}
     </button>
     {#if open}

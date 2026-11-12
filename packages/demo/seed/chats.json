@@ -1,5 +1,45 @@
 {
- "note": "The chats every visitor starts with: 9 rows in four folders, in the sidebar's order (healthhh 2, personal assistant project: the intro chat alone, tophat 4, curiosity / collection 2), Inbox empty. Folder order and which folders start open are set in src/guest-reset.js (the sidebar's own device state); this file holds the chats. Every chat here is frozen: written below, the same for every visitor, never changed per visitor (a visitor who types into one continues in a fork of their own; src/seed-chats.mjs). `read: true` marks a chat the visitor has already read; without it the chat starts unread (a dot). The one live chat is `weekly`: its `slot` takes the assistant's answer from the demo's cached real turn (demo.json slots), which is re-run daily, and `prompt` replaces the cached user message with a casual wording of the same question. The opener is the empty chat the page opens on and the scripted intro plays in; it sits in the personal assistant project folder. Fictional or about tophat itself, except the encyclopedia cave answer, which is the owner's own memory with the friend unnamed. Folder names are the chats' `workspace`.",
+ "note": "The chats every visitor starts with: 13 rows in five folders, in the sidebar's order (healthhh 2, personal assistant project: the intro chat alone, tophat 4, faqs 4 (a subfolder of tophat), curiosity / collection 2), Inbox empty. Folder order and which folders start open are `initialState.folders`, laid out by src/guest-reset.js (the sidebar's own device state); this file holds the chats. Every chat here is frozen: written below, the same for every visitor, never changed per visitor (a visitor who types into one continues in a fork of their own; src/seed-chats.mjs). Whether a chat starts read or unread (a dot) is `initialState.read` below, put back on every load. The one live chat is `weekly`: its `slot` takes the assistant's answer from the demo's cached real turn (demo.json slots), which is re-run daily, and `prompt` replaces the cached user message with a casual wording of the same question. The opener is the empty chat the page opens on and the scripted intro plays in; it sits in the personal assistant project folder. Fictional or about tophat itself, except the encyclopedia cave answer, which is the owner's own memory with the friend unnamed. Folder names are the chats' `workspace`.",
+ "initialState": {
+  "note": "The sidebar every visitor starts on, on every load: the owner's spec of 2026-11-10. Folders top to bottom with whether each starts open; the Inbox holds nothing and starts folded. `read` is each starter chat's start: seed-chats.mjs puts it back whatever a visitor did before (opened it, marked it unread). src/guest-reset.js lays the folders out; test/ground-truth.test.mjs holds all three to the table. A third element on a folder row names the folder it is nested inside (faqs sits inside tophat, 2026-11-11 22:17 PST).",
+  "folders": [
+   [
+    "healthhh",
+    false
+   ],
+   [
+    "personal assistant project",
+    true
+   ],
+   [
+    "tophat",
+    true
+   ],
+   ["faqs", false, "tophat"],
+   [
+    "curiosity / collection",
+    false
+   ]
+  ],
+  "inbox": {
+   "folded": true,
+   "chats": 0
+  },
+  "read": {
+   "dumbbell": false,
+   "pistol": true,
+   "weekly": false,
+   "bench": false,
+   "sharing": true,
+   "graph": true,
+   "values": false,
+   "cave": true,
+   "different": true,
+   "money": true,
+   "data": true,
+   "run": true
+  }
+ },
  "chats": [
   {
    "id": "opener",
@@ -26,7 +66,7 @@
     },
     {
      "role": "assistant",
-     "text": "Every memory system gets the same questions, the same answering agent and the same grader. Only the memory differs.\n\n- **Memory built first.** Each system reads the whole haystack (the chat history or event stream) the way it normally would and builds its store. Tophat starts from an empty store for every question, and the live store is never opened.\n- **One answering agent for everyone.** The same model and the same loop (up to 8 tool calls: search, plus read where the system has it), then an answer. So a better score reflects better memory, not a better prompt or a bigger model.\n- **One grader.** A separate model labels each answer right or wrong. On LongMemEval it uses the benchmark's official judge prompts, copied verbatim.\n- **A ceiling to compare against.** \"All in context\" puts the whole haystack in the prompt, with no memory system at all. It shows what the answering model can do when nothing is lost.\n\nThere are two sets of questions. **2a** is the 15 hardest questions in LongMemEval-S, a public benchmark with about 115k tokens of chat history per question. The questions were chosen before any system ran: the ones published systems most often miss, spread across all seven question types. **2b** is 99 questions about one person's real messages, workouts, sleep and code history, buried in 7,326 events (about 300k tokens)."
+     "text": "The benchmark holds everything fixed except the memory system: each system answers the same questions with the same answering agent, and the same grader scores every answer.\n\n**Procedure**\n\n1. **Ingestion.** Each system reads the full haystack (the chat history or event stream) through its normal ingestion path and builds its store. Tophat starts from an empty store for every question; the live store is never opened.\n2. **Answering.** A single answering agent, with a fixed model and loop, is used for every system: up to 8 tool calls (search, plus read where the system exposes it), then an answer. Score differences therefore reflect retrieval, not prompting or model choice.\n3. **Grading.** A separate model labels each answer correct or incorrect. On LongMemEval it uses the benchmark's official judge prompts verbatim.\n4. **Ceiling.** An \"all in context\" condition places the entire haystack in the prompt with no memory system, which bounds what the answering model can achieve when nothing is lost.\n\n**Question sets**\n\n- **2a:** the 15 hardest questions in LongMemEval-S, a public benchmark with about 115k tokens of chat history per question. Selection was fixed before any system ran, taking the questions published systems most often miss, stratified across all seven question types.\n- **2b:** 99 questions over one person's real traces (messages, workouts, sleep and code history), embedded in 7,326 events (about 300k tokens)."
     },
     {
      "role": "user",
@@ -34,7 +74,7 @@
     },
     {
      "role": "assistant",
-     "text": "Mostly because the comparison is controlled and everything about it is on disk:\n\n- **The questions were fixed in advance** by a seeded rule over other people's published results, not picked after seeing how tophat did.\n- **Answer, model and grader are held fixed**, so systems can't win on prompting. The official judge prompts are used where they exist.\n- **No leaks.** Tool results never show which sessions hold the answer, and each question gets a fresh store.\n- **Every row is kept:** the answer, the judge's label, the full tool trace and the cost per question. Every harness bug found along the way is logged with what was re-run.\n- **Other systems run on their own defaults** (Mem0, Zep/Graphiti, Letta, agentmemory, Supermemory), and any deviation, such as local embeddings where the default needs an OpenAI key, is written next to the result.\n\nWhere it is weaker:\n\n- **Small n.** 2a has 15 questions, so one question is about 7 points. Treat differences of one or two questions as noise; reruns of the same system moved by one.\n- **2b is our own set**, written by us about one person. Read it as a regression test, not an independent ranking.\n- **The grader is a model** and occasionally misjudges, mostly on preference questions and disputed answers.\n- **Tophat's embedding search was off for every run**, so these are full-text-search numbers."
+     "text": "**Controls**\n\n- **Pre-registered selection.** 2a questions were chosen by a seeded rule over other groups' published results, before any tophat run.\n- **Fixed answering and grading.** The answering model, loop and grader are identical across systems; official judge prompts are used where they exist.\n- **Leakage.** Tool results never indicate which sessions contain the answer, and each question gets a fresh store.\n- **Records.** Every row keeps the answer, the judge's label, the full tool trace and the per-question cost. Each harness bug found during the runs is logged together with what was re-run.\n- **Baselines at defaults.** Mem0, Zep/Graphiti, Letta, agentmemory and Supermemory run on their own default configurations; any deviation (for example local embeddings where the default requires an OpenAI key) is recorded beside the result.\n\n**Limitations**\n\n- **Sample size.** 2a has 15 questions, so one question is about 7 points. Differences of one or two questions are within noise; repeated runs of the same system varied by one question.\n- **2b covers one person.** The questions come from real traces, not synthetic dialogue, but from a single person's data, so they show how systems handle one real history and do not establish how results vary across people.\n- **Model grader.** The judge occasionally mislabels answers, mostly on preference questions and answers open to dispute.\n- **Retrieval mode.** Tophat's embedding search was disabled in every run; all tophat figures are full-text-search only."
     }
    ]
   },
@@ -51,8 +91,7 @@
      "role": "assistant",
      "text": "Short version: a scope is a group that controls who can read a row. The hub holds only ciphertext and routing metadata, and a note reaches someone when it is written into or shared to a scope they belong to and both sides sync. I'll check the repo notes to confirm the details.\n\n**Scopes and groups.** A scope is a group that controls who can read a row. Every note, entity and work item carries the scopes allowed to read it, and you can read a row if any of its scopes is one of yours. Members have a role in a scope: read, write or admin. Anything you write without naming a scope stays in your private scope.\n\n**What the hub can see.** The hub only relays ciphertext. It stores the sealed log plus routing metadata: device and user ids, group ids and memberships. It never holds a scope key, so it cannot read notes, search them or build pages. It is append-only, with no delete route. The caveat is trust in the operator: whoever runs the hub issues device tokens, so if that matters, run your own hub.\n\n**How a note reaches someone.**\n1. You write the note into a scope, or widen an existing one with `tophat-linknotes share note <id> alex,<scope>`.\n2. The note is sealed with a fresh key, and that key is wrapped to each scope key allowed to read it.\n3. Your next `sync` pushes the ciphertext to the hub.\n4. The other person's replica syncs, receives the scope's key for its device and sees the note.\n\nTo take it back, run `tophat-linknotes retract note <id>`. The log keeps the record, but replicas hide it.\n\n**Joining a shared scope.** The hub operator gives you a device token. You `init` with it and `sync` to register your device key. The scope's admin runs `scope add <scope> <user> write` and syncs, then you sync again to receive the rows."
     }
-   ],
-   "read": true
+   ]
   },
   {
    "id": "graph",
@@ -67,8 +106,67 @@
      "role": "assistant",
      "text": "Here it is, drawn from the memory as it stands now: each dot is an entity, and two entities are linked when notes mention both. Bigger dots are mentioned by more notes.\n\n<!-- figure:memory-graph -->\n\nThe project itself is left out of the picture, because every note mentions it and it would tie everything to one hub."
     }
-   ],
-   "read": true
+   ]
+  },
+  {
+   "id": "different",
+   "title": "how is this different from other assistants",
+   "workspace": "faqs",
+   "messages": [
+    {
+     "role": "user",
+     "text": "how is this different from other assistants"
+    },
+    {
+     "role": "assistant",
+     "text": "A few ways:\n\n- **Open source.** All the code is yours to read, change and run.\n- **It runs on your own machine,** so it can use your apps directly (Messages, Contacts, Photos, Find My, your browser) and act as you, not through a cloud integration.\n- **Better memory.** It keeps a growing graph of who and what matters to you, built from your mail, messages, notes and chats, and it cites where each fact came from.\n- **It aims to capture all your context.** Most assistants know what you told them in one chat. Tophat tries to know everything, so that over time it can act as you rather than just answer questions for you."
+    }
+   ]
+  },
+  {
+   "id": "money",
+   "title": "how do you make money",
+   "workspace": "faqs",
+   "messages": [
+    {
+     "role": "user",
+     "text": "how do you make money"
+    },
+    {
+     "role": "assistant",
+     "text": "We don't. Tophat is supported by donations.\n\nThe code is open, and the core has no dependencies beyond Node itself, so you can use it as a base and customize it however you like: fork it, strip it down, or build your own assistant on top of it."
+    }
+   ]
+  },
+  {
+   "id": "data",
+   "title": "where does my data go",
+   "workspace": "faqs",
+   "messages": [
+    {
+     "role": "user",
+     "text": "where does my data go"
+    },
+    {
+     "role": "assistant",
+     "text": "Your memory lives in a local SQLite file on your machine. Nothing is uploaded to us.\n\nThe one thing that leaves your machine is what goes to your model provider: each turn sends the relevant context to the model you configured (Anthropic by default, or a local model if you plug one in).\n\nSharing with other people is optional and off by default. When you turn it on, rows are end-to-end encrypted per group, and the relay in between only ever holds ciphertext."
+    }
+   ]
+  },
+  {
+   "id": "run",
+   "title": "what do i need to run it",
+   "workspace": "faqs",
+   "messages": [
+    {
+     "role": "user",
+     "text": "what do i need to run it"
+    },
+    {
+     "role": "assistant",
+     "text": "A Mac (Linux works too, with fewer app integrations), Node, and a model API key (Anthropic by default).\n\nA dedicated Mac is nice, since tophat can then use the apps and stay on all day, but your everyday Mac works as well.\n\nTo install, paste the repo link into a coding agent like Claude Code or Codex and ask it to check the code and set it up."
+    }
+   ]
   },
   {
    "id": "dumbbell",
@@ -106,8 +204,7 @@
      "role": "assistant",
      "text": "You're already partway, so here is where your log puts you.\n\n**What you've done (hevy):** on Oct 24 you did 3x8 pistols to a stack of blocks, with a note to start high, do touch-down squats, sweep the free leg forward at the end, then lower the blocks. On Nov 5 it was 2x6 and then 3 reps. If you lowered the blocks that week, a drop in reps is expected; the log doesn't say.\n\n**What's limiting you:** probably not strength. You squatted 6, 6, 7 at 145 lb the same day. Your own notes name the limit: knee stability, range of motion and holding at the bottom on Nov 5, and \"hold at bottom to stabilize\" on Oct 24. Your left leg is also the one you've flagged as weaker, on the leg curl and the split squats.\n\n**So I'd do this:**\n1. **Keep the block progression.** Lower the stack only when every set is clean, as you already planned.\n2. **Pause at the bottom.** Two to three seconds, every rep, on the blocks. That is the stability work.\n3. **Left leg first.** Do the weaker side first and match the right to its reps.\n4. **Eccentric negatives** once the blocks are low: lower for 3 to 5 seconds, then stand up with both legs.\n5. **A light counterweight** (5 to 10 lb held out in front) makes the last steps easier. Drop it when the free pistol is close.\n6. **Ankles.** If your heel lifts at the bottom, put a small plate under it for now, and work the wall knee-over-toe drill before the set.\n\nKeep it to the slot you already have on Day A; 2 or 3 sets of 3 to 5 per leg is enough."
     }
-   ],
-   "read": true
+   ]
   },
   {
    "id": "values",
@@ -143,10 +240,9 @@
     },
     {
      "role": "assistant",
-     "text": "That's Encyclopedia Cave, the hidden cave near the Stanford Dish. You went on the night of Tue Dec 12, 2023 (s: message): your friend had the group meet at the Dish parking lot around 10:10 pm and at the cave itself around 10:20, and said \"Today is for stars\". At 1:47 am you texted \"Thanks for the great night!\" You still have the people from that trip saved together in your contacts under one label.\n\nWhat it is, from public sources (s: web): a Stanford-hosted photo gallery called \"Encyclopedia Cave\" (web.stanford.edu/~siegelr/stanford/encyclopediacave.html) from three visits across two years. The captions mention a library, equations, studying in caves, a copy of Origin of Species and a line from Lovecraft left in the cave, so it reads like a study spot people stock with books and notes. A 2023 r/stanford post says the rumor is a cave \"somewhere on the dish near the quarry\" and that the poster's group couldn't find it.\n\nI couldn't find an official page, so I don't know who looks after it or whether going in is allowed. It's easy to miss, so go with someone who knows the way, like your friend did."
+     "text": "That's Encyclopedia Cave, the hidden cave near the Stanford Dish. You went on the night of Tue Dec 12, 2023 (s: message): your friend had the group meet at the Dish parking lot around 10:10 pm and at the cave itself around 10:20, and said \"Today is for stars\". At 1:47 am you texted \"Thanks for the great night!\" You still have the people from that trip saved together in your contacts under one label.\n\nWhat it is, from public sources (s: web): a Stanford-hosted photo gallery called \"Encyclopedia Cave\" ([web.stanford.edu/~siegelr/stanford/encyclopediacave.html](https://web.stanford.edu/~siegelr/stanford/encyclopediacave.html)) from three visits across two years. The captions mention a library, equations, studying in caves, a copy of Origin of Species and a line from Lovecraft left in the cave, so it reads like a study spot people stock with books and notes. A 2023 r/stanford post says the rumor is a cave \"somewhere on the dish near the quarry\" and that the poster's group couldn't find it.\n\nI couldn't find an official page, so I don't know who looks after it or whether going in is allowed. It's easy to miss, so go with someone who knows the way, like your friend did."
     }
-   ],
-   "read": true
+   ]
   }
  ]
 }

@@ -19,7 +19,7 @@ export function projectChat(core) {
 }
 
 export function makeChatServer({ fetchImpl, EventSourceImpl = globalThis.EventSource, indexedDB = globalThis.indexedDB, storeImpl = null,
-  coreOptions = {}, telemetrySend = null, schedule } = {}) {
+  coreOptions = {}, telemetrySend = null, schedule, dbName } = {}) {
   let core = null;
   let booting = null;
   const subs = new Set();
@@ -39,7 +39,7 @@ export function makeChatServer({ fetchImpl, EventSourceImpl = globalThis.EventSo
     if (booting) return booting;
     booting = (async () => {
       bootAt.boot = at();
-      const store = storeImpl || await openChatStore({ indexedDB });
+      const store = storeImpl || await openChatStore({ indexedDB, ...(dbName ? { name: dbName } : {}) });
       bootAt.store = at();
       // Identity of this browser's origin: the legacy device id when there was one, so device_seq stays one device's.
       let deviceId = await store.getMeta('deviceId', null);

@@ -9,10 +9,7 @@ import { pathRefs } from '../scripts/path-refs.mjs';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 // Known dead references, each with the reason it cannot fire. Keep this short; a new entry needs the same proof.
-const DEAD = new Map([
-  ['packages/linknotes/core/vendor/rev6/push/pages.mjs -> prompts/page_prompt.txt',
-    'read only by writeOutline (the page writer); this workspace imports only renderBfs from pages.mjs, and the upstream core has no prompt file either'],
-]);
+const DEAD = new Map([]);
 
 function modules(dir, out = []) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -53,7 +50,8 @@ test('every file a packages/* module loads by path exists', () => {
   assert.deepEqual(missing, [], `path-loaded files missing from packages/*:\n${missing.join('\n')}`);
 });
 
-test('the dead page_prompt reference stays dead: nothing outside pages.mjs uses writeOutline or pagePrompt', () => {
+test('the page writer\'s prompt ships beside it, and only the demo\'s page step and the writer itself load the prompt', () => {
+  assert.ok(existsSync(path.join(ROOT, 'packages/linknotes/core/vendor/rev6/push/prompts/page_prompt.txt')));
   const users = modules(path.join(ROOT, 'packages')).filter((f) => !f.endsWith(path.join('rev6', 'push', 'pages.mjs')) && /\b(writeOutline|pagePrompt|PROMPT_PATH)\b/.test(readFileSync(f, 'utf8')));
-  assert.deepEqual(users.map((f) => path.relative(ROOT, f)), []);
+  assert.deepEqual(users.map((f) => path.relative(ROOT, f)), [path.join('packages', 'demo', 'src', 'pages.mjs')]);
 });

@@ -17,13 +17,17 @@
 // progress is kit state too (`drag`, scratch: never saved): which tab, from which group, over which drop target, so the strips and the drop
 // overlays are projections of it. Version 2 of the saved record; version 1 (one chat per pane) upgrades to groups with one tab each.
 //
+// Preview tabs: VS Code's italic tab, `layout.preview[i]` per group. A plain list click is pane.activate {id, preview: true}: it opens the
+// chat as the focused group's preview tab, replacing the one there in place. tab.open {group, chat, preview: true} does the same for a named
+// group. tab.keepPreview {group, chat} makes it a normal tab; a drag keeps it too. Version 3; older records upgrade with none.
+//
 // scope 'local' on the TAB's storage (`storage: 'tab'`): a second window has its own layout and a window opened fresh still lands in the new
 // blank chat.
 import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
 import { gesture } from '../../../../runner/tools/docstore-kit/lib/components.js';
 import { ulid } from '../../../../runner/tools/docstore-kit/lib/engine/ulid.js';
 import { field, scratch, set, on, reset } from '../../../../runner/tools/docstore-kit/lib/schema.js';
-import { initial, activate, openBeside, openFor, focusPanel, closePanel, addPanel, movePanel, togglePanel, resizeTo, prune, closeTab, activateTab, moveTab, openTab, keepTabs } from './panels.js';
+import { initial, activate, openBeside, openFor, focusPanel, closePanel, addPanel, movePanel, togglePanel, resizeTo, prune, closeTab, activateTab, moveTab, openTab, keepTabs, keepPreview } from './panels.js';
 import { LAYOUT_KEY, LAYOUT_VERSION, parseLayout, serializeLayout, upgradeLayout } from './panel-store.js';
 
 const EMPTY = initial(null);
@@ -43,8 +47,8 @@ const cleanDrag = (d) => (d && typeof d === 'object' && text(d.chat) && text(d.f
 
 export const panesDecl = declare({
   name: 'panes',
-  version: 2,
-  migrations: { 2: (s) => ({ ...s, layout: upgradeLayout(s?.layout) }) },
+  version: 3,
+  migrations: { 2: (s) => ({ ...s, layout: upgradeLayout(s?.layout) }), 3: (s) => ({ ...s, layout: upgradeLayout(s?.layout) }) },
   scope: 'local',
   storage: 'tab', // a second window has its own layout
   fields: {
@@ -56,7 +60,7 @@ export const panesDecl = declare({
   },
   legacy: [{ key: LAYOUT_KEY, read: (raw) => { const layout = parseLayout(raw); return layout && { layout }; } }],
   actions: {
-    'pane.activate': on('layout', (l, { id }) => activate(l, id)),
+    'pane.activate': on('layout', (l, { id, preview }) => activate(l, id, { preview: preview === true })),
     'pane.openFor': on('layout', (l, { id, split, viewportPx }) => openFor(l, id, { split, viewportPx })),
     'pane.openBeside': on('layout', (l, { id }) => openBeside(l, id)),
     'pane.focus': on('layout', (l, { index }) => focusPanel(l, index)),
@@ -66,7 +70,8 @@ export const panesDecl = declare({
     'pane.toggle': on('layout', (l, { index }) => togglePanel(l, index)),
     'pane.set': on('layout', (l, { id, size }) => resizeTo(l, l.keys.indexOf(id), size)),
     'pane.drop': on('layout', (l, { ids }) => (Array.isArray(ids) ? prune(l, (id) => !ids.includes(id)) : l)),
-    'tab.open': on('layout', (l, p) => openTab(l, p?.group, p?.chat, p?.at)),
+    'tab.open': on('layout', (l, p) => openTab(l, p?.group, p?.chat, p?.at, { preview: p?.preview === true })),
+    'tab.keepPreview': on('layout', (l, p) => keepPreview(l, p?.group, p?.chat)),
     'tab.activate': on('layout', (l, p) => activateTab(l, p?.group, p?.chat)),
     'tab.close': on('layout', (l, p) => closeTab(l, p?.group, p?.chat)),
     'tab.keep': on('layout', (l, p) => keepTabs(l, p?.group, p?.keep)),

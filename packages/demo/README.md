@@ -26,7 +26,7 @@ the thin layer that makes that safe and gives it a first impression. It renders 
    A request for the page with no session and no html `Accept` (a link preview, curl) gets the description as a plain 200 page with title,
    description and og: tags (`og.png` in `public/`) and no guest is made for it.
 5. Every later message is a real runner turn. The runner is the demo user's, with its tools cut to `memory_search` and `memory_read`
-   (`TOPHAT_RUNNER_TOOLS_ALLOW`; `TOPHAT_RUNNER_PROMPT_MODE=public` makes its system prompt name just those tools and show no path), no subagents or chat tools, the cheap model, the direct provider, no auto routing and the instance workspace forced on every chat action that carries settings or a directory (`src/pin.mjs`, including a message that creates its chat), and the agent's standing context
+   (`TOPHAT_RUNNER_TOOLS_ALLOW`; `TOPHAT_RUNNER_PROMPT_MODE=public` makes its system prompt name just those tools and show no path), no subagents or chat tools, the cheap model, the direct provider, no model-picked host routing and the instance workspace forced on every chat action that carries settings or a directory (`src/pin.mjs`, including a message that creates its chat), and the agent's standing context
    generated from `seed/agent-policy.md`, `content/agent-context.md` and `content/description.md` (`tophat-demo instructions`).
 6. After `visitors.turnsPerSession` real turns across all of a visitor's chats (demo.json, the one place the number lives) the server refuses
    more and the agent answers with a fixed reply carrying the install block. Turn caps per address, a daily spend cap (then "resting") and a per-address session cap
@@ -60,7 +60,8 @@ Webchat changes reach the demo by the usual route: upstream first, `scripts/vend
 ## Commands (`bin/tophat-demo.mjs`)
 
 - `export` / `seed`: the repository's own docs and commit log become the memory the demo agent reads (private-data gate), plus the graph snapshot.
-- `ask --slot ID` / `daily`: one real turn on the instance, cached as the transcript of a starting chat (`daily` also reseeds).
+- `ask --slot ID` / `daily`: one real turn on the instance, cached as the transcript of a starting chat (`daily` also reseeds, then writes the day's pages as below, then asks).
+- `pages [--force]`: writes the entity pages with the model (`src/pages.mjs`), then the graph snapshot. The store's own page is a mechanical outline (one line per note); this step has the page writer (`@tophat-md/linknotes/pages`, its prompt beside it) write the dense kind: one call per entity through the push providers, the instance file's `models` entry that `pages.model` names, stored as signed PageNode records in the instance scope. It runs at most once a day (the state file `demo-pages/state.json` under the instance state records the day and time of the last run; a second run the same day does nothing, `--force` overrides, and a day whose calls all failed still counts), and it skips an entity whose input (its notes, their text and times, its work) and the prompt are unchanged since its page was written, so a quiet day costs nothing. A model failure or an unusable reply leaves that entity's page as it was; the snapshot serves the newest complete model-written page of each entity and the mechanical outline for any entity without one. The per-run cap, token limit and input budget are `pages` in demo.json (Config); a missing value is an error, and `daily` then reports it and exits 1 after the rest has run.
 - `widgets`: writes `widgets/memory-graph.html` from the snapshot (the others are static).
 - `instructions`: writes the agent's standing context next to the instance file.
 - `instance [--check]`: applies (or checks) `seed/instance-policy.json` on the instance file; see Config.
@@ -68,10 +69,10 @@ Webchat changes reach the demo by the usual route: upstream first, `scripts/vend
 
 ## Config
 
-`demo.json` (demo user's `~/.config/tophat-demo/`): the instance file, the replica and snapshot, the cache, `visitors` (`turnsPerSession`,
+`demo.json` (demo user's `~/.config/tophat-demo/`): the instance file, the replica and snapshot, the cache, `pages` (the day's model-written entity pages: `model`, the name of the instance file's `models` entry that writes them and whose credential is read from the instance keyring; `maxCalls`, the most model calls in one run; `maxTokens`, the reply limit of a call; `maxInputChars`, the notes budget of one call, past which the newest notes are kept), `visitors` (`turnsPerSession`,
 `dailyUsd` (the only backstop: there is no per-address limit of any kind, since schools and libraries share one address), `usdPerTurn`, `model`), the Turnstile keys (files), `edgeSecretFile` (shared with the
 Worker, so a client address header is trusted only from the edge), `downloadUrl`. The instance file carries the runner's environment
-(tool allow-list, instructions size, the scopes config). The instance file's required settings are code, not a hand edit: `seed/instance-policy.json` (tool allow-list, no subagents or chat tools, `TOPHAT_RUNNER_PROMPT_MODE=public`, `TOPHAT_RUNNER_TRANSCRIPTS=0`) is merged into it by `tophat-demo instance` and on every update, before the restart. `tophat-demo instance --check` exits 1 when the file lacks one, or when the demo's memory holds any `webchat` row: no visitor chat may reach the shared tophat-dev memory (a personal-scope chat is also refused by the runner's scope gate, and the intake claims only open scopes).
+(tool allow-list, instructions size, the scopes config). The instance file's required settings are code, not a hand edit: `seed/instance-policy.json` (the fast model for chat titles and folder auto-routing, `models.fast`, whose key is the demo keyring entry `fast-model-api-key`; tool allow-list, no subagents or chat tools, `TOPHAT_RUNNER_PROMPT_MODE=public`, `TOPHAT_RUNNER_TRANSCRIPTS=0`) is merged into it by `tophat-demo instance` and on every update, before the restart. `tophat-demo instance --check` exits 1 when the file lacks one, or when the demo's memory holds any `webchat` row: no visitor chat may reach the shared tophat-dev memory (a personal-scope chat is also refused by the runner's scope gate, and the intake claims only open scopes).
 Nothing in this directory names a person or an address.
 
 ## Edge

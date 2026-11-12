@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { openStoreForScript } from '../../webchat/src/lib/server/store.js';
 import { normalizeSettings } from '../../webchat/src/lib/core/contract.js';
+import { unreadOf } from '../../webchat/src/lib/core/rowstate.js';
 import { FIGURES } from './answer.mjs';
 
 export const OPENER_ID = (guest) => `opener-${guest.slice(0, 10)}`;
@@ -24,7 +25,9 @@ export function openerGenOf(guest, id) {
 export function loadTemplates({ file, cacheDir, slots = [], widgetsDir = '' }) {
   // a `<!-- figure:NAME -->` line in a seed message is the same figure the landing answer places (answer.mjs FIGURES): an image-style line the app renders as the live widget
   const fig = (t) => (typeof t === 'string' && widgetsDir ? t.replace(/^<!--\s*figure:([\w-]+)\s*-->[ \t]*$/gm, (_, n) => (FIGURES[n] ? `![${FIGURES[n][1]}](${path.join(widgetsDir, FIGURES[n][0])})` : '')) : t);
-  const defs = JSON.parse(readFileSync(file, 'utf8')).chats.map((d) => (d.messages ? { ...d, messages: d.messages.map((m) => ({ ...m, text: fig(m.text) })) } : d));
+  const seedFile = JSON.parse(readFileSync(file, 'utf8')), startRead = seedFile.initialState?.read || {};
+  // each chat's start (read or unread) is the seed's initialState.read: the one table, not a flag on each chat
+  const defs = seedFile.chats.map((d) => ({ ...(d.messages ? { ...d, messages: d.messages.map((m) => ({ ...m, text: fig(m.text) })) } : d), ...(d.opener ? {} : { read: startRead[d.id] === true }) }));
   const out = [];
   for (const d of defs) {
     if (!d.slot) { out.push(d); continue; }
@@ -95,7 +98,7 @@ export function seedGuest(store, { guest, scope, templates, model, provider = 'd
   for (const t of templates) {
     if (t.opener) continue;
     const id = seedIdOf(t, guest), n = ++slot;
-    if (have.has(id)) { out.kept++; continue; }
+    if (have.has(id)) { out.kept++; if (restoreRead(store, id, t, now)) out.restored = (out.restored || 0) + 1; continue; }
     const born = new Date(now - (n * 40 * 60_000 + 3 * 3600_000)).toISOString();
     const stamp = (k) => new Date(Date.parse(born) + k * 1000).toISOString();
     create(store, { id, title: t.title, workspace: t.workspace, scope, settings, cwd, at: born });
@@ -114,6 +117,19 @@ export function seedGuest(store, { guest, scope, templates, model, provider = 'd
     }
   }
   return out;
+}
+
+/**
+ * The starting read state of a kept seed row, put back. The seed rows are written once and outlive a page load (the guest's session lasts hours), but the app
+ * writes its own read mark into a chat the visitor opens and the visitor can mark one unread, so a reload would show whatever the last visit left
+ * (2026-11-11: "the unread states were cooked"). A chat the template marks `read` is read through its last event; any other has the unread dot. Writes
+ * nothing when the row already matches, so seeding stays idempotent. Returns whether it wrote.
+ */
+export function restoreRead(store, id, t, at = Date.now()) {
+  const row = store.conversation(id);
+  if (!row || unreadOf(row) === !t.read) return false;
+  store.append(id, 'conversation.meta', { read: Boolean(t.read) }, { at: new Date(at).toISOString() });
+  return true;
 }
 
 /**

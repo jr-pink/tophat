@@ -48,7 +48,9 @@
   let localFolds = $state(new Set());
   const foldKey = (block) => `${foldId}/${block.key}`;
   const flipped = (block) => (foldId ? folds.isOpen(block.open ? 'details-shut' : 'details', foldKey(block)) : localFolds.has(block.key));
-  const sectionOpen = (block) => (block.open ? !flipped(block) : flipped(block));
+  // A section still streaming in (its </details> has not arrived) shows its body as it comes; it folds to its stored state once closed.
+  // One marked data-stream="closed" stays at its stored state while it streams too.
+  const sectionOpen = (block) => (!block.closed && !block.streamClosed ? true : block.open ? !flipped(block) : flipped(block));
   function toggleSection(event, block) {
     event.preventDefault(); // the store is the only writer; the browser's own toggle would get ahead of it
     if (foldId) folds.toggle(block.open ? 'details-shut' : 'details', foldKey(block));
