@@ -320,6 +320,10 @@
   // set aside, deferred.
   let asideOpen = $state(false);
   let deferredOpen = $state(false);
+  // Recents: a transcluded view of the newest live chats from every folder. It moves nothing: each chat
+  // keeps its folder and also shows here, above Set aside.
+  const RECENTS_LIMIT = 8;
+  let recentsOpen = $state(false);
   // The defer sheet: which row he is parking, and the words in the field. A time or a condition,
   // the same as an await todo; the clock half is decided in core/defer.js and waits on nobody.
   let deferFor = $state(null);
@@ -374,6 +378,12 @@
   const archivedRows = $derived(archivedOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyArchived: true }), hits) : []);
   const asideRows = $derived(asideOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyAside: true }), hits) : []);
   const deferredRows = $derived(deferredOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyDeferred: true }), hits) : []);
+  const recentsAll = $derived(recentsOpen
+    ? rankConversations(listed, { now, match, sorted: false })
+        .sort((a, b) => String(b.activeAt || b.updatedAt).localeCompare(String(a.activeAt || a.updatedAt)) || a.id.localeCompare(b.id))
+        .slice(0, RECENTS_LIMIT)
+    : []);
+  const recentsCount = $derived(recentsOpen ? recentsAll.length : Math.min(RECENTS_LIMIT, Object.values(listed).filter((c) => !c.sidechat && !c.archived && !c.aside).length));
   let rows = $state([]);
   $effect(() => {
     const next = ordering;
@@ -866,6 +876,21 @@
     listtestid="deferred-list"
   >
     {#each deferredRows as row (row.id)}
+      {@render chatRow(row, false)}
+    {/each}
+  </Tray>
+
+  <Tray
+    label="Recents"
+    icon="clock"
+    count={recentsCount}
+    open={recentsOpen}
+    onopen={(next) => (recentsOpen = next)}
+    testid="recents-section"
+    toggletestid="toggle-recents"
+    listtestid="recents-list"
+  >
+    {#each recentsAll as row (row.id)}
       {@render chatRow(row, false)}
     {/each}
   </Tray>

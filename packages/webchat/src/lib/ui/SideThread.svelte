@@ -296,7 +296,7 @@
     font-size: 12px; color: var(--ink-faint); display: grid; place-items: center;
   }
   .del:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
-  .del.armed { background: var(--warn); color: #fff; }
+  .del.armed { background: var(--warn, #c0392b); color: #fff; }
   .remark { margin: 0 0 8px; }
   .by { margin: 0 0 2px; font-size: 11px; color: var(--ink-faint); display: flex; gap: 6px; align-items: baseline; }
   .by .name { color: var(--ink); font-weight: 600; }
