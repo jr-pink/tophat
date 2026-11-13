@@ -358,7 +358,7 @@ export function launder(message) {
 
 async function viaWhisperLocal(bytes) {
   if (!transcriptionReady()) {
-    throw Object.assign(new Error('no local transcription engine on this machine'), { status: 503 });
+    throw Object.assign(new Error('no local transcription engine on this host'), { status: 503 });
   }
   const text = await transcribe(bytes, { mime: 'audio/wav' });
   const model = whisperModel();

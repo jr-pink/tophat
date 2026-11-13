@@ -626,7 +626,7 @@ export function translate(ctx, msg) {
           content: started
             ? {
                 state: 'running',
-                note: 'Compacting the conversation to fit the context window. This takes a few minutes and produces no output until it is done.'
+                note: 'Compacting in background'
               }
             : { state: 'running', note: 'Compacted; picking the turn back up.' }
         });

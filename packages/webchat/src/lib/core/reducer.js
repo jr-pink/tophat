@@ -34,7 +34,7 @@ function blankConversation(id, at) {
     // the archive) and deferred until an hour or a condition (its own tray above that).
     aside: false,
     workspace: null,
-    // The peer that runs the chat (hub device id, server/hosts.js); null is this machine.
+    // The peer that runs the chat (hub device id, server/hosts.js); null is this host.
     host: null,
     deferUntil: null,
     deferCondition: null,
@@ -281,6 +281,8 @@ export function rowKey(itemId, agentId, type) {
   return agentId && type !== 'agent' ? `${itemId}@${agentId}` : String(itemId);
 }
 
+const MAX_BLOCK_SPAN = 1_000_000;
+
 function upsert(draft, conversationId, itemId, seed, update) {
   const list = ownList(draft, conversationId);
   const index = draft.itemIndex[conversationId];
@@ -355,7 +357,7 @@ function applyEvent(draft, event) {
       patchConversation(draft, id, at, { workspace: content.workspace || null });
       break;
     case 'conversation.host': {
-      // A change of machine is a row of its own, a rule across the transcript naming the host the chat moved to.
+      // A change of host is a row of its own, a rule across the transcript naming the host the chat moved to.
       const before = draft.conversations?.[id]?.host || null;
       const after = content.host || null;
       if (before !== after) {
@@ -417,7 +419,10 @@ function applyEvent(draft, event) {
       // The settling event says where its block began (runner.js writes `firstCursor`), so a window
       // that carries the message without the deltas that streamed it still places the row above the
       // tool cards of its own step. An event from before that field existed places as it always did.
-      const began = Number.isSafeInteger(content.firstCursor) && content.firstCursor > 0
+      // A block begins within a few thousand cursors of its settling event. Rows a peer-hosted chat mirrored before
+      // remote-runtime.js translated the field carry the HOST's cursor, millions below this log's, which placed the reply
+      // above the whole chat; such a value is not a position in this log, so the row sits at its own cursor.
+      const began = Number.isSafeInteger(content.firstCursor) && content.firstCursor > 0 && event.cursor - content.firstCursor <= MAX_BLOCK_SPAN
         ? Math.min(content.firstCursor, event.cursor)
         : event.cursor;
       const item = upsert(draft, id, content.itemId,

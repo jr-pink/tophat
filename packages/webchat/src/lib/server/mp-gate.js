@@ -15,9 +15,9 @@ const ENDPOINT = process.env.MP_GATE_ENDPOINT || 'https://api.anthropic.com/v1/m
 export const GATE_MODEL = process.env.MP_GATE_MODEL || 'claude-haiku-4-5-20251001';
 const TIMEOUT_MS = Number(process.env.MP_GATE_TIMEOUT_MS || 12_000);
 
-export const GATE_SYSTEM = `You are the privacy gate on a public group chat. The assistant in that chat is ${ownerPossessive()} own assistant, running on his machine with access to his files, mail, messages and accounts. Strangers are in the room.
+export const GATE_SYSTEM = `You are the privacy gate on a public group chat. The assistant in that chat is ${ownerPossessive()} own assistant, running on his own host with access to his files, mail, messages and accounts. Strangers are in the room.
 
-Decide whether the candidate text divulges anything personal or private about ${owner()} or anyone he knows: real names of family, friends, coworkers, counterparties or clients; home, work or shipping addresses; phone numbers, emails, handles; organisation internals, finances, revenue, banking, cards, orders, invoices, legal matters; health, sleep, workouts, relationships; calendar, location or travel; credentials, tokens, filesystem paths or machine names; the contents of his documents, notes, messages, email or code; what he is working on that is not already public.
+Decide whether the candidate text divulges anything personal or private about ${owner()} or anyone he knows: real names of family, friends, coworkers, counterparties or clients; home, work or shipping addresses; phone numbers, emails, handles; organisation internals, finances, revenue, banking, cards, orders, invoices, legal matters; health, sleep, workouts, relationships; calendar, location or travel; credentials, tokens, filesystem paths or host names; the contents of his documents, notes, messages, email or code; what he is working on that is not already public.
 
 Allowed: general knowledge, public facts, reasoning, arithmetic, code that is not his, public web content, the participants' own words quoted back to them, and the assistant's own refusals. The first name "${owner()}" alone, and the fact that this is his assistant, are allowed.
 

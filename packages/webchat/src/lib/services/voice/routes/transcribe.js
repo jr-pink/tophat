@@ -4,7 +4,7 @@ import { MAX_AUDIO_BYTES, transcribe, transcriptionReady } from '$lib/services/v
 export async function POST({ request }) {
   if (!transcriptionReady()) {
     return json({
-      error: 'No transcription engine on this machine. Use a browser with speech recognition, or install whisper-cli and a ggml model.',
+      error: 'No transcription engine on this host. Use a browser with speech recognition, or install whisper-cli and a ggml model.',
       kind: 'unavailable'
     }, { status: 503 });
   }

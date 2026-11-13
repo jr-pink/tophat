@@ -654,7 +654,7 @@ function spawnUnavailable(next, timing, why = '', refusal = null) {
           ? `This chat's assistant cannot be started here (${why}), so "${quoted}" was not delivered. `
             + 'It is still in the transcript; it will go through once that is configured, or switch this chat to another model.'
           : `The assistant process could not be started ${MAX_SPAWN_FAILURES} times in a row, so "${quoted}" `
-            + 'was not delivered. It is still in the transcript; send it again once this machine is less loaded.',
+            + 'was not delivered. It is still in the transcript; send it again once this host is less loaded.',
       },
     });
   if (next.owed.length) return [next, [told, ...beginSpawn(next, timing)]];

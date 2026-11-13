@@ -497,8 +497,9 @@ export function createReaderReplica({
     return null;
   }
 
-  async function deleteNote(id, { restore = false } = {}) {
-    const docId = await docOfNote(id);
+  async function deleteNote(id, { restore = false, docId: named = null } = {}) {
+    // A caller that knows the document (a chat transcript's marks, whose body this device never holds) names it.
+    const docId = named ? String(named) : await docOfNote(id);
     const body = docId ? bodyCache.get(docId) : null;
     const root = body?.highlights?.find((h) => h.id === id) || null;
     const parent = root ? null : body?.highlights?.find((h) => (h.replies || []).some((r) => r.id === id)) || null;
@@ -557,7 +558,7 @@ export function createReaderReplica({
     if (route === 'notes' && method === 'POST') return writeNote(json());
     if (route === 'notes' && method === 'DELETE') {
       const body = json();
-      return deleteNote(url.searchParams.get('id') || body.id, { restore: Boolean(body.restore) });
+      return deleteNote(url.searchParams.get('id') || body.id, { restore: Boolean(body.restore), docId: body.docId || null });
     }
     if (route === 'doc' && method === 'PATCH') return patchDoc(decodeURIComponent(parts[3]), json());
     if (route === 'progress' && method === 'POST') return progress(json());
@@ -663,6 +664,8 @@ export function createReaderReplica({
   return {
     ready,
     api,
+    writeNote,
+    deleteNote,
     sync,
     flush,
     start,

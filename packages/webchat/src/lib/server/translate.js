@@ -399,7 +399,7 @@ export function translate(ctx, msg) {
       kind: 'run.status',
       content: {
         state: 'running',
-        note: 'Compacting the conversation to fit the context window. This takes a few minutes and produces no output until it is done.'
+        note: 'Compacting in background'
       }
     });
     return { ctx: next, events };

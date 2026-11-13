@@ -1,4 +1,4 @@
-// The host list every surface reads (the chat header's dropdown, the sidebar's host menu): the peers on the hub, this machine first.
+// The host list every surface reads (the chat header's dropdown, the sidebar's host menu): the peers on the hub, this host first.
 // One reactive copy per tab, offline first (core/host-notes.js caches it on the device and queues edits), refreshed from /api/hosts.
 import { queueEdit, readCached, sync } from './host-notes.js';
 
@@ -23,5 +23,5 @@ export function editHost(id, fields, options = {}) {
   return (inFlight || Promise.resolve()).then(() => refreshHosts(options));
 }
 
-/** Whether there is any host besides this machine, so the surfaces that offer a choice stay out of the way of a single-machine install. */
+/** Whether there is any host besides this host, so the surfaces that offer a choice stay out of the way of a single-host install. */
 export const hasPeers = () => hostState.list.some((h) => !h.local);

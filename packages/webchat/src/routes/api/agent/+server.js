@@ -12,6 +12,7 @@ import { secretsDir } from '../../../lib/server/secrets.js';
 import { cleanTitle } from '$lib/core/arrival-title.js';
 import { canonicalWorkspace } from '$lib/core/workspaces.js';
 import { conversationEventStream, SSE_HEADERS } from '$lib/server/conversation-stream.js';
+import { receiveUpload } from '$lib/server/peer-upload.js';
 
 const SECRETS = secretsDir();
 
@@ -138,6 +139,18 @@ export async function POST({ request, getClientAddress }) {
     } catch (cause) {
       try { app.store.ffSettle(ffId, { state: 'failed', error: String(cause?.message ?? cause).slice(0, 300) }); } catch {}
       return json({ error: String(cause?.message ?? cause) }, { status: 500 });
+    }
+  }
+
+  if (op === 'upload') {
+    // A peer front end moving a file his message names onto this host, so the agent here reads it from its own disk (peer-upload.js):
+    // one chunk per call, or { status: true, path } for how much is held. Whole files answer with size and sha256.
+    try { return json(await receiveUpload(body), { headers: { 'cache-control': 'no-store' } }); }
+    catch (cause) {
+      if (!cause.status || cause.status >= 500) console.error('[webchat] peer upload failed:', cause);
+      const out = { error: cause.message, kind: cause.kind || 'error' };
+      if (Number.isSafeInteger(cause.received)) out.received = cause.received;
+      return json(out, { status: cause.status || 500 });
     }
   }
 

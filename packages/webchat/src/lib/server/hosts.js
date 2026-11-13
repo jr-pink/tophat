@@ -2,8 +2,8 @@
 //
 // A tophat instance is a peer on the hub (hub.tophat.md): every instance syncing through the same hub is a device row in each
 // replica (`mc_devices`). A chat has one host, the peer whose runner answers it; its own transcript is kept on every peer that
-// touched it (remote-runtime.js), so any peer can read it offline. Nothing here names a machine: the list is the hub's device
-// list, "this machine" is the entry whose id is this instance's own device id, and a peer can host chats once this instance
+// touched it (remote-runtime.js), so any peer can read it offline. Nothing here names a host: the list is the hub's device
+// list, "this host" is the entry whose id is this instance's own device id, and a peer can host chats once this instance
 // holds an address and token for its webchat.
 //
 // One file in the webchat state dir, hosts.json, one entry per hub device id:
@@ -60,9 +60,9 @@ export function loadRuntimes({ file = FILE(), peers = hubPeers(), self = selfDev
 /** What the host menu and the router read: the local entry first, then every hub peer, each with its address state and notes. */
 export function listHosts({ file = FILE(), peers = hubPeers(), self = selfDevice() } = {}) {
   const all = readHosts(file);
-  // This machine is a host like any other: its description and auto-routing flag live under its own device id.
+  // The local host is a host like any other: its description and auto-routing flag live under its own device id.
   const mine = (self && all[self]) || {};
-  const out = [{ id: '', label: String(mine.label || self || 'this machine'), local: true, configured: true,
+  const out = [{ id: '', label: String(mine.label || self || 'this host'), local: true, configured: true,
     description: String(mine.description || ''), auto: mine.auto === true, at: mine.at || null }];
   for (const p of peers) {
     if (p.id === self) continue;

@@ -32,6 +32,9 @@
   import { prefsDecl } from '$lib/core/prefs-state.js';
   import { findDecl } from '$lib/core/find-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
+  import { cardSide, chatNotesDecl, deletePress, markHit, notesOf } from '$lib/core/chat-notes-state.js';
+  import { createChatNotes } from '$lib/client/chat-notes.js';
+  import { readerReplica } from '$lib/client/reader-offline.js';
 
   let {
     session,
@@ -424,11 +427,8 @@
 
   /** One row in the reader's note store for words in this transcript: a highlight, or a note. */
   async function saveChatMark(anchor, { kind = 'highlight', color = 'yellow', note = '' } = {}) {
-    const response = await fetch('/api/reader/notes', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        docId: chatDoc,
+    try {
+      return await chatNotes.save(chatDoc, {
         docTitle: conversation?.title || 'Chat',
         sectionIdx: 0,
         anchorKey: anchor.itemId,
@@ -438,12 +438,10 @@
         start: anchor.start,
         end: anchor.end,
         note
-      })
-    });
-    if (!response.ok) throw new Error(`the note store refused it (${response.status})`);
-    const body = await response.json();
-    if (body?.highlight) notes = [...notes.filter((n) => n.id !== body.highlight.id), body.highlight];
-    return body?.highlight || null;
+      });
+    } catch (cause) {
+      throw new Error(`the note store refused it (${cause?.message || cause})`);
+    }
   }
 
   async function highlightSelection(color) {
@@ -461,18 +459,81 @@
   // MESSAGE rather than the whole transcript, because the transcript grows underneath a note.
 
   const chatDoc = $derived(conversationId ? `chat:${conversationId}` : null);
-  let notes = $state([]);
+  // The marks live in the kit state (core/chat-notes-state.js): the rows last seen, kept on this device, with the
+  // click-to-delete card's open and armed state beside them. Writes go through the reader's op log
+  // (client/chat-notes.js), so a highlight or a delete made offline survives a reload and syncs later.
+  const chatNotesStore = uiApp().use(chatNotesDecl);
+  const replica = typeof window === 'undefined' ? null : readerReplica();
+  const noReplica = { api: async () => ({}), writeNote: async () => { throw new Error('the reader store is not available here'); }, deleteNote: async () => ({ queued: true }), flush: async () => {} };
+  const chatNotes = createChatNotes({ store: chatNotesStore, replica: replica || noReplica, flush: () => (replica || noReplica).flush() });
+  const paneKey = Math.random().toString(36).slice(2);
+  const notes = $derived(notesOf($chatNotesStore, chatDoc));
   let notesFor = null;
 
   $effect(() => {
     const doc = chatDoc;
     if (!doc || notesFor === doc) return;
     notesFor = doc;
-    notes = [];
-    fetch(`/api/reader/notes?doc=${encodeURIComponent(doc)}`)
-      .then((response) => (response.ok ? response.json() : null))
-      .then((body) => { if (body && notesFor === doc) notes = body.highlights || []; })
-      .catch(() => { /* a transcript with no notes reads the same as one whose notes did not load */ });
+    chatNotes.load(doc);
+  });
+
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    return chatNotes.follow(() => (chatDoc ? [chatDoc] : []));
+  });
+
+  // The card opened on one painted mark (kit state `peek`); this pane shows it only when this pane opened it.
+  const peekHere = $derived($chatNotesStore.peek?.pane === paneKey && $chatNotesStore.peek?.doc === chatDoc ? $chatNotesStore.peek : null);
+  const peekNote = $derived(peekHere ? notes.find((n) => n.id === peekHere.id) || null : null);
+  let painted = [];
+
+  function closePeek() { chatNotesStore.dispatch('peek.close'); }
+
+  /** Click on words that carry a mark: open its card. Returns true when it did. */
+  function peekAt(event) {
+    if (!chatDoc || event.button > 0) return false;
+    if (event.target?.closest?.('a[href], button, summary, input, textarea, [data-sidechat]')) return false;
+    const hit = markHit(painted, event.clientX, event.clientY);
+    if (!hit) return false;
+    // Centred on the click, pulled back inside the transcript so it never hangs over the sidebar or the rail, and
+    // above or below the clicked line (never over it) on whichever side has room.
+    const box = transcriptEl()?.getBoundingClientRect();
+    const half = Math.min(280, (box?.width ?? 400) - 16) / 2;
+    const x = box ? Math.max(box.left + 8 + half, Math.min(box.right - 8 - half, event.clientX)) : event.clientX;
+    const side = cardSide(hit.rect, box || { top: 0, bottom: globalThis.innerHeight });
+    chatNotesStore.dispatch('peek.open', { pane: paneKey, doc: chatDoc, id: hit.id, x: Math.round(x), y: Math.round(side.y), below: side.below });
+    return true;
+  }
+
+  function pressDelete() {
+    const id = peekNote?.id;
+    if (!id) return;
+    if (deletePress($chatNotesStore, id) === 'arm') { chatNotesStore.dispatch('delete.arm', { id }); return; }
+    chatNotes.remove(chatDoc, id);
+  }
+
+  // A first press that is not followed through lapses on its own, so Delete is never left armed behind him.
+  $effect(() => {
+    const id = $chatNotesStore.armed;
+    if (!id) return;
+    const timer = setTimeout(() => chatNotesStore.dispatch('delete.disarm'), 4000);
+    return () => clearTimeout(timer);
+  });
+
+  // While the card is open: Escape, a press anywhere outside it, or scrolling the transcript puts it away.
+  $effect(() => {
+    if (!peekHere) return;
+    const key = (event) => { if (event.key === 'Escape') { event.stopPropagation(); closePeek(); } };
+    const away = (event) => { if (!event.target?.closest?.('[data-testid="chat-mark-peek"]')) closePeek(); };
+    const scroller = transcriptEl();
+    document.addEventListener('keydown', key, true);
+    document.addEventListener('pointerdown', away, true);
+    scroller?.addEventListener('scroll', closePeek, { passive: true });
+    return () => {
+      document.removeEventListener('keydown', key, true);
+      document.removeEventListener('pointerdown', away, true);
+      scroller?.removeEventListener('scroll', closePeek);
+    };
   });
 
   /**
@@ -485,6 +546,7 @@
     const scroller = transcriptEl();
     if (!scroller) return;
     const groups = emptyGroups();
+    const hits = [];
     for (const note of notes) {
       if (!note.anchorKey) continue;
       const row = scroller.querySelector(`[data-item="${CSS.escape(note.anchorKey)}"]`);
@@ -494,11 +556,13 @@
       const index = textIndex(row);
       const range = rangeFor(index, resolved.start, resolved.end);
       if (!range) continue;
+      hits.push({ id: note.id, range });
       const colour = `reader-${note.color || 'yellow'}`;
       (groups.get(colour) || groups.get('reader-yellow')).push(range);
       if (note.note) groups.get('reader-note').push(range);
       if (note.author === 'tophat') groups.get('reader-tophat').push(range);
     }
+    painted = hits;
     paintRanges(groups);
   }
 
@@ -583,6 +647,7 @@
     if (event.detail >= 3) cancelPendingThread();
     const selection = globalThis.getSelection?.();
     if (selection && !selection.isCollapsed) return;
+    if (peekAt(event)) return;
     if (focusThreadAt(event.clientX, event.clientY)) return;
     if (event.target?.closest?.('[data-sidechat], [data-testid="sidechat-rail"], [data-testid="sidechat-sheet"], [data-testid="selection-bar"]')) return;
     leaveThread();
@@ -1161,6 +1226,20 @@
           {/each}
         </div>
       {/if}
+      {#if peekHere && peekNote}
+        <div class="markpeek" class:below={peekHere.below} data-sidechat data-testid="chat-mark-peek"
+             style:left={`${peekHere.x}px`} style:top={`${peekHere.y}px`} role="dialog" aria-label="Highlight">
+          <span class="nquote" data-testid="chat-mark-quote">{peekNote.quote}</span>
+          {#if peekNote.note}<span class="nbody">{peekNote.note}</span>{/if}
+          <div class="peekrow">
+            <button class="press focus-ring" onclick={closePeek} data-testid="chat-mark-close">Close</button>
+            <button class="danger press focus-ring" class:armed={$chatNotesStore.armed === peekNote.id}
+                    onclick={pressDelete} data-testid="chat-mark-delete">
+              {$chatNotesStore.armed === peekNote.id ? 'Delete?' : 'Delete'}
+            </button>
+          </div>
+        </div>
+      {/if}
       {#if transcriptDown}
         
         <TranscriptError message={status.transcriptError} onretry={() => session.hydrate(conversationId)} />
@@ -1332,6 +1411,23 @@
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
   .nbody { color: var(--ink); font-size: 13px; line-height: 1.4; }
+
+  .markpeek {
+    position: fixed; z-index: 30; width: min(280px, calc(100vw - 24px));
+    transform: translate(-50%, -100%);
+    display: flex; flex-direction: column; gap: 8px; padding: 10px;
+    background: var(--bg-raised); border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 14px 34px rgba(0,0,0,0.26);
+  }
+  .markpeek.below { transform: translate(-50%, 0); }
+  .peekrow { display: flex; justify-content: flex-end; gap: 6px; }
+  .peekrow button {
+    border: 1px solid var(--line); border-radius: 8px; padding: 4px 12px; font-size: 12.5px;
+    background: none; color: var(--ink-dim); cursor: pointer;
+  }
+  .peekrow button:hover { color: var(--ink); }
+  .peekrow .danger { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  .peekrow .danger.armed { background: var(--warn); border-color: var(--warn); color: #fff; }
 
   :global(::highlight(sidechat)) {
     background-color: color-mix(in srgb, var(--accent) 20%, transparent);

@@ -762,7 +762,7 @@ export function createRunner({
       // Otherwise the session machine says it, once, in the same run.error that names the message
       // it could not deliver (one refusal used to show two errors). A missing credential is not
       // load: retrying it four more times only delays a message that was never going to be
-      // delivered, and ends in "send it again once this machine is less loaded", which is false.
+      // delivered, and ends in "send it again once this host is less loaded", which is false.
       // Fail it once, with the reason.
       // Every message it could not deliver carries the reason (retry-wakes.js reads notReady to
       // know a wake was refused); the runner's own line, for a machine that is not starting and so

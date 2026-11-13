@@ -75,7 +75,7 @@
       </button>
       <button class="link press" onclick={() => (enrolled = false)}>Add a new device</button>
     {:else}
-      <p>Enrol this device. The token is in the keyring on the machine.</p>
+      <p>Enrol this device. The token is in the keyring on the host.</p>
       <input bind:value={token} placeholder="Enrolment token" type="password" class="focus-ring" data-testid="token" />
       <button class="primary press focus-ring" onclick={enroll} disabled={busy || !token} data-testid="enroll">
         {busy ? 'Waiting for passkey…' : 'Create passkey'}

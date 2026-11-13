@@ -24,7 +24,7 @@
 // description is shown to the model as his definition, a generated one only as a weak summary of what happens to be filed
 // there.
 //
-// Hosts (hosts.js): the same router also picks the machine a chat runs on, from the descriptions its owner wrote for the hosts
+// Hosts (hosts.js): the same router also picks the host a chat runs on, from the descriptions its owner wrote for the hosts
 // he opted into auto-routing. Only a host with a written description is ever offered, a pick is confirmed by a second call that
 // says yes only for work clearly covered by the description and free of anything personal, a host he chose by hand is never
 // overridden, and every decision is logged (onDecision, remote-routing.jsonl).
@@ -147,13 +147,14 @@ export async function askForFolder({ title, transcript, folders }, { fetchImpl =
   return name;
 }
 
-const HOST_PROMPT = `You choose which machine (host) should run a new chat thread. The user lists his hosts, each with a description he wrote of which chats belong there.
+const HOST_PROMPT = `You choose which host should run a new chat thread. The user lists his hosts, each with a description he wrote of which chats belong there.
 Reply with ONLY one of:
   - the exact id of the one host whose description clearly covers the chat, or
   - none
-none is the normal answer: the chat then runs on his own machine, which costs nothing. Pick a host only when what the chat is actually about is what its description says goes there.`;
+none is the normal answer: the chat then runs on his own host, which costs nothing. Pick a host only when what the chat is actually about is what its description says goes there.
+A chat that builds on, edits or reads files, projects, repositories or notes that live on his own host (a path, a project name, "my kit", "my design docs", memory he has there) stays on his own host: answer none, because the other host does not have those files.`;
 
-const HOST_CONFIRM_PROMPT = `A chat may be sent to a separate machine that other people can read. You are given the description its owner wrote of what belongs there, and the chat.
+const HOST_CONFIRM_PROMPT = `A chat may be sent to a separate host that other people can read. You are given the description its owner wrote of what belongs there, and the chat.
 Answer with exactly one word: yes or no.
 Answer yes only when the chat is clearly the work the description covers and contains nothing personal (private life, health, family, personal finances, friends). Anything else, or any doubt, is no.`;
 
@@ -268,7 +269,7 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
       const host = picked ? candidates.find((h) => h.id === picked) : null;
       let confirmed = false;
       if (host?.local) {
-        // This machine is a candidate like any host; picking it is the default placement, so there is nothing to file or confirm.
+        // This host is a candidate like any host; picking it is the default placement, so there is nothing to file or confirm.
         console.log(`[autoroute] ${JSON.stringify({ event: 'router-host', chat: id, candidates: candidates.map((h) => h.id), picked: host.id, local: true })}`);
         hostDeclined.set(id, conversation.turns || 0);
         return null;

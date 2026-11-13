@@ -36,7 +36,7 @@
     more: 'M3.5 8h.01M8 8h.01M12.5 8h.01',
     // Focus a folder: four corners closing in on it (make this the root, hide everything else).
     focus: 'M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10M6 6h4v4H6z',
-    // A rack of two units with their indicator lights: the host menu (the machines a chat can run on).
+    // A rack of two units with their indicator lights: the host menu (the hosts a chat can run on).
     server: 'M2.5 2.5h11v4.5h-11zM2.5 9h11v4.5h-11zM4.8 4.75h.01M4.8 11.25h.01M8 4.75h4M8 11.25h4',
     key: 'M6 11.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM7.9 7.1 13.5 1.5M11.2 3.8l1.6 1.6',
     chevron: 'M6 3.5 10.5 8 6 12.5',

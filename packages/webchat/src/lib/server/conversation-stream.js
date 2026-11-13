@@ -1,4 +1,4 @@
-// One chat's live events as a server-sent stream: what a peer reads to attach a chat that lives on this machine.
+// One chat's live events as a server-sent stream: what a peer reads to attach a chat that lives on this host.
 //
 // A chat has one host, the peer whose runner answers it (hosts.js). The peers' webchats talk to each other over the same
 // frames the browser reads on /api/events (sse.js: `{events:[...]}`, `{hello,cursor}`, `{resync,cursor}`, `{ping}`), narrowed

@@ -199,7 +199,7 @@ export function openLegacyStore(path) {
     ['aside', 'INTEGER NOT NULL DEFAULT 0'],
     // The named workspace the chat is filed under (core/workspaces.js); null is unfiled.
     ['workspace', 'TEXT'],
-    // The peer that runs the chat (hosts.js); null is this machine.
+    // The peer that runs the chat (hosts.js); null is this host.
     ['host', 'TEXT'],
     ['defer_until', 'TEXT'],
     ['defer_condition', 'TEXT'],

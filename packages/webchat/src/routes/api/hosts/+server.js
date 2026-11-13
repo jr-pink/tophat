@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { app } from '$lib/server/app.js';
 import { listHosts, selfDevice, setNote } from '$lib/server/hosts.js';
 
-// GET: the hosts a chat can live on ({ hosts: [{ id, label, local, configured, description, auto, online?, chats? }] }): this machine
+// GET: the hosts a chat can live on ({ hosts: [{ id, label, local, configured, description, auto, online?, chats? }] }): this host
 // first, then every peer on the hub, with whether this server can reach it. POST { id, description?, auto?, at }: his edit from the host
 // menu (the newest `at` per host wins, so an offline replay changes nothing newer). Behind the same sign-in as the page.
 async function view() {

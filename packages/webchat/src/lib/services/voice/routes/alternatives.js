@@ -76,7 +76,7 @@ export async function POST({ request }) {
   try {
     bytes = await readFile(record.path);
   } catch {
-    return json({ error: 'the audio for that clip is not on this machine', kind: 'unknown-clip' }, { status: 404 });
+    return json({ error: 'the audio for that clip is not on this host', kind: 'unknown-clip' }, { status: 404 });
   }
   if (bytes.length > MAX_CLIP_BYTES) {
     return json({ error: 'that clip is too large to re-decode', kind: 'too-large' }, { status: 413 });

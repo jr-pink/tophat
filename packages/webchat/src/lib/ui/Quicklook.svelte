@@ -90,7 +90,7 @@
       <Code text={file?.text || ''} lang={languageOf(file?.path)} {onpath} />
     {/if}
     {#if file?.truncated}<p class="note">Truncated preview. Download for the whole file.</p>{/if}
-    {#if file?.stale}<p class="note">Showing the cached copy; the machine is unreachable.</p>{/if}
+    {#if file?.stale}<p class="note">Showing the cached copy; the host is unreachable.</p>{/if}
   </div>
 </section>
 

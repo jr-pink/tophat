@@ -61,5 +61,5 @@ export async function sync({ storage, fetchImpl = globalThis.fetch } = {}) {
   return readCached(storage);
 }
 
-/** The label of a host id in these hosts ('' is this machine). */
+/** The label of a host id in these hosts ('' is this host). */
 export const hostLabel = (hosts, id) => (hosts || []).find((h) => h.id === (id || ''))?.label || id || '';

@@ -1,5 +1,5 @@
 // Peer hosting: a chat lives on one host, the peer whose runner answers it (hosts.js lists the peers, the conversation's
-// `host` names one, null is this machine). This server stays the front end for every chat; for a chat hosted on a peer it
+// `host` names one, null is this host). This server stays the front end for every chat; for a chat hosted on a peer it
 // attaches to that peer's live event stream and writes what arrives into its own log, so the local UI streams tokens, thinking,
 // tool input and run state exactly as for a local run, the transcript reads offline, and a restart resumes from the stored cursor.
 //
@@ -14,11 +14,13 @@
 // message kept and re-sent, never a hang and never a silent local run; every routing decision is logged (remote-routing.jsonl).
 
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { webchatStorePath } from './paths.js';
 import { loadRuntimes } from './hosts.js';
 import { SEED_CLOSE, seedMarker, unseeded } from '../core/automated-event.js';
+import { UPLOAD_ROOT } from './uploads.js';
+import { findUploadPaths, pushFile, replacePaths } from './peer-upload.js';
 
 const TWINS = () => webchatStorePath('remote-twins.json');
 const DECISIONS = () => webchatStorePath('remote-routing.jsonl');
@@ -30,6 +32,14 @@ export const RECONNECT_MIN_MS = 1_000;
 export const RECONNECT_MAX_MS = 10_000;
 export const CONFIG_TTL_MS = 10_000;
 export const SEED_CHARS = 24_000;
+// A file his message names that is still arriving here (the composer sends the message while a big upload finishes) holds the
+// forward this long; after it the path is replaced by a plain note that the file never arrived, never left as a dead path.
+export const UPLOAD_WAIT_MS = 30 * 60_000;
+// An older message in the seed names files too: they go along when small, so the host can reread them; a big one stays a local path.
+// A named path with no file and no partial yet (a reservation the client has not started, or an old upload since deleted) waits a short while.
+export const ABSENT_WAIT_MS = 2 * 60_000;
+export const STAGE_RETRY_MS = 15_000; // between tries while the host is unreachable or cannot take uploads (each try hashes the file)
+export const SEED_UPLOAD_MAX_BYTES = 32 * 1024 * 1024;
 
 // What a run writes that a viewer renders. Conversation bookkeeping (created, renamed, workspace, host) and the host's own
 // background-agent events stay on the host.
@@ -45,12 +55,15 @@ export function logDecision(entry, path = DECISIONS()) {
 /** The earlier conversation as plain text, from events after `after`, never the message being sent. Tail-capped. */
 export function seedTranscript(events, { after = 0, exclude = null, cap = SEED_CHARS } = {}) {
   const lines = [];
+  let lastOwner = null, spoke = false;
   for (const e of events) {
     if (e.cursor <= after) continue;
     const c = e.content || {};
     if (exclude && c.itemId === exclude) continue;
-    if (e.kind === 'message.user' && c.text) { const own = unseeded(c.text); if (own) lines.push(`Owner: ${own}`); }
-    else if (e.kind === 'assistant.message' && c.text && !c.agentId) lines.push(`Assistant: ${String(c.text).trim()}`);
+    if (e.kind === 'message.user' && c.text) {
+      const own = unseeded(c.text);
+      if (own && !(lastOwner === own && !spoke && String(c.itemId || '').startsWith('rt:'))) { lines.push(`Owner: ${own}`); lastOwner = own; spoke = false; }
+    } else if (e.kind === 'assistant.message' && c.text && !c.agentId) { lines.push(`Assistant: ${String(c.text).trim()}`); spoke = true; }
   }
   let text = lines.join('\n\n');
   if (text.length > cap) text = `[earlier part cut]\n${text.slice(text.length - cap)}`;
@@ -92,7 +105,7 @@ export class RemoteError extends Error {
  */
 export function createRemoteRuntimes({
   store, runtimes = loadRuntimes, twinsPath = TWINS(), decisionsPath = DECISIONS(), fetchImpl = fetch, now = () => Date.now(),
-  onUserMessage = null, onTurnEnd = null, log = (line) => console.log(line), sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); })
+  uploadRoot = UPLOAD_ROOT, pushImpl = pushFile, onUserMessage = null, onTurnEnd = null, log = (line) => console.log(line), sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); })
 } = {}) {
   let twins = {};
   try { twins = JSON.parse(readFileSync(twinsPath, 'utf8')) || {}; } catch { twins = {}; }
@@ -194,7 +207,7 @@ export function createRemoteRuntimes({
   const twinOf = (id) => twins[id] || null;
   const isRemoteBusy = (id) => Boolean(twins[id]?.busy || twins[id]?.pending?.length);
 
-  /** { runtime, reason } for a send now: null runtime = this machine. Never by content: only the chat's host, or a twin mid-run. */
+  /** { runtime, reason } for a send now: null runtime = this host. Never by content: only the chat's host, or a twin mid-run. */
   function route(id, { localBusy = false } = {}) {
     const conversation = store.conversation(id);
     if (!conversation) return { runtime: null, reason: 'unknown conversation' };
@@ -202,14 +215,28 @@ export function createRemoteRuntimes({
     if (twin && isRemoteBusy(id)) return { runtime: twin.runtime, reason: 'a remote turn is in progress; it is not moved mid-turn' };
     if (localBusy) return { runtime: null, reason: 'a local turn is in progress; it is not moved mid-turn' };
     const host = conversation.host || null;
+    if (host && !twin && autoHostSkipped(id)) return { runtime: null, reason: `the router's pick (${host}) is not used: the chat already worked on files on this host` };
     return host ? { runtime: host, reason: `the chat's host is ${host}` } : { runtime: null, reason: 'the chat runs here' };
+  }
+
+  // The router picks a host on a chat's first message, while this host's run of it has already started. If that run went on to
+  // use tools (read files, ran commands) the work lives on this host's disk, and a host without those files can only answer
+  // "that isn't here". A host he chose himself is always honored; the router's pick yields once local work exists and the chat
+  // has never run on the host.
+  function autoHostSkipped(id) {
+    let auto = false, worked = false;
+    for (const e of store.allConversationEvents(id)) {
+      if (e.kind === 'conversation.host') auto = e.content?.auto === true;
+      else if (e.kind === 'tool.started' && e.run_id) worked = true; // a mirrored host run is stored with no run id
+    }
+    return auto && worked;
   }
 
   // ---- sending ---------------------------------------------------------------------------------------------------------
 
   function newTwin(runtime, conversationId) {
     return { runtime, remoteId: null, cursor: 0, pending: [], echo: [], sentIds: [], busy: false, running: false, remoteSeen: 0, localSeen: null,
-      sentAt: 0, offlineNoted: false, conversationId };
+      sentAt: 0, offlineNoted: false, conversationId, uploads: {} };
   }
 
   function sendRemote(id, wire, { itemId, display = wire, runtimeId, reason }) {
@@ -220,9 +247,9 @@ export function createRemoteRuntimes({
     if (twin.localSeen == null) twin.localSeen = store.cursor();
     // What the host has not seen: everything after the last turn it ran (the whole chat on the first send).
     const seed = seedTranscript(store.allConversationEvents(id), { after: twin.remoteSeen, exclude: itemId });
-    const text = withSeed(seed, wire, twin.remoteId ? 'elsewhere' : 'on another machine');
+    const text = withSeed(seed, wire, twin.remoteId ? 'elsewhere' : 'on another host');
     const wasBusy = twin.busy;
-    twin.pending.push({ itemId, text, display });
+    twin.pending.push({ itemId, text, display, at: now() });
     twin.busy = true;
     twin.sentAt = now();
     twin.offlineNoted = false;
@@ -247,15 +274,35 @@ export function createRemoteRuntimes({
     if (!twin) return;
     while (twin.pending.length) {
       const item = twin.pending[0];
+      // His files go to the host first; the host sees its own paths (his message here keeps the local ones).
+      let wire;
+      if (item.notBefore && now() < item.notBefore) return;
+      try { wire = await stage(id, twin, item); item.notBefore = 0; }
+      catch (cause) {
+        if (cause.offline || cause.hold) { item.notBefore = now() + (cause.waiting ? 0 : STAGE_RETRY_MS); noteHold(id, twin, cause); return; }
+        twin.pending.shift();
+        twin.busy = false; twin.running = false;
+        save();
+        emit(id, 'run.error', { message: `${labelOf(twin.runtime)} would not take the message: ${cause.message}` });
+        return;
+      }
+      // The host writes his message to its log and the stream can deliver that row before this call's reply: the echo is
+      // registered before the call, so apply() never mistakes it for a message typed on the host (the chat showed every
+      // message twice), and withdrawn if the host did not take the message.
+      const echoKey = wire.text.trim();
+      twin.echo.push(echoKey);
+      if (twin.echo.length > 50) twin.echo.splice(0, twin.echo.length - 50);
+      const withdraw = () => { const at = twin.echo.indexOf(echoKey); if (at >= 0) twin.echo.splice(at, 1); };
       try {
         if (!twin.remoteId) {
-          const out = await call(twin.runtime, { op: 'spawn', prompt: item.text, display: item.display, title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
+          const out = await call(twin.runtime, { op: 'spawn', prompt: wire.text, display: wire.display, title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
           twin.remoteId = out.id;
           twin.cursor = Number(out.cursor) || 0; // the host's cursor before it ran the prompt: the stream starts there
         } else {
-          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: item.text, display: item.display });
+          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: wire.text, display: wire.display });
         }
       } catch (cause) {
+        withdraw();
         if (cause.offline) { noteOffline(id, twin, cause); return; }
         twin.pending.shift();
         twin.busy = false; twin.running = false;
@@ -264,13 +311,63 @@ export function createRemoteRuntimes({
         return;
       }
       twin.pending.shift();
-      twin.echo.push(item.text.trim());
       twin.sentIds.push(item.itemId);
       if (twin.sentIds.length > 200) twin.sentIds.splice(0, twin.sentIds.length - 200);
       twin.offlineNoted = false;
       save();
       attach(id);
     }
+  }
+
+  /**
+   * The message as the host should read it: every upload it names is on the host (size and sha256 checked) and the text carries the
+   * host's path for it. Waits (hold) while a named file is still arriving here; an unreachable host or one that cannot take
+   * uploads holds too, so the message stays queued and visible, and is never sent with a path the host cannot read.
+   */
+  async function stage(id, twin, item) {
+    const found = findUploadPaths(item.text, uploadRoot);
+    if (!found.length) return { text: item.text, display: item.display };
+    twin.uploads = twin.uploads || {};
+    const required = new Set(findUploadPaths(unseeded(item.text), uploadRoot).map((f) => f.path));
+    const pairs = {}; // local path -> what the host sees
+    const waiting = [];
+    for (const f of found) {
+      if (pairs[f.path] !== undefined) continue;
+      const must = required.has(f.path);
+      if (f.state === 'failed') continue; // the client said it never uploaded: the text already says so, and there is nothing to send
+      if (f.state !== 'ready') {
+        if (!must) continue;
+        if (now() - (item.at || now()) < (f.state === 'partial' ? UPLOAD_WAIT_MS : ABSENT_WAIT_MS)) { waiting.push(f.path); continue; }
+        pairs[f.path] = `[this file never finished uploading: ${f.path.split('/').pop()}]`;
+        decide({ event: 'upload-never-arrived', chat: id, runtime: twin.runtime, file: f.path });
+        continue;
+      }
+      if (!must && !(twin.uploads[f.path]) && (await sizeOf(f.path)) > SEED_UPLOAD_MAX_BYTES) continue;
+      try {
+        pairs[f.path] = await pushImpl({ call: (body, options) => call(twin.runtime, body, options), local: f.path, cache: twin.uploads, persist: save });
+        decide({ event: 'upload', chat: id, runtime: twin.runtime, file: f.path, remote: pairs[f.path] });
+      } catch (cause) {
+        if (!must && !cause.offline) continue; // an older message's file is best effort
+        if (cause.offline) throw cause;
+        // A host on an older build answers 'unknown op': the message waits for it to be updated. Any other refusal (too large, a
+        // checksum that did not match) is said once and the message is not retried in a loop.
+        if (cause.status === 400 && /unknown op/iu.test(cause.message)) throw Object.assign(new RemoteError(`${labelOf(twin.runtime)} runs a build that cannot take uploads yet`, { status: 400 }), { hold: true });
+        throw cause;
+      }
+    }
+    if (waiting.length) throw Object.assign(new RemoteError(`waiting for ${waiting.map((p) => p.split('/').pop()).join(', ')} to finish uploading`, {}), { hold: true, waiting: true });
+    return { text: replacePaths(item.text, pairs), display: replacePaths(item.display, pairs) };
+  }
+  const sizeOf = async (p) => { try { return (await stat(p)).size; } catch { return 0; } };
+
+  function noteHold(id, twin, cause) {
+    if (cause.offline) { noteOffline(id, twin, cause); return; }
+    if (twin.offlineNoted) return;
+    twin.offlineNoted = true;
+    save();
+    const label = labelOf(twin.runtime);
+    if (!cause.waiting) emit(id, 'run.error', { message: `${cause.message}. Your message is saved here and is sent to ${label} when its files can go with it.` });
+    emit(id, 'run.status', { state: 'queued', note: cause.waiting ? `Waiting for the upload to finish, then sending to ${label}` : `Waiting for ${label}: ${cause.message}` });
   }
 
   function noteOffline(id, twin, cause) {
@@ -294,20 +391,44 @@ export function createRemoteRuntimes({
     if (onTurnEnd) { try { onTurnEnd(id); } catch { /* a hook never blocks */ } }
   }
 
+  // A settled assistant.message names `firstCursor`, the cursor its block began at, and the reducer places the row there. The
+  // host wrote that number in ITS cursor space (a few thousand), which is below every cursor of this log: the row moved to the
+  // top of the chat above the whole conversation. Here the block start is the local cursor its first delta was stored under
+  // (what runner.js does for a local run); a block whose first delta this server never saw (a resync after a restart) drops
+  // the field and sits at its own cursor.
+  const blockKey = (c) => `${c.agentId || ''}\u0000${c.itemId || ''}`;
+  const blockStarts = new WeakMap();
+  const startsOf = (twin) => { let m = blockStarts.get(twin); if (!m) { m = new Map(); blockStarts.set(twin, m); } return m; };
+  function forgetBlockStarts(twin) { blockStarts.delete(twin); }
+
   /** One host event into the local log, as the same event a local run writes. */
   function apply(id, twin, e) {
     const c = e.content || {};
     if (typeof e.cursor === 'number') twin.cursor = Math.max(twin.cursor, e.cursor);
     if (e.kind === 'message.user') {
-      const at = twin.echo.indexOf(String(c.text || '').trim());
+      const text = String(c.text || '').trim();
+      let at = twin.echo.indexOf(text);
+      if (at < 0) at = twin.echo.findIndex((sent) => unseeded(sent) === unseeded(text));
       if (at >= 0) twin.echo.splice(at, 1);
       else if (c.text) emit(id, 'message.user', { itemId: `rt:${e.cursor}`, text: c.text }, e.at);
       return;
     }
     if (MIRRORED.has(e.kind)) {
       if (!twin.busy) { twin.busy = true; twin.running = true; }
-      emit(id, e.kind, c, e.at);
+      let content = c;
+      if (e.kind === 'assistant.message') {
+        const { firstCursor: _hostCursor, ...rest } = c;
+        const began = startsOf(twin).get(blockKey(c));
+        content = Number.isSafeInteger(began) ? { ...rest, firstCursor: began } : rest;
+      }
+      const written = emit(id, e.kind, content, e.at);
+      if (e.kind === 'assistant.delta') {
+        const key = blockKey(c);
+        const starts = startsOf(twin);
+        if (!starts.has(key) && Number.isSafeInteger(written?.cursor)) starts.set(key, written.cursor);
+      }
     } else if (TERMINAL.has(e.kind)) {
+      forgetBlockStarts(twin);
       emit(id, e.kind, e.kind === 'run.completed' ? { ...c, remote: true } : c, e.at);
       endTurn(id, twin);
     }
@@ -432,16 +553,21 @@ export function createRemoteRuntimes({
           if (twin && (twin.sentIds.includes(options.itemId) || twin.pending.some((p) => p.itemId === options.itemId))) return { queued: false, injected: false, duplicate: true, remote: true };
           return local.send(id, text, options);
         }
+        if (reason.startsWith("the router's pick")) {
+          // Written down once: the header and the next sends say it runs here, as a host-switched row (an auto host event).
+          decide({ event: 'auto-host-skipped', chat: id, host: store.conversation(id)?.host, reason });
+          emit(id, 'conversation.host', { host: null, auto: true });
+        }
         if (runtime && config()[runtime]) return sendRemote(id, text, { itemId: options.itemId || `rt-${now()}`, display: options.display ?? text, runtimeId: runtime, reason });
         if (runtime) {
-          // The chat's host is not reachable from this server (no address or token): fail loudly, never fall back to a run on this machine.
+          // The chat's host is not reachable from this server (no address or token): fail loudly, never fall back to a run on this host.
           decide({ event: 'refused', chat: id, runtime, reason: 'host not configured' });
           emit(id, 'message.user', { itemId: options.itemId || `rt-${now()}`, text: options.display ?? text });
           emit(id, 'run.error', { message: `This chat's host is "${runtime}", which this server has no address for (hosts.json). Nothing was run.` });
           return { queued: false, injected: false };
         }
-        // Back on this machine after remote turns: the local run has not seen them, so the missed transcript goes first.
-        // The runner sees the seeded text.
+        // Back on this host after remote turns: the local run has not seen them, so the missed transcript goes first. The
+        // runner sees the seeded text.
         options = { ...options, display: options.display ?? text };
         if (twin && twin.localSeen != null) {
           const seed = seedTranscript(store.allConversationEvents(id), { after: twin.localSeen, exclude: options.itemId });

@@ -58,7 +58,7 @@
   const incognito = $derived(isIncognito(conversation?.id));
 
   $effect(() => { ensureBackends(); ensureScopes(); refreshHosts(); });
-  // The host dropdown: this machine and every hub peer, offered once there is a peer to choose (core/hosts.svelte.js).
+  // The host dropdown: this host and every hub peer, offered once there is a peer to choose (core/hosts.svelte.js).
   const hostChoice = $derived(hostState.list.length > 1 && !incognito);
   const offered = $derived.by(() => {
     const current = settings.provider || providerOfModel(settings.model);
@@ -196,7 +196,7 @@
       value={conversation?.host || ''}
       onchange={(event) => onhost(event.currentTarget.value)}
       aria-label="Host"
-      title="Which machine runs this chat"
+      title="Which host runs this chat"
       data-testid={inMenu ? 'more-host' : 'host'}
     >
       {#each hostState.list as h (h.id)}
