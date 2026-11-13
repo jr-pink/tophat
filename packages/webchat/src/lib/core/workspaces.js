@@ -253,7 +253,7 @@ export const miscKey = (folder) => `misc:${folder}`;
  * its subtree are not drawn unless `showArchived`, when they draw dimmed (`archived` on the row; `archivedOwn` when it is the
  * flagged folder itself). Nothing about parent, order or membership changes, so clearing the flag restores exactly what was
  * there. `isMuted(key)` is the folder's Mute When Collapsed flag: while it is collapsed its row and its ancestors' rows show
- * no live/unread dot for anything inside it.
+ * no live/unread dot for anything inside it, and the folder row itself carries `muted` so the sidebar can gray it.
  */
 export function explorerRows(rows, { names = [], layout = emptyLayout(), focus = null, isOpen = () => false, searching = false, newIn = null, isArchived = () => false, showArchived = false, inlineOwn = false, isMuted = () => false } = {}) {
   const out = [];
@@ -299,7 +299,7 @@ export function explorerRows(rows, { names = [], layout = emptyLayout(), focus =
       const open = isOpen(k);
       const mine = k !== UNFILED && isArchived(k), gone = dim || mine;
       out.push({ kind: 'folder', id: `f:${k}`, key: k, name: k === UNFILED ? null : nameOf.get(k) ?? null, depth, count: own.length, open,
-        hasChildren: own.length > 0 || subs(k).length > 0, live: !open && subtreeLive(k), archived: gone, archivedOwn: mine });
+        hasChildren: own.length > 0 || subs(k).length > 0, live: !open && subtreeLive(k), muted: quiet(k), archived: gone, archivedOwn: mine });
       if (open || newIn === k) {
         if (inlineOwn) { pushOwn(k, depth + 1, gone); walk(k, depth + 1, gone); } else { walk(k, depth + 1, gone); pushOwn(k, depth + 1, gone); }
       }

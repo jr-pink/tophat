@@ -86,3 +86,13 @@ test('the multi-select menu has Mark Read, and the explorer is told which folder
   assert.match(body('bulkMenu'), /unread\.length > 0 && \{ id: 'read', label: 'Mark Read'/);
   assert.match(menu, /isMuted: \(k\) => folderMuted\(descs, k\)/);
 });
+
+test('a muted folder row is flagged muted only while collapsed, so the sidebar can gray it', () => {
+  const muted = (k) => k === folderKey('Taxes');
+  assert.equal(folderRow(draw({ isOpen: () => false, isMuted: muted }), 'Taxes').muted, true);
+  assert.equal(folderRow(draw({ isOpen: (k) => k === folderKey('Taxes'), isMuted: muted }), 'Taxes').muted, false);
+  assert.equal(folderRow(draw({ isOpen: () => false }), 'Taxes').muted, false);
+  const src = readFileSync(new URL('../src/lib/ui/Sidebar.svelte', import.meta.url), 'utf8');
+  assert.match(src, /class:mutedfolder=\{item\.muted\}/);
+  assert.match(src, /\.mutedfolder > \.wshead \{ opacity/);
+});

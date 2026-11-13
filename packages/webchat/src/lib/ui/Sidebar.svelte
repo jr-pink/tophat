@@ -986,7 +986,7 @@
   {#snippet folderRow(item)}
     {@const key = item.key}
     {@const name = item.name}
-    <div class="wsgroup" class:dim={item.archived} data-archived={item.archived ? 'true' : null} data-testid={key === UNFILED ? 'everything-else' : 'workspace-group'} data-catchall={key === UNFILED ? 'true' : null} data-workspace={name ?? ''} style="--depth:{item.depth}">
+    <div class="wsgroup" class:dim={item.archived} class:mutedfolder={item.muted} data-muted={item.muted ? 'true' : null} data-archived={item.archived ? 'true' : null} data-testid={key === UNFILED ? 'everything-else' : 'workspace-group'} data-catchall={key === UNFILED ? 'true' : null} data-workspace={name ?? ''} style="--depth:{item.depth}">
       <div class="wshead" data-ctx="folder" data-ctx-key={key} role="treeitem" aria-expanded={item.open} aria-selected={$sb.cursor === item.id} aria-level={item.depth + 1}
         class:sel={$sb.cursor === item.id} class:picked={isSel(item.id) && selected.size > 1}
         class:cut={$sb.clip === item.id}
@@ -1187,6 +1187,7 @@
   .list { flex: 1; min-height: 0; padding: 0 8px 84px; }
   .group { margin-bottom: 1px; }
   .dim { opacity: 0.5; }
+  .mutedfolder > .wshead { opacity: 0.5; }
   .archtag { font-size: 10px; color: var(--ink-faint); border: 1px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
   .rowwrap { position: relative; --swipe-bg: var(--bg-sunken); }
   /* Group hover: the row keeps its hover colour while the pointer is on its buttons (they sit beside the link, not in it),
