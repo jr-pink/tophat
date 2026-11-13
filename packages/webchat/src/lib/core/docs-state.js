@@ -5,10 +5,10 @@
 //   docThreadsDecl(t)   the threads last seen for a document (offline paint). local.
 //   docCommentsDecl(t)  what this device wrote in a document: comments and resolves as an op log with a reducer. scope
 //                       'cloud': every action is a Stream entry (entry_id device:seq), replayed through the same
-//                       reducers on any device; idempotent by comment id and by resolve time.
+//                       reducers on any device; idempotent by comment id, by resolve time and by thread id (a delete).
 // `overlayThreads` is the pure view: the server's threads plus the actions not yet delivered.
 import { declare } from '../../../../runner/tools/docstore-kit/lib/model.js';
-import { field, on, set } from '../../../../runner/tools/docstore-kit/lib/schema.js';
+import { field, on, scratch, set } from '../../../../runner/tools/docstore-kit/lib/schema.js';
 
 const plain = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const str = (v) => (typeof v === 'string' ? v : '');
@@ -56,9 +56,14 @@ export const docsDecl = declare({
 
 export const docThreadsDecl = (token) => declare({
   name: `doc-threads:${token}`, scope: 'local',
-  fields: { threads: field([], (v) => (Array.isArray(v) ? v : [])) },
+  // `armed` is the thread whose Delete was pressed once (the second press deletes); ephemeral, never saved.
+  fields: { threads: field([], (v) => (Array.isArray(v) ? v : [])), armed: scratch(null) },
   legacy: [{ key: `tophat.docs.threads.${token}`, json: true, into: 'threads' }],
-  actions: { 'threads.set': set('threads', 'threads') }
+  actions: {
+    'threads.set': set('threads', 'threads'),
+    'delete.arm': on('armed', (armed, { threadId }) => (str(threadId) && armed !== threadId ? threadId : armed)),
+    'delete.disarm': on('armed', (armed) => (armed === null ? armed : null))
+  }
 });
 
 // ---- comments: the op log ----------------------------------------------------------------------------------------
@@ -72,6 +77,7 @@ const cleanComment = (c) => {
   return out;
 };
 const cleanResolved = (v) => Object.fromEntries(Object.entries(plain(v)).filter(([, r]) => r && typeof r === 'object').map(([t, r]) => [t, { resolved: Boolean(r.resolved), at: str(r.at) }]));
+const cleanDeleted = (v) => Object.fromEntries(Object.entries(plain(v)).filter(([, d]) => d && typeof d === 'object').map(([t, d]) => [t, { at: str(d.at) }]));
 const cleanComments = (v) => Object.fromEntries(Object.entries(plain(v)).map(([id, c]) => [id, cleanComment(c)]).filter(([, c]) => c));
 
 // The two merge rules: a comment id is written once (the first entry in the total order stands, as the server keeps the
@@ -88,6 +94,16 @@ export const threadResolve = (resolved, { threadId, resolved: flag, at }) => {
   return { ...resolved, [threadId]: next };
 };
 
+// A delete is a tombstone on the thread id: the earliest `at` is kept, so the same entry twice, or entries in any order,
+// leave the same state. The comments of a deleted thread stay in `comments` (a reply that arrives after the delete is
+// written once like any comment) and are hidden by `threadsOf` and `overlayThreads`: delete and reply commute.
+export const threadDelete = (deleted, { threadId, at }) => {
+  if (!str(threadId)) return deleted;
+  const have = deleted[threadId];
+  if (have && have.at <= str(at)) return deleted;
+  return { ...deleted, [threadId]: { at: str(at) } };
+};
+
 /** The actions an old comments outbox held, as reducer actions (the old key is archived and removed by the kit). */
 export const outboxToActions = (list) => (Array.isArray(list) ? list : []).flatMap((op) => {
   if (op?.kind === 'resolve') return [['thread.resolve', { threadId: op.threadId, resolved: Boolean(op.resolved), at: str(op.at) || new Date(0).toISOString() }]];
@@ -96,18 +112,19 @@ export const outboxToActions = (list) => (Array.isArray(list) ? list : []).flatM
 
 export const docCommentsDecl = (token) => declare({
   name: `doc-comments:${token}`, scope: 'cloud',
-  fields: { comments: field({}, cleanComments), resolved: field({}, cleanResolved) },
+  fields: { comments: field({}, cleanComments), resolved: field({}, cleanResolved), deleted: field({}, cleanDeleted) },
   legacy: [{ key: `tophat.docs.comments-outbox.${token}`, json: true, actions: outboxToActions }],
   actions: {
     'comment.add': on('comments', commentAdd),
-    'thread.resolve': on('resolved', threadResolve)
+    'thread.resolve': on('resolved', threadResolve),
+    'thread.delete': on('deleted', threadDelete)
   }
 });
 
 /** The replicated state as threads (what every device converges to): comments grouped by thread, a resolve overlaid. */
 export function threadsOf(state) {
   const byId = new Map();
-  for (const c of Object.values(state.comments).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : 1))) {
+  for (const c of Object.values(state.comments).filter((c) => !state.deleted?.[c.threadId]).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id < b.id ? -1 : 1))) {
     if (!byId.has(c.threadId)) byId.set(c.threadId, { id: c.threadId, lineId: c.lineId, quote: c.quote, start: c.start, end: c.end, comments: [], resolvedAt: null });
     byId.get(c.threadId).comments.push({ id: c.id, body: c.body, author: c.author, owner: c.owner, createdAt: c.at });
   }
@@ -117,13 +134,16 @@ export function threadsOf(state) {
 
 /**
  * The threads as shown: the server's, plus the actions not yet delivered (the old outbox overlay, the same rules):
- * an undelivered resolve flips the thread, an undelivered comment joins its thread (or makes it, marked pending).
+ * an undelivered resolve flips the thread, an undelivered comment joins its thread (or makes it, marked pending), an
+ * undelivered delete removes the thread, and nothing written for it, before or after, brings it back.
  * `pending` is replica.pending (entries {type, payload}); `me` names the author of a comment written before names
  * were kept per comment.
  */
 export function overlayThreads(threads, pending, { me, owner, now = () => new Date().toISOString() }) {
-  const byId = new Map(threads.map((t) => [t.id, { ...t, comments: [...(t.comments || [])] }]));
+  const gone = new Set(pending.filter((e) => e.type === 'thread.delete').map((e) => e.payload.threadId));
+  const byId = new Map(threads.filter((t) => !gone.has(t.id)).map((t) => [t.id, { ...t, comments: [...(t.comments || [])] }]));
   for (const { type, payload } of pending) {
+    if (type === 'thread.delete' || gone.has(payload.threadId)) continue;
     if (type === 'thread.resolve') {
       const thread = byId.get(payload.threadId);
       if (thread) thread.resolvedAt = payload.resolved ? payload.at || now() : null;

@@ -24,6 +24,10 @@
     comments = false,
     resolved = false,
     onresolve = null,
+    // Delete the whole thread (comment mode): `ondelete()` is called on every press; `deleteArmed` is the state the host
+    // keeps (the first press arms, the second deletes), so the label here is only a projection of it.
+    ondelete = null,
+    deleteArmed = false,
     // Extra header buttons, a snippet given the thread (the reader's Edit / Open link / Delete).
     actions = null
   } = $props();
@@ -190,6 +194,11 @@
       <button class="resolve press focus-ring" onclick={() => onresolve(!resolved)} data-testid="comment-resolve"
         aria-label={resolved ? 'Reopen this thread' : 'Resolve this thread'} title={resolved ? 'Reopen' : 'Resolve'}>{resolved ? 'reopen' : '✓'}</button>
     {/if}
+    {#if comments && ondelete && turns.length}
+      <button class="del press focus-ring" class:armed={deleteArmed} onclick={ondelete} data-testid="comment-delete"
+        aria-label={deleteArmed ? 'Press again to delete this thread and its replies' : 'Delete this thread and its replies'}
+        title={deleteArmed ? 'Press again to delete' : 'Delete this thread'}>{deleteArmed ? 'delete?' : 'delete'}</button>
+    {/if}
     <button class="x press focus-ring" onclick={oncollapse} data-testid="sidechat-collapse" aria-label="Collapse this thread" title="Collapse (Esc)">×</button>
   </header>
 
@@ -282,6 +291,12 @@
     font-size: 12px; color: var(--ink-faint); display: grid; place-items: center;
   }
   .resolve:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .del {
+    flex: none; height: 24px; padding: 0 6px; border-radius: 6px;
+    font-size: 12px; color: var(--ink-faint); display: grid; place-items: center;
+  }
+  .del:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+  .del.armed { background: var(--warn); color: #fff; }
   .remark { margin: 0 0 8px; }
   .by { margin: 0 0 2px; font-size: 11px; color: var(--ink-faint); display: flex; gap: 6px; align-items: baseline; }
   .by .name { color: var(--ink); font-weight: 600; }

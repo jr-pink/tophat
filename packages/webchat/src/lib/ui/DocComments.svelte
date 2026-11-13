@@ -1,11 +1,10 @@
 <script>
-  // Comments on a public document: select words in a line, then the floating "Comment" button or ⌘⌥M
-  // (Ctrl+Alt+M elsewhere, as in Google Docs); the span stays highlighted. On a desktop the threads are
-  // webchat's own side-thread rail (SideThreads / SideThread, the very component the chat pane uses, so
-  // a fix lands in both): each card beside its span, stacked without overlap, the focused one expanded;
-  // a new comment opens as a card there. On a narrow screen there is no room for a rail, so it is the
-  // reader's flow: the note box (SelectBox) over the words, and the reader's note popover over a
-  // highlight. The selection pill is SelectPill.
+  // Comments on a public document: select words in a line, then the floating "Comment" button or ⌘⌥M (Ctrl+Alt+M elsewhere, as
+  // in Google Docs); the span stays highlighted. On a desktop the threads are webchat's own side-thread rail (SideThreads /
+  // SideThread, the very component the chat pane uses, so a fix lands in both): each card beside its span, stacked without
+  // overlap, the focused one expanded; a new comment opens as a card there. On a narrow screen there is no room for a rail, so
+  // it is the reader's flow: the note box (SelectBox) over the words, and the reader's note popover over a highlight. The
+  // selection pill is SelectPill.
   //
   // A comment is anchored to a span of one line (doc-anchor.js over reader-anchor.js): line id,
   // quote, offsets in the line's rendered text. The quote is found again after the line is edited,
@@ -20,6 +19,11 @@
   // written with the server away is an action in the document's op log (docs-state.js, a kit state with
   // scope 'cloud'), shown at once, and delivered to the docs server by the log's sink on reconnect; the
   // server keeps the first copy of an id, so a replay never doubles a comment.
+  //
+  // Deleting a thread (the whole anchor and its replies): the card's "delete" (the rail) or the popover's Delete asks twice,
+  // the first press arms it (kit state `armed`, lapses after 4 s), the second writes one 'thread.delete' action to the log, so
+  // the thread leaves at once, and the sink delivers it (a tombstone on the server; a repeat or a late reply changes nothing).
+  // Only its author's tab or the owner is offered it (the server decides again).
   import { onMount, tick } from 'svelte';
   import SelectPill from './SelectPill.svelte';
   import SelectBox from './SelectBox.svelte';
@@ -35,7 +39,7 @@
   const cache = uiApp().use(docThreadsDecl(doc.token));
   // What this device wrote: the op log. `pendingList` is what the docs server has not acknowledged yet.
   const comments = uiApp().use(docCommentsDecl(doc.token), {
-    transport: docsCommentSink({ call: (...args) => call(...args), me: () => doc.name || '', adopt: (list) => adopt(list), refuse: (message) => { error = message; } })
+    transport: docsCommentSink({ call: (...args) => call(...args), me: () => doc.name || '', adopt: (list) => adopt(list), refuse: (message, type) => { error = message; if (type === 'thread.delete') refresh().then(() => { error = message; }); } })
   });
   const pendingList = $derived.by(() => { $comments; return comments.pending; });
   let pill = $state(null);          // { x, y, below, anchor } over a live selection
@@ -76,7 +80,7 @@
     const response = await fetch(`${api}/comments`, { method, headers: headers(author), body: JSON.stringify(body), signal: AbortSignal.timeout(6000) });
     if (response.status >= 500 || notJson(response)) throw Object.assign(new Error('offline'), { offline: true });
     const answer = await response.json();
-    if (!response.ok) throw new Error(answer.error || `comment ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(answer.error || `comment ${response.status}`), { status: response.status });
     return answer;
   }
 
@@ -126,6 +130,9 @@
     for (const draft of drafts) if (!have.has(draft.id)) shown.push(draft);
     return shown;
   });
+  /** Whose thread it is to delete: the owner's, or one this tab wrote (the server said so, or it is still in the log). */
+  const deletable = (thread) => Boolean(doc.owner || thread.canDelete || thread.pending);
+  const armed = $derived($cache.armed);
   const openThreads = $derived(all.filter((thread) => !thread.resolvedAt));
   const resolvedList = $derived(all.filter((thread) => thread.resolvedAt));
   const peeked = $derived(peek ? all.find((thread) => thread.id === peek.id) || null : null);
@@ -222,7 +229,7 @@
       const row = rows.find((entry) => entry.lineId === at.lineId);
       const lead = row?.span ? Math.max(0, offsetIn(row.row, row.span, 0)) : 0;
       out.push({
-        id: thread.id, runState: 'idle', resolvedAt: thread.resolvedAt || null,
+        id: thread.id, runState: 'idle', resolvedAt: thread.resolvedAt || null, canDelete: deletable(thread),
         sidechat: { itemId: at.lineId, quote: thread.quote, start: lead + at.start, end: lead + at.end }
       });
     }
@@ -260,6 +267,26 @@
     if (thread) setResolved(thread, resolved);
     if (focusedId === id) focusedId = null;
   }
+  /** Delete's two presses: the first arms it, the second deletes the whole thread (an action in the log, delivered by the sink). */
+  function pressDelete(id) {
+    const thread = all.find((entry) => entry.id === id);
+    if (!thread || !deletable(thread)) return;
+    if (armed !== id) { cache.dispatch('delete.arm', { threadId: id }); return; }
+    comments.dispatch('thread.delete', { threadId: id, at: stamp0() });
+    cache.dispatch('delete.disarm');
+    drafts = drafts.filter((draft) => draft.id !== id);
+    adopt(threads.filter((entry) => entry.id !== id));
+    if (focusedId === id) focusedId = null;
+    if (peek?.id === id) peek = null;
+    rev += 1;
+    flushOutbox();
+  }
+  // A first press that is not followed through lapses on its own, so Delete is never left armed behind him.
+  $effect(() => {
+    if (!armed) return;
+    const timer = setTimeout(() => cache.dispatch('delete.disarm'), 4000);
+    return () => clearTimeout(timer);
+  });
   function railCollapse(id) {
     if (drafts.some((draft) => draft.id === id)) drafts = drafts.filter((draft) => draft.id !== id);
     else collapsed = [...collapsed, id];
@@ -576,6 +603,9 @@
     {autofocusId}
     comments={true}
     onresolve={railResolve}
+    ondelete={pressDelete}
+    armedId={armed}
+    {deletable}
     onfocus={(id) => { focusedId = id; }}
     oncollapse={railCollapse}
   />
@@ -634,6 +664,9 @@
           <button onclick={() => setResolved(peeked, false)} data-testid="doc-comment-reopen">Reopen</button>
         {:else}
           <button onclick={() => setResolved(peeked, true)} data-testid="doc-comment-resolve">Resolve</button>
+        {/if}
+        {#if deletable(peeked)}
+          <button class="danger" class:armed={armed === peeked.id} onclick={() => pressDelete(peeked.id)} data-testid="doc-comment-delete">{armed === peeked.id ? 'Delete?' : 'Delete'}</button>
         {/if}
         <button onclick={() => { peek = null; }}>Close</button>
       </div>
@@ -709,6 +742,7 @@
   .prow { display: flex; gap: 4px; }
   .prow button { border: 0; background: none; cursor: pointer; border-radius: 8px; padding: 4px 8px; font-size: 12.5px; color: var(--ink-dim); }
   .prow button:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+  .prow button.danger.armed { background: var(--warn, #d66); color: #fff; }
   .foot {
     position: absolute; right: 14px; bottom: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
     font-size: 11px; color: var(--ink-faint);

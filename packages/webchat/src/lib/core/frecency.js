@@ -54,6 +54,21 @@ export function rankConversations(conversations, { now = Date.now(), query = '',
       a.id.localeCompare(b.id));
 }
 
+const activityAt = (chat) => Date.parse(chat.activeAt || chat.updatedAt || '') || 0;
+
+// The sidebar's OTHER order: pinned first, then plain recency, over the same filter. It lived in
+// core/recency.js as a second exported function also called `rankConversations`, so the repository
+// held two exported symbols of one name with two different orders, and which one a surface got
+// depended on which module it happened to import. The sort is unchanged, including the one thing
+// that is not cosmetic about it: the keys are computed once per chat rather than inside the
+// comparator. core/recency.js is now a re-export of this function and implements nothing.
+export function rankByRecency(conversations, options) {
+  const rows = rankConversations(conversations, { ...options, sorted: false });
+  const keyed = rows.map((row) => ({ row, pin: row.pinned ? 1 : 0, at: activityAt(row) }));
+  keyed.sort((a, b) => b.pin - a.pin || b.at - a.at || a.row.id.localeCompare(b.row.id));
+  return keyed.map((entry) => entry.row);
+}
+
 export function trayCounts(conversations, { now = Date.now(), match = null, includeSidechats = false } = {}) {
   const counts = { archived: 0, aside: 0, deferred: 0, archivedLive: 0 };
   for (const c of Object.values(conversations)) {

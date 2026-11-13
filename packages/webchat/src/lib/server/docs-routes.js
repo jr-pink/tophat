@@ -159,13 +159,13 @@ export async function metaPOST(event) {
 
 export function commentsGET(event) {
   const token = docToken(event.params);
-  return json({ threads: docs().threads(token) }, { headers: NO_STORE });
+  return json({ threads: docs().threads(token, { who: whoOf(event) }) }, { headers: NO_STORE });
 }
 
 function commentAnswer(event, token, result) {
   if (result.error) return json({ error: result.error }, { status: result.status || 400 });
   docs().broadcast(token, { topic: 'comments', origin: whoOf(event).client || null });
-  return json({ ...result, threads: docs().threads(token) }, { headers: NO_STORE });
+  return json({ ...result, threads: docs().threads(token, { who: whoOf(event) }) }, { headers: NO_STORE });
 }
 
 export async function commentsPOST(event) {
@@ -185,9 +185,12 @@ export async function commentsPATCH(event) {
   return commentAnswer(event, token, docs().resolve(token, body.threadId, body.resolved !== false, whoOf(event)));
 }
 
+/** `?id=` or { id } deletes one comment; `?threadId=` or { threadId } deletes the whole thread (anchor and replies). */
 export async function commentsDELETE(event) {
   const token = docToken(event.params);
   const body = await event.request.json().catch(() => ({}));
+  const threadId = event.url.searchParams.get('threadId') || body.threadId;
+  if (threadId) return commentAnswer(event, token, docs().deleteThread(token, threadId, whoOf(event)));
   const id = event.url.searchParams.get('id') || body.id;
   return commentAnswer(event, token, docs().deleteComment(token, id, whoOf(event)));
 }

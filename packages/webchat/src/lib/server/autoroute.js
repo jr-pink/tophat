@@ -86,6 +86,7 @@ export function foldersOf(conversations, descriptions = readDescriptions()) {
     // A folder he described, or placed in the tree (a subfolder he made before any chat landed in it), is a folder.
     if (!name || folders.has(name.toLowerCase())) continue;
     const placed = typeof d.parentAt === 'string';
+    if (d.removed === true && typeof d.removedAt === 'string' && !(placed && d.parentAt > d.removedAt)) continue;
     if (!placed && !(d.text && d.source === 'manual')) continue;
     folders.set(name.toLowerCase(), { name, titles: [], description: String(d.text || ''), source: d.text ? d.source || 'auto' : '' });
   }

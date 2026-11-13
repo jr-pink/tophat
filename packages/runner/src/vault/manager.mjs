@@ -27,7 +27,9 @@ export const HISTORY_LIMIT = 5000;
 
 function secureDirectory(dir) {
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
-  const stat = fs.lstatSync(dir);
+  // The config root may be a symlink to the instance's real directory; judge the directory
+  // it resolves to, still refusing a group- or world-accessible or foreign-owned one.
+  const stat = fs.lstatSync(fs.realpathSync(dir));
   check(stat.isDirectory() && ownedByUs(stat), 'Vault directory must be owner-only');
 }
 

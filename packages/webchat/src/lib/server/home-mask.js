@@ -5,12 +5,16 @@
 // written as `~`. Nothing here imports anything: the hook applies it, node tests drive it.
 import { homedir } from 'node:os';
 
+// The one place this module asks for the process's own home. It is masked out of what a client sees, never a place state is read or
+// written, so the server-homedir rule (state resolving under the real home) does not apply; the ratchet allows exactly this one call.
+const ownHome = () => homedir();
+
 export const publicMode = (env = process.env) => env.TOPHAT_RUNNER_PROMPT_MODE === 'public';
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 
 /** The pattern for the home directories to hide: this process's own home, then any /Users/<name> or /home/<name>. */
-export function homePattern(home = homedir()) {
+export function homePattern(home = ownHome()) {
   const own = home && home !== '/' ? `${escapeRe(home.replace(/\/+$/, ''))}|` : '';
   return new RegExp(`${own}/(?:Users|home)/[A-Za-z0-9._-]+`, 'g');
 }
@@ -26,7 +30,7 @@ export const maskableType = (contentType) => /^(?:application\/(?:[\w.+-]*\+)?js
  * of `/Users/` or `/home/`, or of the home itself) keeps that tail for the next chunk, so a path split across chunks is masked
  * too; the tail is held only while it could still become a match, so a live event stream is not delayed.
  */
-export function maskStream({ home = homedir() } = {}) {
+export function maskStream({ home = ownHome() } = {}) {
   const pattern = homePattern(home);
   const heads = [home && home !== '/' ? home.replace(/\/+$/, '') : '', '/Users/', '/home/'].filter(Boolean);
   const decoder = new TextDecoder(), encoder = new TextEncoder();
@@ -59,7 +63,7 @@ export function maskStream({ home = homedir() } = {}) {
 }
 
 /** The response with its body masked, or the same response when this one carries no app data. Length headers are dropped (the body changes size). */
-export function maskResponse(response, { home = homedir() } = {}) {
+export function maskResponse(response, { home = ownHome() } = {}) {
   const encoding = response.headers.get('content-encoding');
   if (!response.body || !maskableType(response.headers.get('content-type')) || (encoding && encoding !== 'identity')) return response;
   const headers = new Headers(response.headers);

@@ -269,9 +269,15 @@ export function openDocs({ dir = docsDir() } = {}) {
 
     // --- comments ------------------------------------------------------------------------------
 
-    threads(token, { resolved = true } = {}) {
+    /**
+     * The live threads. With `who` (the reader asking) each carries `canDelete`: the document's owner, or the tab that wrote
+     * the thread's first comment, may delete the whole thread (the same rule as deleting one comment).
+     */
+    threads(token, { resolved = true, who = null } = {}) {
       const threads = all(`SELECT * FROM threads WHERE token = ? AND deleted_at IS NULL ${resolved ? '' : 'AND resolved_at IS NULL'} ORDER BY created_at`, token);
       const comments = all('SELECT * FROM comments WHERE token = ? AND deleted_at IS NULL ORDER BY created_at, id', token);
+      const starter = new Map();
+      if (who) for (const row of all('SELECT thread_id, client FROM comments WHERE token = ? ORDER BY created_at, id', token)) if (!starter.has(row.thread_id)) starter.set(row.thread_id, row.client);
       const byThread = new Map();
       for (const comment of comments) {
         if (!byThread.has(comment.thread_id)) byThread.set(comment.thread_id, []);
@@ -284,6 +290,7 @@ export function openDocs({ dir = docsDir() } = {}) {
         id: row.id, lineId: row.line_id, quote: row.quote, start: row.anchor_start, end: row.anchor_end,
         createdAt: row.created_at, author: row.author, owner: row.owner === 1,
         resolvedAt: row.resolved_at, resolvedBy: row.resolved_by,
+        ...(who ? { canDelete: Boolean(who.owner || (who.client && starter.get(row.id) === who.client)) } : {}),
         comments: byThread.get(row.id) || []
       }));
     },
@@ -299,7 +306,15 @@ export function openDocs({ dir = docsDir() } = {}) {
       // A retried POST carries the same id; the first one stands.
       const prior = one('SELECT thread_id FROM comments WHERE id = ?', commentId);
       if (prior) return { ok: true, threadId: prior.thread_id, id: commentId, duplicate: true };
-      let thread = threadId ? one('SELECT * FROM threads WHERE id = ? AND token = ? AND deleted_at IS NULL', String(threadId), token) : null;
+      let thread = threadId ? one('SELECT * FROM threads WHERE id = ? AND token = ?', String(threadId), token) : null;
+      if (thread?.deleted_at) {
+        // A reply that was in flight when the thread was deleted: the tombstone wins in either arrival order. The comment is
+        // kept (so a replay of it is a duplicate) but is born deleted, and the thread does not come back.
+        journal(token, { op: 'comment', token, id: commentId, threadId: thread.id, body: text, author: who.name, owner: who.owner, client: who.client || null, at, deleted: true });
+        run(`INSERT INTO comments (id, thread_id, token, body, author, owner, client, created_at, deleted_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+          commentId, thread.id, token, text, who.name, who.owner ? 1 : 0, who.client || null, at, thread.deleted_at);
+        return { ok: true, threadId: thread.id, id: commentId, deleted: true };
+      }
       if (threadId && !thread) {
         // A thread named by the client that does not exist yet is created under that id, so a
         // thread opened offline keeps its identity when its first comment lands.
@@ -344,6 +359,25 @@ export function openDocs({ dir = docsDir() } = {}) {
       run('UPDATE comments SET deleted_at = ? WHERE id = ?', at, comment.id);
       const left = one('SELECT COUNT(*) AS n FROM comments WHERE thread_id = ? AND deleted_at IS NULL', comment.thread_id).n;
       if (!left) run('UPDATE threads SET deleted_at = ? WHERE id = ?', at, comment.thread_id);
+      return { ok: true };
+    },
+
+    /**
+     * Delete a whole thread, its anchor and every reply: the owner, or the tab that wrote its first comment. A soft delete, a
+     * tombstone: the thread and its comments keep their rows with `deleted_at`, so a reply still in flight lands as deleted
+     * and a replay of the delete (the op log delivers at least once) is the same answer, whoever replays it.
+     */
+    deleteThread(token, threadId, who) {
+      const id = String(threadId || '');
+      const thread = one('SELECT * FROM threads WHERE id = ? AND token = ?', id, token);
+      if (!thread) return { error: 'No such thread', status: 404 };
+      if (thread.deleted_at) return { ok: true, duplicate: true };
+      const first = one('SELECT client FROM comments WHERE thread_id = ? ORDER BY created_at, id LIMIT 1', thread.id);
+      if (!who.owner && !(who.client && first?.client === who.client)) return { error: 'Only its author can delete a thread', status: 403 };
+      const at = nowIso();
+      journal(token, { op: 'thread-delete', token, id: thread.id, by: who.name, at });
+      run('UPDATE comments SET deleted_at = ? WHERE thread_id = ? AND deleted_at IS NULL', at, thread.id);
+      run('UPDATE threads SET deleted_at = ? WHERE id = ?', at, thread.id);
       return { ok: true };
     },
 

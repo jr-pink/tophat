@@ -93,12 +93,10 @@
     const chat = params.get('chat');
     const now = new Date();
     const today = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
-    let seen = null;
-    try { seen = localStorage.getItem('tophat-brief-seen'); } catch {  }
     const landedTab = uiApp().use(landedDecl);
     const landed = marked(landedTab, today);
 
-    const target = landingFor({ hour: now.getHours(), today, seen, path: location.pathname, stay, landed, chat });
+    const target = landingFor({ hour: now.getHours(), path: location.pathname, stay, landed, chat });
     landedTab.dispatch('mark', { at: today });
     landedTab.flush(); // on disk before a redirect unloads the page
     if (target) location.replace(target);

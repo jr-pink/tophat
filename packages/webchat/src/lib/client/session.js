@@ -12,6 +12,7 @@ import {
 } from '../core/delivery.js';
 import { createEngineSession } from '../engine/session-host.js';
 import { createSendJournal, JOURNAL_KEY } from '../engine/send-journal.js';
+import { createEphemeralPost } from '../../../../runner/tools/docstore-kit/lib/engine/ephemeral.js';
 import { engineSelected, isAppSession } from '../engine/flag.js';
 import { rollbackToLegacy } from '../engine/migrate.js';
 import { installParityProbe, installStateDump } from '../engine/state-dump.js';
@@ -1488,12 +1489,14 @@ function createLegacySession({ fetchImpl, replicaImpl, eventSourceImpl, hydrateE
   // replayed nothing. The journal is written synchronously before the echo, confirms on the server's answer (`settle`, in post()), and
   // here `deliver` is only the nudge: put the action back in the delivery machine if it is not there, abandon an attempt that has not
   // answered in `postPatienceMs` and pump again.
+  const telemetryPost = createEphemeralPost((...args) => doFetch(...args));
   const restored = new Map(); // journal id -> the wire action, for rows an earlier life of this tab left
   const wireOf = (action) => ({ ...action, id: action.action_id, uploads: action.payload?.uploads || [] });
   const journal = createSendJournal({
     storage: journalKey ? journalStorage : null, key: journalKey || undefined, ...journalTiming,
     context: () => ({ engine: 'legacy', online: win?.navigator?.onLine ?? null }),
-    report: (row) => { try { Promise.resolve(doFetch('/api/client-lag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ records: [row] }), keepalive: true })).catch(() => {}); } catch { /* telemetry never throws into a send */ } },
+    // Telemetry is not a durable write: the kit's ephemeral post (lib/engine/ephemeral.js, the sanctioned route, with a 10 s deadline) over this session's own fetch.
+    report: (row) => { try { telemetryPost('/api/client-lag', { body: { records: [row] }, keepalive: true }).catch(() => {}); } catch { /* telemetry never throws into a send */ } },
     onChange: () => {
       const v = journal.view();
       if (v.journalError !== (status.journalError ?? null) || Boolean(v.deliveryStalled) !== Boolean(status.deliveryStalled) || v.deliveryStalled) setStatus({ deliveryStalled: v.deliveryStalled, journalError: v.journalError });

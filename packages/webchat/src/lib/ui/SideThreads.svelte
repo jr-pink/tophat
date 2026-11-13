@@ -40,6 +40,10 @@
     // Comment mode (public documents): passed to each card; `onresolve(id, resolved)`.
     comments = false,
     onresolve = null,
+    // Comment mode: `ondelete(id)` deletes a thread, `armedId` is the thread whose Delete was pressed once, `deletable(thread)` says whose card has it.
+    ondelete = null,
+    armedId = null,
+    deletable = () => true,
     // The reader (src/routes/reader/+page.svelte): its anchors are offsets into one text index
     // over the whole article, not into a row, so it hands over the scroller, a function that turns
     // a thread into its DOM Range, and paints its own highlights. Unset, chat and docs as before.
@@ -279,6 +283,8 @@
           {comments}
           resolved={Boolean(thread.resolvedAt)}
           onresolve={onresolve ? (value) => onresolve(thread.id, value) : null}
+          ondelete={ondelete && deletable(thread) ? () => ondelete(thread.id) : null}
+          deleteArmed={armedId === thread.id}
           {actions}
         />
       </div>
