@@ -1,10 +1,12 @@
-// tophat-pass: read a tophat credential vault from the command line, with no passkey and no web session. A process
+// tophat-pass: read and manage a tophat credential vault from the command line, with no passkey and no web session. A process
 // running as the vault's owner can read the files directly (the records are encrypted at rest with an owner-only
 // local key file, or a passphrase), so this CLI uses the vault's own PasswordManager rather than a second reader.
 //
-// Read verbs only: it never writes a record, a catalog or the key file. Values print only for `get` (and `lookup
-// --reveal`); everything else is metadata. An argument echoed in an error is shaped like an id or hidden, so a
-// password passed in the wrong slot cannot reach a transcript.
+// Read verbs never write a record, a catalog or the key file. Write verbs (init, protect, set, setpass, settotp, import,
+// archive, groups, recovery --spend, forget) go through the vault's own PasswordManager and take every secret from
+// --file or stdin, never argv. Values print only for `get`, `totp`, `recovery --spend`, `generate` and `lookup --reveal`;
+// everything else is metadata. An argument echoed in an error is shaped like an id or hidden, so a password passed in
+// the wrong slot cannot reach a transcript.
 //
 //   TOPHAT_VAULT_DIR, TOPHAT_VAULT_KEY_FILE   the vault (default ~/.config/tophat/vault and vault-master-key beside it)
 //   TOPHAT_PASS_MANAGER                       path of the PasswordManager module (default: the runner package beside this one)
@@ -24,7 +26,8 @@ const safeArg = (value) => {
   return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(text) ? text : `<arg of ${text.length} chars, not shown>`;
 };
 
-const BOOLEAN = ['json', 'archived', 'help', 'no-newline', 'passphrase-stdin', 'raw', 'reveal'];
+const BOOLEAN = ['json', 'archived', 'help', 'no-newline', 'passphrase-stdin', 'raw', 'reveal', 'overwrite', 'keep', 'restore', 'spend', 'yes'];
+const REPEAT = ['site', 'username', 'email', 'phone', 'group'];
 export function parseArgs(argv) {
   const flags = {}, positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -32,9 +35,9 @@ export function parseArgs(argv) {
     if (arg === '--') { positional.push(...argv.slice(i + 1)); break; }
     if (arg.startsWith('--')) {
       const [name, inline] = arg.slice(2).split(/=(.*)/s);
-      if (BOOLEAN.includes(name)) flags[name] = true;
-      else if (inline !== undefined) flags[name] = inline;
-      else flags[name] = argv[++i];
+      const given = BOOLEAN.includes(name) ? true : inline !== undefined ? inline : argv[++i];
+      if (REPEAT.includes(name)) (flags[name] ||= []).push(given);
+      else flags[name] = given;
     } else if (arg === '-h') flags.help = true;
     else if (arg === '-n') flags['no-newline'] = true;
     else positional.push(arg);
@@ -42,7 +45,7 @@ export function parseArgs(argv) {
   return { flags, positional };
 }
 
-const HELP = `tophat-pass: read a tophat credential vault from the command line, no passkey.
+const HELP = `tophat-pass: read and manage a tophat credential vault from the command line, no passkey.
 
   tophat-pass list [--json] [--archived] [--group G]
         ids, names, kinds, origins, updatedAt. Never values.
@@ -62,9 +65,52 @@ const HELP = `tophat-pass: read a tophat credential vault from the command line,
         recorded changes to credentials, newest first. Metadata only.
   tophat-pass status | stores [--json]
         where the vault is, whether it exists, how many entries, locked or not.
+  tophat-pass recovery ID [--spend]
+        how many recovery codes are left; --spend prints one unused code and marks it used.
+  tophat-pass generate [--length N]
+        a new random password (default: three readable six-character groups). Stores nothing.
+
+Write verbs. A secret comes from --file PATH or stdin, never argv. Nothing here prints a stored value.
+  tophat-pass init
+        create the vault directory and its owner-only key file.
+  tophat-pass protect
+        wrap the key in a passphrase read from TOPHAT_PASS_NEW_PASSPHRASE or stdin (12 to 4096 characters).
+  tophat-pass set ID [--kind K] [--name N] [--site URL]... [--username U]... [--email E]... [--phone P]...
+                  [--group G]... [--notes TEXT] [--file PATH] [--overwrite]
+        store one credential. K is login (value = the password), secret (default), totp (base32 or otpauth:// URI),
+        recovery-codes (one per line), ssh-key (PEM), oauth (JSON) or passkey-reference (--rp-id HOST --provider NAME
+        [--credential-id ID], no value read). Websites must be HTTPS. An existing id needs --overwrite.
+  tophat-pass setpass ID | settotp ID
+        replace only the password, or attach or replace the TOTP seed, of an existing login (value from --file or stdin).
+  tophat-pass import FILE --format chrome|apple|bitwarden|1password|1pux|keepass|csv [--overwrite] [--keep]
+        import a password-manager export, then DELETE the export (it holds every password in cleartext) unless --keep
+        or the import failed. Existing ids are skipped unless --overwrite. Prints counts and warnings, never values.
+  tophat-pass archive ID [--restore] | groups ID --set a,b | forget ID --yes
+        archive or restore an entry (kept, hidden from autofill), replace its groups, or delete it for good.
 
 A passphrase-protected vault: TOPHAT_PASS_PASSPHRASE, or --passphrase-stdin. Otherwise exit 4.
 Exit codes: 0 ok, 1 error, 2 usage, 3 unknown credential or field, 4 locked.`;
+
+const KINDS = ['login', 'secret', 'totp', 'recovery-codes', 'ssh-key', 'oauth', 'passkey-reference'];
+const IMPORT_FORMATS = ['chrome', 'apple', 'safari', 'bitwarden', '1password', '1pux', 'keepass', 'csv', 'bitwarden-csv', '1password-csv'];
+const list = (v) => (Array.isArray(v) ? v : v === undefined ? [] : [v]).filter((x) => typeof x === 'string' && x.trim());
+const guard = (fn) => { try { return fn(); } catch (e) { throw e instanceof Fail ? e : new Fail(e.expose ? e.message : 'The vault refused that operation', EXIT.error); } };
+
+/** A secret never comes from argv: --file PATH or stdin, one trailing newline dropped. */
+async function incomingValue(flags) {
+  let text;
+  if (flags.file) {
+    try { text = fs.readFileSync(path.resolve(String(flags.file)), 'utf8'); } catch (e) { throw new Fail(`cannot read --file (${e.code || e.name})`, EXIT.error); }
+  } else {
+    if (process.stdin.isTTY) throw new Fail('Give the value on stdin or with --file PATH; it is never taken from arguments.', EXIT.usage);
+    const chunks = [];
+    for await (const chunk of process.stdin) chunks.push(chunk);
+    text = Buffer.concat(chunks).toString('utf8');
+  }
+  text = text.replace(/\r?\n$/, '');
+  if (!text) throw new Fail('The value is empty.', EXIT.usage);
+  return text;
+}
 
 const FIELDS = { login: ['usernames', 'emails', 'phones', 'password', 'totp'], secret: ['secret'], totp: ['secret', 'algorithm', 'digits', 'period'],
   'ssh-key': ['privateKey', 'passphrase'], oauth: ['issuer', 'account', 'scopes', 'expiresAt'], 'passkey-reference': ['provider'] };
@@ -148,6 +194,24 @@ export async function main(argv, env = process.env) {
       out(flags.json || verb === 'status' ? JSON.stringify(row, null, 2) : `${row.store}  ${row.directory}  ${row.present ? `${row.entries ?? '?'} entries` : 'absent'}${row.locked ? '  LOCKED' : ''}${row.error ? `  error: ${row.error}` : ''}`);
       return EXIT.ok;
     }
+    if (verb === 'generate') {
+      const length = flags.length === undefined ? undefined : Number(flags.length);
+      out(guard(() => store.module.generatePassword(length)));
+      return EXIT.ok;
+    }
+    if (verb === 'init') {
+      const status = guard(() => store.manager.initialize());
+      out(JSON.stringify({ directory: store.directory, initialized: status.initialized, keyStorage: status.keyStorage }, null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'protect') {
+      const passphrase = envGet(env, 'TOPHAT_PASS_NEW_PASSPHRASE') || (await incomingValue({}));
+      const status = guard(() => store.manager.protect(passphrase));
+      out(JSON.stringify({ directory: store.directory, keyStorage: status.keyStorage, locked: status.locked }, null, 2));
+      return EXIT.ok;
+    }
+    // set and import create the vault on first use; every other verb needs one that exists.
+    if (['set', 'import'].includes(verb) && !store.manager.status().initialized) guard(() => store.manager.initialize());
     await ready(store, flags, env);
     const catalog = () => store.manager.catalog();
     const entries = (all = false) => Object.values(catalog().entries).filter((e) => all || !e.archived);
@@ -160,7 +224,7 @@ export async function main(argv, env = process.env) {
     };
 
     if (verb === 'list') {
-      const rows = entries(Boolean(flags.archived)).filter((e) => !flags.group || (e.groups || []).includes(flags.group)).map(shape);
+      const rows = entries(Boolean(flags.archived)).filter((e) => list(flags.group).every((g) => (e.groups || []).includes(g))).map(shape);
       out(flags.json ? JSON.stringify(rows, null, 2) : table(rows));
       return EXIT.ok;
     }
@@ -227,6 +291,81 @@ export async function main(argv, env = process.env) {
       if (!Number.isSafeInteger(limit) || limit < 1) throw new Fail('--limit needs a positive integer', EXIT.usage);
       const rows = store.manager.history({ id: rest[0] || null, limit });
       out(flags.json ? JSON.stringify(rows, null, 2) : rows.map((r) => `${r.at || r.when || ''}  ${r.action || ''}  ${r.id || ''}  ${r.name || ''}`).join('\n'));
+      return EXIT.ok;
+    }
+    if (verb === 'set') {
+      const id = rest[0];
+      if (!id) throw new Fail('set needs a credential id', EXIT.usage);
+      const kind = flags.kind || 'secret';
+      if (!KINDS.includes(kind)) throw new Fail(`--kind must be one of ${KINDS.join(', ')}`, EXIT.usage);
+      let value;
+      if (kind === 'passkey-reference') value = { rpId: flags['rp-id'], provider: flags.provider, credentialId: flags['credential-id'] || null };
+      else {
+        const text = await incomingValue(flags);
+        if (kind === 'login') value = { password: text, usernames: list(flags.username), emails: list(flags.email), phones: list(flags.phone) };
+        else if (kind === 'recovery-codes') value = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        else if (kind === 'ssh-key') value = { privateKey: text, passphrase: '' };
+        else if (kind === 'oauth') { try { value = JSON.parse(text); } catch { throw new Fail('An oauth value must be JSON.', EXIT.usage); } }
+        else value = text;
+      }
+      const saved = guard(() => store.manager.save({ id, name: flags.name || id, kind, origins: list(flags.site), value,
+        groups: list(flags.group), notes: flags.notes || '' }, { overwrite: Boolean(flags.overwrite) }));
+      out(JSON.stringify(shape(saved), null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'setpass' || verb === 'settotp') {
+      if (!rest[0]) throw new Fail(`${verb} needs a credential id`, EXIT.usage);
+      const entry = resolve(rest[0]);
+      if (entry.kind !== 'login') throw new Fail(`A ${entry.kind} entry is not a login`, EXIT.usage);
+      const text = await incomingValue(flags);
+      const value = { ...store.manager.value(entry), [verb === 'setpass' ? 'password' : 'totp']: text };
+      const saved = guard(() => store.manager.save({ id: entry.id, name: entry.name, kind: 'login', origins: entry.origins,
+        value, groups: entry.groups, archived: entry.archived, notes: entry.notes || '' }, { overwrite: true }));
+      out(JSON.stringify(shape(saved), null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'import') {
+      const file = rest[0];
+      if (!file) throw new Fail('import needs the export file', EXIT.usage);
+      if (!IMPORT_FORMATS.includes(flags.format)) throw new Fail(`--format must be one of ${IMPORT_FORMATS.join(', ')}`, EXIT.usage);
+      let bytes;
+      try { bytes = fs.readFileSync(path.resolve(file)); } catch (e) { throw new Fail(`cannot read the export (${e.code || e.name})`, EXIT.error); }
+      const options = { overwrite: Boolean(flags.overwrite) };
+      const zipped = bytes.length > 3 && bytes[0] === 0x50 && bytes[1] === 0x4b;
+      const text = bytes.toString('utf8').replace(/^\uFEFF/, '');
+      // Bitwarden and 1Password export either JSON or CSV under the same name; the first character says which.
+      const format = ['bitwarden', '1password'].includes(flags.format) && !/^\s*[{[]/.test(text) ? `${flags.format}-csv` : flags.format;
+      const result = guard(() => (['1pux', '1password'].includes(flags.format) && zipped ? store.manager.importArchive(bytes, options) : store.manager.import(format, text, options)));
+      let deleted = false;
+      if (!flags.keep) { fs.unlinkSync(path.resolve(file)); deleted = true; }
+      out(JSON.stringify({ ...result, exportDeleted: deleted }, null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'archive') {
+      if (!rest[0]) throw new Fail('archive needs a credential id', EXIT.usage);
+      const entry = resolve(rest[0]);
+      out(JSON.stringify(shape(guard(() => store.manager.archive(entry.id, !flags.restore))), null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'groups') {
+      if (!rest[0] || typeof flags.set !== 'string') throw new Fail('groups needs a credential id and --set a,b (empty for none)', EXIT.usage);
+      const entry = resolve(rest[0]);
+      out(JSON.stringify(shape(guard(() => store.manager.groups(entry.id, flags.set.split(',').map((g) => g.trim()).filter(Boolean)))), null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'recovery') {
+      if (!rest[0]) throw new Fail('recovery needs a credential id', EXIT.usage);
+      const entry = resolve(rest[0]);
+      if (entry.kind !== 'recovery-codes') throw new Fail(`A ${entry.kind} entry holds no recovery codes`, EXIT.unknown);
+      if (flags.spend) { out(guard(() => store.manager.takeRecoveryCode(entry.id))); return EXIT.ok; }
+      out(JSON.stringify({ id: entry.id, name: entry.name, remaining: entry.remaining ?? store.manager.value(entry).length }, null, 2));
+      return EXIT.ok;
+    }
+    if (verb === 'forget') {
+      if (!rest[0]) throw new Fail('forget needs a credential id', EXIT.usage);
+      if (!flags.yes) throw new Fail('forget deletes the credential for good; add --yes', EXIT.usage);
+      const entry = resolve(rest[0]);
+      out(JSON.stringify(guard(() => store.manager.forget(entry.id)), null, 2));
       return EXIT.ok;
     }
     throw new Fail(`Unknown command "${safeArg(verb)}". Run tophat-pass --help.`, EXIT.usage);

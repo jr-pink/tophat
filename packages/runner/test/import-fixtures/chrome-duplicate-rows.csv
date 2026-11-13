@@ -1,0 +1,5 @@
+name,url,username,password,note
+Ridge Mail,https://ridge.example.test/,same-user,first-pass-11,current
+Ridge Mail (old),https://ridge.example.test/,same-user,second-pass-22,previous
+Vale Shop,https://vale.example.test/,shopper,third-pass-33,
+Vale Shop,https://vale.example.test/,shopper,fourth-pass-44,

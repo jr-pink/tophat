@@ -1,0 +1,4 @@
+folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
+,0,1,Real Login,,,0,https://real.example.test,real-user,copper-willow-20,
+,0,3,Travel Card,,,0,,,,
+,0,4,Home Identity,,,0,,,,

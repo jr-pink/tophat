@@ -1,0 +1,6 @@
+folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
+Personal,0,1,Garden Forum,,,0,"https://forum.example.test
+https://www.forum.example.test",spade-user,thistle-gate-604,
+Work,0,1,Depot Portal,ops rotation,,0,https://depot.example.test,depot-ops,granite-loom-31,JBSWY3DPEHPK3PXP
+,0,2,Spare Note,"just a note
+across lines",,0,,,,

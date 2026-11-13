@@ -1,0 +1,23 @@
+{
+  "encrypted": false,
+  "folders": [{ "id": "f-1", "name": "Shared" }],
+  "items": [
+    {
+      "id": "i-1", "type": 1, "name": "Loom Console", "folderId": "f-1", "notes": "",
+      "login": {
+        "uris": [{ "uri": "https://loom.example.test" }, { "uri": "https://console.loom.example.test" }],
+        "username": "loom-op", "password": "velvet-anchor-73", "totp": "JBSWY3DPEHPK3PXP"
+      }
+    },
+    {
+      "id": "i-2", "type": 1, "name": "Retired Loom", "folderId": null,
+      "deletedDate": "2026-03-01T00:00:00Z",
+      "login": {
+        "uris": [{ "uri": "https://old.loom.example.test" }],
+        "username": "loom-old", "password": "burlap-crest-19",
+        "fido2Credentials": [{ "credentialId": "synthetic-not-importable" }]
+      }
+    },
+    { "id": "i-3", "type": 3, "name": "Card Placeholder" }
+  ]
+}

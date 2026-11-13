@@ -1,0 +1,4 @@
+folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp
+,0,1,Valve Account,,,0,https://store.example.test,gamer-01,piston-cedar-12,otpauth://steam/Valve?secret=JBSWY3DPEHPK3PXP
+,0,1,Legacy Account,,,0,https://legacy.example.test,gamer-02,ferrous-dune-90,steam://JBSWY3DPEHPK3PXP
+,0,1,Plain Account,,,0,https://plain.example.test,gamer-03,tandem-quartz-31,JBSWY3DPEHPK3PXP

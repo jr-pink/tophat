@@ -1,0 +1,16 @@
+{
+  "encrypted": false,
+  "folders": [{ "id": "f-known", "name": "Known Folder" }],
+  "items": [
+    {
+      "id": "j-1", "type": 1, "name": "Filed Login", "folderId": "f-known",
+      "login": { "uris": [{ "uri": "https://filed.example.test" }],
+        "username": "filed-user", "password": "cobalt-heron-58" }
+    },
+    {
+      "id": "j-2", "type": 1, "name": "Orphan Login", "folderId": "f-absent",
+      "login": { "uris": [{ "uri": "https://orphan.example.test" }],
+        "username": "orphan-user", "password": "rosin-plover-64" }
+    }
+  ]
+}
