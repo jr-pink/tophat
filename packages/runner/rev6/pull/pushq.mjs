@@ -5,6 +5,7 @@ import { cut } from '../base/text.mjs';
 import { pushModel } from './call.mjs';
 import { textOf } from './loop.mjs';
 import { runnerChatVerdict } from './chat-scope.mjs';
+import { keptOutOfGroupMemory } from '../base/writer-scope.mjs';
 import { memoryCli, receiptComplete } from './tools.mjs';
 
 const asText = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (p?.type === 'text' ? p.text : JSON.stringify(p))).join('\n') : JSON.stringify(c ?? ''));
@@ -18,6 +19,9 @@ export function transcriptRecords(ledger, sessionId, fromSeq, toSeq) {
   for (const r of rows) if (r.kind === 'tool_result') for (const p of r.content) if (p.type === 'tool_result') results.set(p.tool_use_id, { ...p, at: r.created_at, seq: r.seq });
   const out = [];
   for (const r of rows) {
+    // A member's own words in a hosted chat, and context his home host injected, are not this instance's memory
+    // (rev6/base/writer-scope.mjs): the chat log keeps them for display, the store gets no row for them.
+    if (r.kind === 'owner' && keptOutOfGroupMemory(textOf(r.content))) continue;
     if (['owner', 'assistant', 'interrupted'].includes(r.kind) && textOf(r.content)) {
       const owner = r.kind === 'owner';
       out.push(record(r, `${sessionId}/${r.seq}`, owner ? 'owner' : 'assistant', owner ? 'owner' : 'tophat', textOf(r.content)));

@@ -24,6 +24,7 @@ import { diffSince, snapshotCalls } from './background-diff.mjs';
 import { checkInText } from './progress.mjs';
 import { createChatTools } from './chat.mjs';
 import { INBOX_RULE, endsWithInboxRule } from '../base/inbox-rule.mjs';
+import { isInjectedContext } from '../base/writer-scope.mjs';
 import { prefetchPasses, warmSearch } from './prefetch.mjs';
 import { drainPushes, reconcilePending, transcriptRecords } from './pushq.mjs';
 import { runnerChatVerdict } from './chat-scope.mjs';
@@ -43,6 +44,8 @@ export const TERMINAL_CAUSES = Object.freeze({ restart: 'server-restart', owner:
 export const interruptCause = ({ restarting = false } = {}) => (restarting ? TERMINAL_CAUSES.restart : TERMINAL_CAUSES.owner);
 /** An automated event's text: the webchat's inbound path ends it with INBOX_RULE (withInboxRule). */
 export const isAutomatedEvent = (text) => endsWithInboxRule(text);
+// Context a member's home host injects into a running turn (rev6/base/writer-scope.mjs): it neither moves the turn to the background nor counts as the owner joining it.
+const isContextOnly = (text) => isAutomatedEvent(text) || isInjectedContext(text);
 const BUDGET = () => ({ compactTokens: Number(process.env.TOPHAT_RUNNER_COMPACT_TOKENS) || 300_000, compactHardTokens: Number(process.env.TOPHAT_RUNNER_COMPACT_HARD_TOKENS) || 800_000,
   summaryTokens: Number(process.env.TOPHAT_RUNNER_COMPACT_SUMMARY_TOKENS) || 16_000, keepRecent: 6 });
 
@@ -570,12 +573,12 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     // so the rows that close the main session's side of the turn (streamed text, calls answered as still running, the note)
     // sit above his message in the history. Pace checks and automated events keep the old behaviour; so does a turn between
     // requests (nothing to move yet).
-    if (!pace && !isAutomatedEvent(primary) && backgroundable(state.turn) && keepsInBackground(state.turn)) backgroundTurn(state.turn);
+    if (!pace && !isContextOnly(primary) && backgroundable(state.turn) && keepsInBackground(state.turn)) backgroundTurn(state.turn);
     const { blocks, spoken, redactions, seq: at } = intake(texts, pace ? 'pace' : 'owner');
     if (!pace) emit({ type: 'user', message: { role: 'user', content: spoken }, isReplay: true, parent_tool_use_id: null });
     if (redactions.length) process.stderr.write(`[rev6 pull] redacted ${redactions.join(', ')} from an owner message before it reached the model\n`);
     if (state.turn || state.running) {
-      if (!pace && state.turn && !isAutomatedEvent(blocks[0].text)) state.turn.ownerJoined = true;
+      if (!pace && state.turn && !isContextOnly(blocks[0].text)) state.turn.ownerJoined = true;
       if (!pace || state.turn) state.queue.push({ blocks, seq: at, pace, arrivedMs: Date.now(), home: pace ? null : joinPrefetch(blocks[0].text) });
       if (!pace) armOwnerWatchdog();
       if (!pace) {

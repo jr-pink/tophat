@@ -13,6 +13,9 @@ import { cleanTitle } from '$lib/core/arrival-title.js';
 import { canonicalWorkspace } from '$lib/core/workspaces.js';
 import { conversationEventStream, SSE_HEADERS } from '$lib/server/conversation-stream.js';
 import { receiveUpload } from '$lib/server/peer-upload.js';
+import { realpath } from 'node:fs/promises';
+import { GRANT_TTL_MS } from '$lib/server/host-grant.js';
+import { injectedContext, normalizeWriter, tagMember } from '../../../../../runner/rev6/base/writer-scope.mjs';
 
 const SECRETS = secretsDir();
 
@@ -142,6 +145,19 @@ export async function POST({ request, getClientAddress }) {
     }
   }
 
+  // Read-only access for the team host's runner to this host's files for the length of one turn (host-grant.js, prototype): the grant is
+  // bound to this host's chat and its cwd, answers only on loopback (/api/hostfile), and ends with the turn. The tunnel that carries it is
+  // opened by the caller and is not part of this op.
+  if (op === 'host-grant' || op === 'host-grant-revoke') {
+    const id = resolveConversation(app.store, String(body.conversationId || ''));
+    if (!id) return json({ error: `no conversation ${body.conversationId}` }, { status: 404 });
+    if (op === 'host-grant-revoke') return json({ ok: true, revoked: app.hostGrants.revoke(id) }, { headers: { 'cache-control': 'no-store' } });
+    if (!app.remoteRuntimes.twin(id)) return json({ error: 'this chat does not run on another host' }, { status: 409 });
+    const cwd = app.store.conversation(id)?.cwd || DEFAULT_CWD;
+    let root; try { root = await realpath(cwd); } catch { return json({ error: 'the chat folder is not readable' }, { status: 409 }); }
+    return json({ ok: true, chat: id, ...app.hostGrants.grant(id, root, { ttlMs: Math.min(Number(body.ttlMs) || GRANT_TTL_MS, GRANT_TTL_MS) }) }, { headers: { 'cache-control': 'no-store' } });
+  }
+
   if (op === 'upload') {
     // A peer front end moving a file his message names onto this host, so the agent here reads it from its own disk (peer-upload.js):
     // one chunk per call, or { status: true, path } for how much is held. Whole files answer with size and sha256.
@@ -163,8 +179,30 @@ export async function POST({ request, getClientAddress }) {
     
     const cursor = app.store.cursor();
     const display = typeof body.display === 'string' && body.display.trim() ? body.display.trim() : text;
-    const { injected } = app.runner.send(id, text, { display });
+    // The writer (rev6/base/writer-scope.mjs): a peer front end sending its owner's message names him a member acting as part of the group.
+    const writer = normalizeWriter(body.writer);
+    const { injected } = app.runner.send(id, tagMember(text, writer), { display, ...(writer ? { writer } : {}) });
     return json({ id, injected, cursor }, { headers: { 'cache-control': 'no-store' } });
+  }
+
+  // Only a running turn takes it; an idle chat answers 409 and nothing is woken.
+  if (op === 'inject') {
+    const id = String(body.conversationId || '');
+    if (!app.store.conversation(id)) return json({ error: `no conversation ${id}` }, { status: 404 });
+    const text = String(body.text || '').trim().slice(0, 24_000);
+    if (!text) return json({ error: 'Nothing to inject' }, { status: 400 });
+    const writer = normalizeWriter(body.writer) || { scope: 'member' };
+    const out = app.runner.inject(id, injectedContext(text, { host: writer.host, note: body.note }));
+    return json({ id, ...out }, { status: out.ok ? 200 : 409, headers: { 'cache-control': 'no-store' } });
+  }
+
+  // The home side of the same thing (op inject sent on from this host to the host a chat of his runs on): the manual path for a runner or
+  // an agent here to hand the host's turn some of his memories. `conversationId` is this host's chat.
+  if (op === 'host-inject') {
+    const id = resolveConversation(app.store, String(body.conversationId || ''));
+    if (!id) return json({ error: `no conversation ${body.conversationId}` }, { status: 404 });
+    try { return json(await app.remoteRuntimes.inject(id, String(body.text || ''), { note: body.note }), { headers: { 'cache-control': 'no-store' } }); }
+    catch (cause) { return json({ error: cause.message }, { status: cause.status && cause.status < 500 ? cause.status : 409 }); }
   }
 
   if (op === 'spawn') {
@@ -205,7 +243,8 @@ export async function POST({ request, getClientAddress }) {
     app.store.ensureConversation(id, { at, cwd, settings, title, parentId, source: probe ? 'deployment-probe' : 'agent' });
     app.store.append(id, 'conversation.created', { title, settings, cwd }, { at });
     const cursor = app.store.cursor();
-    app.runner.send(id, prompt, { display: typeof body.display === 'string' && body.display.trim() ? body.display.trim() : prompt });
+    const writer = normalizeWriter(body.writer);
+    app.runner.send(id, tagMember(prompt, writer), { display: typeof body.display === 'string' && body.display.trim() ? body.display.trim() : prompt, ...(writer ? { writer } : {}) });
     return json({ id, provider: settings.provider, model: settings.model, cursor }, { headers: { 'cache-control': 'no-store' } });
   }
 

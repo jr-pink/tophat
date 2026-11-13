@@ -1875,7 +1875,7 @@ export function createRunner({
     
     
     send(conversationId, text, { itemId = newId(), display = text, attribution = null,
-      userTimestamp = null, lineage = null, participantId = null, recovery = false } = {}) {
+      userTimestamp = null, lineage = null, participantId = null, recovery = false, writer = null } = {}) {
       const conversation = store.conversation(conversationId);
       if (!conversation) throw new Error(`Unknown conversation ${conversationId}`);
       const acceptedAt = now();
@@ -1891,6 +1891,7 @@ export function createRunner({
       const wasRunning = live.get(conversationId)?.machine.phase === PHASES.RUNNING;
       if (!recovery) emit(conversationId, null, 'message.user', { itemId, text: display,
         ...(participantId ? { participantId } : {}),
+        ...(writer ? { writer } : {}), // who wrote it: a member of the group on a hosted chat (core of rev6/base/writer-scope.mjs)
         ...(beforeDispatch ? { attribution, userTimestamp, lineage, evaluationCapture: 'pending' } : {}) });
       if (!recovery && onUserMessage) { try { onUserMessage(conversationId); } catch { /* a hook never blocks a send */ } }
       const deliver = () => {
@@ -1927,6 +1928,20 @@ export function createRunner({
       return { queued: false, injected: wasRunning };
     },
 
+
+    /**
+     * Context for the turn that is running, from a member's home host (/api/agent op inject): delivered to the live turn as the model's
+     * input and written nowhere else. No message.user (it is not his message and never shows as one), no router or titler hook, no
+     * evaluation capture; its text carries the automated-event label that the host's memory intake keeps out of the store
+     * (rev6/base/writer-scope.mjs). Only a turn that is running takes it: an idle chat is not woken by context.
+     */
+    inject(conversationId, text) {
+      if (!store.conversation(conversationId)) return { ok: false, injected: false, reason: 'no such conversation' };
+      const held = live.get(conversationId);
+      if (!held || held.machine.phase !== PHASES.RUNNING) return { ok: false, injected: false, reason: 'no turn is running' };
+      dispatch(conversationId, { type: 'user_message', text });
+      return { ok: true, injected: true };
+    },
 
     warm(conversationId) {
       if (beforeDispatch) return false; // Evaluation mode starts the provider at the first message, beside its capture.

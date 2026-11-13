@@ -12,12 +12,19 @@
 // Rules the module holds: only a chat whose host is a peer goes remote (never by content: choosing a host is the user's, or the
 // router's with confirmation); a chat mid-run is not moved mid-turn; an unreachable peer is a visible "offline" state with the
 // message kept and re-sent, never a hang and never a silent local run; every routing decision is logged (remote-routing.jsonl).
+//
+// The first message of a new chat waits for the host decision (the host gate). The router's pick used to land about 1.5 s after
+// message 1, when this host's run of it had already started, so a team-level first message ran here and only the second one went to
+// the team host. A send flagged `hostGate` to a chat with no host and no message yet is held here until decideHost answers (bounded by
+// HOST_GATE_MS; a decision that does not come in time is logged and the message runs here, and a late pick is dropped), and then goes
+// out the normal way: to the chosen host as the original message, or to this host. Docs: docs/HOST-DESIGN.md.
 
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { webchatStorePath } from './paths.js';
-import { loadRuntimes } from './hosts.js';
+import { loadRuntimes, selfDevice } from './hosts.js';
+import { createHostedMemory } from './hosted-memory.js';
 import { SEED_CLOSE, seedMarker, unseeded } from '../core/automated-event.js';
 import { UPLOAD_ROOT } from './uploads.js';
 import { findUploadPaths, pushFile, replacePaths } from './peer-upload.js';
@@ -32,6 +39,8 @@ export const RECONNECT_MIN_MS = 1_000;
 export const RECONNECT_MAX_MS = 10_000;
 export const CONFIG_TTL_MS = 10_000;
 export const SEED_CHARS = 24_000;
+// How long a new chat's first message waits for the router's host decision before it runs on this host.
+export const HOST_GATE_MS = 3_000;
 // A file his message names that is still arriving here (the composer sends the message while a big upload finishes) holds the
 // forward this long; after it the path is replaced by a plain note that the file never arrived, never left as a dead path.
 export const UPLOAD_WAIT_MS = 30 * 60_000;
@@ -105,13 +114,15 @@ export class RemoteError extends Error {
  */
 export function createRemoteRuntimes({
   store, runtimes = loadRuntimes, twinsPath = TWINS(), decisionsPath = DECISIONS(), fetchImpl = fetch, now = () => Date.now(),
-  uploadRoot = UPLOAD_ROOT, pushImpl = pushFile, onUserMessage = null, onTurnEnd = null, log = (line) => console.log(line), sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); })
+  uploadRoot = UPLOAD_ROOT, pushImpl = pushFile, onUserMessage = null, onTurnEnd = null, decideHost = null, hostGateMs = HOST_GATE_MS, selfHost = selfDevice(),
+  hostedMemory = createHostedMemory({ store, outboxPath: join(dirname(twinsPath), 'hosted-memory-outbox.jsonl'), log: (line) => console.log(line) }), hostGateWanted = () => true, log = (line) => console.log(line), sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); })
 } = {}) {
   let twins = {};
   try { twins = JSON.parse(readFileSync(twinsPath, 'utf8')) || {}; } catch { twins = {}; }
   const health = new Map(); // peer id -> { online, at, error }
   const flushing = new Map();
   const streams = new Map(); // chat id -> { stop, ctl, twin }
+  const gates = new Map(); // chat id -> { held: [{ text, options }], controller } while the first message waits for the host decision
   let timer = null;
 
   let cached = null, cachedAt = 0;
@@ -135,6 +146,7 @@ export function createRemoteRuntimes({
     log(`[remote-runtime] ${JSON.stringify(line)}`);
     try { mkdirSync(dirname(decisionsPath), { recursive: true }); appendFileSync(decisionsPath, `${JSON.stringify(line)}\n`); } catch { /* the console line stands */ }
   }
+  const writerOf = () => ({ scope: 'member', ...(selfHost ? { host: selfHost } : {}) });
   const emit = (id, kind, content, at = null) => store.append(id, kind, content, { runId: null, at: at || new Date(now()).toISOString() });
 
   function mark(runtimeId, ok, error = null) {
@@ -232,6 +244,73 @@ export function createRemoteRuntimes({
     return auto && worked;
   }
 
+  // ---- the host gate: the first message of a new chat waits for the router --------------------------------------------------
+
+  let sendThrough = null; // wrap()'s patched send, set there: a held message goes out the normal way once the decision is in
+
+  const gateApplies = (id) => {
+    if (!decideHost) return false;
+    const c = store.conversation(id);
+    // A host he chose by hand is honored as it stands, a chat that already has a message or a twin is never re-decided, and with no
+    // peer to choose the send is not delayed at all.
+    if (!c || c.host || c.sidechat || (c.turns || 0) > 0 || twinOf(id) || !Object.keys(config()).length) return false;
+    return hostGateWanted(id) !== false;
+  };
+
+  /** Holds the first message, asks decideHost (bounded), then sends everything held through wrap().send in arrival order. */
+  function holdForHost(id, text, options) {
+    const gate = { held: [{ text, options }], controller: new AbortController(), at: now() };
+    gates.set(id, gate);
+    (async () => {
+      let outcome = 'decided', timer = null;
+      try {
+        const asked = Promise.resolve(decideHost(id, { text: options.display ?? text, signal: gate.controller.signal })).then(() => 'decided');
+        const late = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), hostGateMs); timer.unref?.(); });
+        outcome = await Promise.race([asked, late]);
+      } catch (cause) { outcome = `error: ${cause?.message || cause}`; }
+      clearTimeout(timer);
+      if (outcome !== 'decided') gate.controller.abort(); // a pick that arrives after this is dropped (autoroute.js): the chat runs here from now on
+      decide({ event: 'host-gate', chat: id, outcome, ms: now() - gate.at, host: store.conversation(id)?.host || null, held: gate.held.length });
+      if (gate.cancelled) return; // he stopped it while it waited (cancelGate): nothing is sent
+      gates.delete(id);
+      for (const h of gate.held) {
+        try { sendThrough(id, h.text, { ...h.options, hostGate: false }); }
+        catch (cause) { emit(id, 'run.error', { message: `The message could not be sent: ${cause?.message || cause}` }); }
+      }
+    })();
+    return { queued: false, injected: false, held: true };
+  }
+
+  /** Stop while the first message is still waiting for its host: nothing was sent anywhere; the words stay in the chat and the turn is cancelled. */
+  function cancelGate(id) {
+    const gate = gates.get(id);
+    if (!gate) return false;
+    gates.delete(id);
+    gate.cancelled = true;
+    gate.controller.abort();
+    for (const h of gate.held) emit(id, 'message.user', { itemId: h.options.itemId || `rt-${now()}`, text: h.options.display ?? h.text });
+    emit(id, 'run.cancelled', { reason: 'Stopped before it was sent.' });
+    decide({ event: 'host-gate', chat: id, outcome: 'interrupted', ms: now() - gate.at });
+    return true;
+  }
+
+  /** Only a turn that is running there takes it. */
+  async function inject(id, text, { note = '' } = {}) {
+    const twin = twins[id];
+    const said = String(text || '').trim();
+    if (!said) throw Object.assign(new RemoteError('Nothing to inject', { status: 400 }), { status: 400 });
+    if (!twin?.remoteId) throw Object.assign(new RemoteError('this chat does not run on another host', { status: 409 }), { status: 409 });
+    if (!twin.busy) return { ok: false, injected: false, reason: 'no turn is running on the host' };
+    try {
+      const out = await call(twin.runtime, { op: 'inject', conversationId: twin.remoteId, text: said, note, writer: writerOf() });
+      decide({ event: 'inject', chat: id, runtime: twin.runtime, chars: said.length, ok: out?.ok !== false });
+      return out;
+    } catch (cause) {
+      if (cause.status === 409) return { ok: false, injected: false, reason: 'no turn is running on the host' };
+      throw cause;
+    }
+  }
+
   // ---- sending ---------------------------------------------------------------------------------------------------------
 
   function newTwin(runtime, conversationId) {
@@ -255,7 +334,8 @@ export function createRemoteRuntimes({
     twin.offlineNoted = false;
     save();
     decide({ event: 'route', chat: id, runtime: runtimeId, label: labelOf(runtimeId), reason, seededChars: seed.length, first: !twin.remoteId });
-    emit(id, 'message.user', { itemId, text: display });
+    // He writes here as a member of the host's group: the tag keeps these words his (hosted-memory.js) and out of the host's memory.
+    emit(id, 'message.user', { itemId, text: display, writer: writerOf() });
     if (onUserMessage) { try { onUserMessage(id); } catch { /* a hook never blocks a send */ } }
     if (!twin.running) { twin.running = true; emit(id, 'run.status', { state: 'starting', note: `Running on ${labelOf(runtimeId)}` }); save(); }
     flush(id).catch(() => {});
@@ -295,11 +375,11 @@ export function createRemoteRuntimes({
       const withdraw = () => { const at = twin.echo.indexOf(echoKey); if (at >= 0) twin.echo.splice(at, 1); };
       try {
         if (!twin.remoteId) {
-          const out = await call(twin.runtime, { op: 'spawn', prompt: wire.text, display: wire.display, title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
+          const out = await call(twin.runtime, { op: 'spawn', prompt: wire.text, display: wire.display, writer: writerOf(), title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
           twin.remoteId = out.id;
           twin.cursor = Number(out.cursor) || 0; // the host's cursor before it ran the prompt: the stream starts there
         } else {
-          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: wire.text, display: wire.display });
+          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: wire.text, display: wire.display, writer: writerOf() });
         }
       } catch (cause) {
         withdraw();
@@ -388,6 +468,7 @@ export function createRemoteRuntimes({
     if (twin.pending.length) return; // a message still waiting to be forwarded keeps the chat busy
     twin.busy = false; twin.running = false;
     twin.remoteSeen = store.cursor();
+    hostedMemory?.flush(id, twin, { hostLabel: labelOf(twin.runtime), group: config()[twin.runtime]?.group || null }).then(save).catch(() => {});
     if (onTurnEnd) { try { onTurnEnd(id); } catch { /* a hook never blocks */ } }
   }
 
@@ -419,7 +500,7 @@ export function createRemoteRuntimes({
       if (e.kind === 'assistant.message') {
         const { firstCursor: _hostCursor, ...rest } = c;
         const began = startsOf(twin).get(blockKey(c));
-        content = Number.isSafeInteger(began) ? { ...rest, firstCursor: began } : rest;
+        content = { ...(Number.isSafeInteger(began) ? { ...rest, firstCursor: began } : rest), writer: { scope: 'group', host: twin.runtime } }; // the host's own work: the group's
       }
       const written = emit(id, e.kind, content, e.at);
       if (e.kind === 'assistant.delta') {
@@ -546,6 +627,12 @@ export function createRemoteRuntimes({
     const local = runner;
     const patched = {
       send(id, text, options = {}) {
+        if (!options.recovery) {
+          // The first message of a new chat waits for the router's host decision; anything sent while it waits queues behind it.
+          const waiting = gates.get(id);
+          if (waiting) { waiting.held.push({ text, options }); return { queued: false, injected: false, held: true }; }
+          if (options.hostGate === true && gateApplies(id)) return holdForHost(id, text, options);
+        }
         const { runtime, reason } = route(id, { localBusy: Boolean(local.isBusy?.(id)) });
         const twin = twinOf(id);
         if (options.recovery) {
@@ -577,12 +664,13 @@ export function createRemoteRuntimes({
         return local.send(id, text, options);
       },
       interrupt(id, options) {
+        if (cancelGate(id)) return true;
         const remote = interrupt(id);
         const mine = local.interrupt(id, options);
         return remote || mine;
       },
-      isBusy: (id) => isRemoteBusy(id) || local.isBusy(id),
-      phase: (id) => (isRemoteBusy(id) ? 'running' : local.phase(id)),
+      isBusy: (id) => gates.has(id) || isRemoteBusy(id) || local.isBusy(id),
+      phase: (id) => (gates.has(id) || isRemoteBusy(id) ? 'running' : local.phase(id)),
       warm(id) {
         if (route(id).runtime) return false;
         return local.warm?.(id);
@@ -593,6 +681,7 @@ export function createRemoteRuntimes({
         return local.revive(id, options);
       }
     };
+    sendThrough = (id, text, options) => patched.send(id, text, options);
     return new Proxy(local, { get: (target, prop) => (prop in patched ? patched[prop] : target[prop]) });
   }
 
@@ -610,5 +699,5 @@ export function createRemoteRuntimes({
   }
   function stop() { running = false; if (timer) clearTimeout(timer); timer = null; for (const id of [...streams.keys()]) detach(id); }
 
-  return { wrap, route, tick, flush, start, stop, status, probe, call, attach, detach, twins: () => twins, twin: twinOf, isRemoteBusy, runtimes: config, decide };
+  return { wrap, route, tick, flush, start, stop, status, probe, call, inject, attach, detach, twins: () => twins, twin: twinOf, isRemoteBusy, runtimes: config, decide };
 }

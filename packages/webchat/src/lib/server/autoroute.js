@@ -251,7 +251,13 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
    * event. Never for a chat whose host he chose, never without a candidate, never without the second call's yes. A chat that already
    * has a host is left alone. Every decision that reached a model is logged.
    */
-  async function routeHost(id) {
+  // A chat whose host was settled before its first message ran (routeHostFirst): the later turn-end and sweep passes leave it where it runs,
+  // so a pick that arrived after the local run began never moves the chat mid-conversation.
+  const hostGated = new Set();
+
+  async function routeHost(id, { text = '', gate = false, signal = null } = {}) {
+    if (gate) hostGated.add(id);
+    else if (hostGated.has(id)) return null;
     const conversation = store.conversation(id);
     if (!conversation || conversation.sidechat || conversation.host || hostRunning.has(id)) return null;
     // A host is picked for a brand-new chat only, on its first message; a chat past its first turn stays where it runs, whatever the
@@ -261,7 +267,9 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
     const candidates = autoCandidates(hosts());
     if (!candidates.length) return null;
     if (hostDecidedByOwner(store, id)) return null;
-    const transcript = transcriptFor(store.conversationProse(id));
+    // On the gate (the first message has not run yet, so the log does not hold it) the message in hand is the whole chat.
+    let transcript = transcriptFor(store.conversationProse(id));
+    if (!transcript.trim() && text) transcript = transcriptFor([{ kind: 'message.user', content: { text } }]);
     if (!transcript.trim()) return null;
     hostRunning.add(id);
     try {
@@ -280,7 +288,8 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
       const entry = { event: 'router-host', chat: id, candidates: candidates.map((h) => h.id), picked: picked || null, confirmed };
       console.log(`[autoroute] ${JSON.stringify(entry)}`);
       try { onDecision(entry); } catch { /* logging never blocks routing */ }
-      // He may have chosen a host while the model answered.
+      // He may have chosen a host while the model answered; a gated pick that came after the caller gave up waiting is not used (the chat already runs here).
+      if (signal?.aborted) { console.log(`[autoroute] ${JSON.stringify({ event: 'router-host-late', chat: id, picked: picked || null, confirmed })}`); return null; }
       const now = store.conversation(id);
       if (!now || now.host || hostDecidedByOwner(store, id)) return null;
       if (!host || !confirmed) { hostDeclined.set(id, now.turns || 0); return null; }
@@ -446,6 +455,8 @@ export function createRouter({ store, file, ask = askForFolder, hosts = () => li
   return {
     route,
     routeHost,
+    /** Whether a first message has a host to be decided for: some opted-in, described host other than this one. */
+    hasRemoteCandidate: () => autoCandidates(hosts()).some((h) => !h.local),
     sweep,
     refile,
     unfileFolder,

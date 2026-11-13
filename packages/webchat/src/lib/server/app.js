@@ -31,6 +31,7 @@ import { BEAT_MS, startLiveness } from './liveness.js';
 import { drainObservations, RETENTION_DAYS } from './interaction.js';
 import { agentsOwed } from './owed-work.js';
 import { createRemoteRuntimes, logDecision as remoteDecision } from './remote-runtime.js';
+import { createGrantBook } from './host-grant.js';
 import { runnerLedgerPath } from './translate.js';
 import { installClaudeFallback } from './claude-fallback.js';
 import { RETRY_SWEEP_MS, startRetryWakes, storeDeliver, storeProbe } from './retry-wakes.js';
@@ -380,12 +381,19 @@ function build() {
   // and only with the relay script serve.mjs names; WEBCHAT_RELAYS=0 turns it off.
   const relays = relayConfig({ building });
   const onUserMessage = (id) => { if (!process.env.VITEST) folderRouter.schedule(id, 0); };
-  const onTurnEnd = (id) => { titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); };
+  // Read grants for a team host's runner (host-grant.js): one per hosted chat, ended with its turn.
+  const hostGrants = createGrantBook();
+  const onTurnEnd = (id) => { hostGrants.revoke(id); titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); };
   const localRunner = createRunner({ store, defaultCwd: DEFAULT_CWD, liveChildren, beforeDispatch: createEvaluationCapture({ store }), onUserMessage, onTurnEnd,
     ...(relays ? { relaySpawnImpl: relaySpawner({ script: relays.script, dir: relays.dir }), handover: { path: relays.handover, shape: handoverShape(), accepts: acceptedHandoverShapes() } } : {}) });
   // Chats whose host is a peer (hosts.js) are answered there and attached live into this log (remote-runtime.js);
   // every other chat, and everything else the runner does, is the local runner unchanged.
-  const remoteRuntimes = createRemoteRuntimes({ store, onUserMessage, onTurnEnd });
+  // The first message of a new chat waits (up to HOST_GATE_MS) for the router's host decision, so a team-level first message goes to the
+  // team host instead of starting here (docs/HOST-DESIGN.md, item 1). The router picks on the message in hand; nothing is delayed when no
+  // host is opted in for auto-routing.
+  const remoteRuntimes = createRemoteRuntimes({ store, onUserMessage, onTurnEnd,
+    decideHost: (id, { text, signal }) => folderRouter.routeHost(id, { text, gate: true, signal }),
+    hostGateWanted: () => folderRouter.hasRemoteCandidate() });
   const runner = remoteRuntimes.wrap(localRunner);
   if (!process.env.VITEST && !building) remoteRuntimes.start();
   
@@ -551,7 +559,7 @@ function build() {
   
   
   const built = builtShapeDetail();
-  return { store, runner, remoteRuntimes, auth, titler, folderRouter, splices, code: built.hash, codeFiles: built.files };
+  return { store, runner, remoteRuntimes, hostGrants, auth, titler, folderRouter, splices, code: built.hash, codeFiles: built.files };
 }
 
 const key = Symbol.for('tophat.webchat.app');
@@ -841,7 +849,7 @@ export function applyAction(action, {
         // A new chat can be created with a file still uploading, so it needs the same
         // pending-upload note SEND and FORK get; without it the model is never told.
         const { wire, display } = prepareSend(store, id, payload.text, { pendingUploads: payload.pending_uploads });
-        runner.send(id, wire, { itemId: action.action_id, display, ...evaluation });
+        runner.send(id, wire, { itemId: action.action_id, display, ...evaluation, hostGate: true });
       } else runner.warm?.(id);
       break;
     }
@@ -964,7 +972,7 @@ export function applyAction(action, {
       }
       const { wire, display, marks } = prepareSend(store, id, payload.text, { staged: splices.pending(id), pendingUploads: payload.pending_uploads });
       if (!conversation.turns) routeAfterFirst(scopes, { identity, id, text: payload.text, store });
-      runner.send(id, wire, { itemId: action.action_id, display, ...evaluation });
+      runner.send(id, wire, { itemId: action.action_id, display, ...evaluation, ...(!conversation.turns ? { hostGate: true } : {}) });
       
       splices.stage(id, marks);
       break;
