@@ -91,7 +91,7 @@ function selfServe(r, email) {
   const at = email.lastIndexOf('@');
   if (at < 1 || !(r.autoDomains || []).includes(email.slice(at + 1))) return null;
   const id = email.slice(0, at);
-  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(id) || r.accounts[id]) return null;
+  if (!/^[a-z0-9][a-z0-9._+-]{0,63}$/.test(id) || r.accounts[id]) return null;
   r.accounts[id] = { id, name: id, emails: [email], personalScope: `personal:${id}` };
   r.scopes[`personal:${id}`] = { id: `personal:${id}`, kind: 'personal', label: `${id} (personal)`, owner: id, members: [], everyone: false, serving: null };
   r.byEmail.set(email, id);
