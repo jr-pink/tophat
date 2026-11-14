@@ -36,6 +36,8 @@ export class ScopeError extends Error {
  *   enabled        WEBCHAT_SCOPES=1                  default off
  *   registryFile   WEBCHAT_SCOPES_REGISTRY           the registry JSON (src/scopes/registry.mjs); also read as registryPath
  *   defaultScope   WEBCHAT_SCOPES_DEFAULT            where chats from before scopes live once it is on
+ *   newChatScope   WEBCHAT_SCOPES_NEW                where a new chat starts when none is asked for and the account may open it
+ *                                                    (else its personal scope); the router can still move it
  *   router.enabled WEBCHAT_SCOPE_ROUTER=1            the cheap-model router; its own flag, default off
  */
 export function scopesConfig({ env = process.env, configFile = null } = {}) {
@@ -47,6 +49,7 @@ export function scopesConfig({ env = process.env, configFile = null } = {}) {
     enabled: flag(env.WEBCHAT_SCOPES, Boolean(file.enabled)),
     registryPath: env.WEBCHAT_SCOPES_REGISTRY || file.registryFile || file.registryPath || null,
     defaultScope: env.WEBCHAT_SCOPES_DEFAULT || file.defaultScope || null,
+    newChatScope: env.WEBCHAT_SCOPES_NEW || file.newChatScope || null,
     router: { enabled: flag(env.WEBCHAT_SCOPE_ROUTER, Boolean(file.router?.enabled)) }
   };
 }
@@ -162,6 +165,7 @@ export function createScopeService({
     if (!ctx?.account) throw unknownAccount();
     if (requested && registry.canAccess(ctx.account, requested)) return requested;
     if (requested) throw new ScopeError('denied', 'No access to that scope.', 403);
+    if (config.newChatScope && registry.canAccess(ctx.account, config.newChatScope)) return config.newChatScope;
     return ctx.personalScope;
   }
 
