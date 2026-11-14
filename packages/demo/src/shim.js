@@ -130,10 +130,15 @@
     if (!o) { o = document.createElement('div'); o.id = 'demo-intro'; o.innerHTML = OVERLAY_HTML; root.appendChild(o); }
     return o;
   };
+  // The opening's one end, whichever way it ends (played out, dropped by the visitor, no composer to type into): the overlay, the zoom and every
+  // class of the motion go, so the page is the plain app. (demo-zoomed only lifts intro.css's hiding while demo-intro is on; with demo-intro
+  // gone it has nothing left to do. demo-opener is not the motion's: update() ends it when the opener's answer is done.)
+  let introEnded = false;
   const cleanupVisual = () => {
     const v = visual; visual = null; if (v) clearTimeout(v.timer);
+    introEnded = true;
     document.getElementById('demo-intro')?.remove();
-    root.classList.remove('demo-intro', 'demo-intro-out', 'demo-bare', 'demo-send', 'demo-landed'); root.classList.add('demo-zoomed'); unzoom();
+    root.classList.remove('demo-intro', 'demo-intro-out', 'demo-bare', 'demo-send', 'demo-landed', 'demo-zoomed'); unzoom();
   };
   // the visitor acting anywhere ends the motion at once: the overlay fades out over the app as it is
   const dropIntro = () => {
@@ -303,7 +308,7 @@
     const t0 = Date.now();
     let field = composer();
     while (!field && Date.now() - t0 < 15000 && !failed && !visitorActed) { await pause(50); field = composer(); }
-    if (!field || failed || visitorActed) { root.classList.add('demo-zoomed'); root.classList.remove('demo-intro'); return; }
+    if (!field || failed || visitorActed) return cleanupVisual();
     // camera: the message bar centred and scaled to fill most of the width, set before the page is shown
     const bar = field.closest('form') || field.parentElement || field, r = bar.getBoundingClientRect(), vw = innerWidth, vh = innerHeight;
     const k = 1 + (Math.max(ZOOM.minScale, Math.min(ZOOM.maxScale, (vw * ZOOM.fill) / Math.max(1, r.width))) - 1) * ZOOM.depth; // depth 0.5: half the zoom that would fill the width
@@ -311,19 +316,20 @@
     // crop: centred on the bar, but when the zoomed bar is wider than the screen slide the crop left so its right end (the send button) stays 12px inside the edge
     const tx = Math.min(vw / 2 - cx, vw - 12 - cx - (k * r.width) / 2);
     const from = `translate(${tx}px, ${vh / 2 - cy}px) scale(${k})`;
-    const b = document.body; b.style.transformOrigin = `${cx}px ${cy}px`; b.style.transform = from;
-    root.classList.add('demo-zoomed');
-    await pause(ZOOM.hold);
+    const b = document.body;
+    // (the visitor ended the opening before the composer was up: the opener is still typed and sent, in the plain app, with no camera)
+    if (!introEnded) { b.style.transformOrigin = `${cx}px ${cy}px`; b.style.transform = from; root.classList.add('demo-zoomed'); await pause(ZOOM.hold); }
     // the zoom out starts the moment the word ZOOM.outAfter is typed and runs on under the rest of the typing
     const zoomOutAt = !ZOOM.outAfter ? -1 : (() => { const j = text.indexOf(ZOOM.outAfter); return j < 0 ? 1 : j + ZOOM.outAfter.length; })();
-    const zoomOut = () => { if (zoomAnim) return; zoomAnim = b.animate([{ transform: from }, { transform: 'translate(0px, 0px) scale(1)' }], { duration: ZOOM.out, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' }); zoomAnim.finished.then(() => unzoom(), () => {}); };
+    // (dropped by the visitor first: the zoom is already gone and is not played again; played out: the opening ends when the view is back at 1x)
+    const zoomOut = () => { if (zoomAnim || introEnded) return; zoomAnim = b.animate([{ transform: from }, { transform: 'translate(0px, 0px) scale(1)' }], { duration: ZOOM.out, easing: 'cubic-bezier(.45,0,.25,1)', fill: 'forwards' }); zoomAnim.finished.then(cleanupVisual, () => {}); };
     // typing into the real composer
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
     const gaps = Array.isArray(st.openerGaps) && st.openerGaps.length === text.length - 1 ? st.openerGaps.concat(150) : Array.from(text, () => 60);
     let due = performance.now();
     field.focus({ preventScroll: true });
     for (let i = 1; i <= text.length; i++) {
-      if (failed || visitorActed) return;
+      if (failed || visitorActed) return cleanupVisual();
       const f = composer(); if (!f) break;
       setter.call(f, text.slice(0, i)); f.dispatchEvent(new Event('input', { bubbles: true }));
       if (i === zoomOutAt) zoomOut();
@@ -335,7 +341,7 @@
     if (send) send.animate([{ transform: 'scale(1)' }, { transform: 'scale(.82)', offset: .45 }, { transform: 'scale(1)' }], { duration: ZOOM.press, easing: 'ease-out' });
     await pause(ZOOM.press * 0.45);
     const sending = sendOpener(text);
-    root.classList.remove('demo-intro'); root.classList.add('demo-landed');
+    if (!introEnded) { root.classList.remove('demo-intro'); root.classList.add('demo-landed'); }
     await pause(ZOOM.press * 0.55); // the zoom out starts the moment the button is back up
     zoomOut();
     await sending;

@@ -3,7 +3,7 @@
 // a blank chat. Skipped where Chrome or the webchat build is missing. The check is faked by answering Cloudflare's script request in the
 // browser (a stand-in `window.turnstile`), and the server's verify is the config's `turnstile.stub`.
 // Speed: one webchat, one demo server and one Chrome serve the whole file, the visitors (each its own browser context and guest) run at the same time,
-// the answer's stream runs at TEST_SPEED times its real pace (demo.json `streamSpeed`), the intro at the same factor (sessionStorage `demo-tune`, shim.js),
+// the answer's stream runs at TEST_SPEED times its real pace (demo.json `streamSpeed`; sessionStorage `demo-tune` speeds only the tuner's overlay intro, the zoom load-in types in real time),
 // and nothing waits for a clock that a condition can be waited on instead. What stays real time: the server's 2 s beat before the answer (asserted by
 // its own test), the shim's retry back-offs, and the page's 2.5 s poll that ends the opener's pending rules.
 import { after, before, describe, test } from 'node:test';
@@ -34,6 +34,9 @@ const until = async (fn, ms, what) => { const end = Date.now() + ms; let last; w
 const FAKE_TURNSTILE = `window.turnstile={render(el,o){window.__ts=o;const m=window.__demoFake;if(m==='pass')setTimeout(()=>o.callback('tok'),window.__demoFakeDelay||300);if(m==='error')setTimeout(()=>o['error-callback']('300010'),200);return 'w1'},reset(){const o=window.__ts,m=window.__demoFake;if(m==='error')setTimeout(()=>o['error-callback']('300010'),200)},remove(){}};`;
 // the composer rebuilt under the typing: the app's draft is reset once, a few characters in (an untrusted event, like the app's own)
 const WIPE = `(()=>{let done=false;document.addEventListener('input',(e)=>{const f=e.target;if(done||!f||!f.matches||!f.matches('[data-testid="composer"]')||f.value.length<5)return;done=true;setTimeout(()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(f,'');f.dispatchEvent(new Event('input',{bubbles:true}))},0)},true)})();`;
+// what the screen shows at each character the opener types into the composer (the zoom load-in, shim.js zoomIntro): page classes, the body's zoom,
+// the message bar and send button where they are drawn, the connection dot's visibility
+const INTRO_RECORD = `window.__introSeen=[];document.addEventListener('input',(e)=>{const f=e.target;if(!f||!f.matches||!f.matches('[data-testid="composer"]'))return;const R=(el)=>{if(!el)return null;const r=el.getBoundingClientRect();return{left:r.left,right:r.right,cx:r.left+r.width/2,cy:r.top+r.height/2}};const t=getComputedStyle(document.body).transform,m=/^matrix\\(([^,]+),([^,]+)/.exec(t),c=document.querySelector('[data-testid=conn]');window.__introSeen.push({value:f.value,cls:document.documentElement.className,scale:m?Math.hypot(+m[1],+m[2]):1,bar:R(f.closest('form')||f.parentElement||f),send:R(document.querySelector('[data-testid="send"]')),conn:c?getComputedStyle(c).visibility:'hidden',vw:innerWidth,vh:innerHeight})},true);`;
 // a send button that never enables
 const NO_SEND = `setInterval(()=>{const b=document.querySelector('[data-testid="send"]');if(b)b.disabled=true},15);`;
 
@@ -208,23 +211,31 @@ describe('the first minute, against a scratch demo', { skip, concurrency: 6 }, (
       assert.equal(await settled(v), 'first answer');
     } finally { await v.close(); }
   });
-  test('the opening motion: only the bar on black, typed under a fixed caret, then the normal app, and the cleanup leaves no trace', { timeout: 90_000 }, async () => {
-    const v = await visitor({ fake: 'pass' });
+  test('the opening load-in: the real app zoomed onto its message bar, the opener typed into the real composer, then the normal app, and the cleanup leaves no trace', { timeout: 90_000 }, async () => {
+    // The page records what the screen shows at each typed character (INTRO_RECORD, from the composer's own input events), so the test reads
+    // the whole typing after the fact instead of racing a poll against it.
+    const v = await visitor({ fake: 'pass', scripts: [INTRO_RECORD] });
     try {
-      // The typed line slides left under a caret fixed at the centre of the screen (the whole text laid out once in a clip window that ends at the caret,
-      // each character a step of a transform): whatever has been typed ends at the caret. The typing is a Web Animation, so the test holds it half way
-      // (paused, time set) and reads the geometry there, whatever speed the intro runs at and whatever the main thread is doing.
-      const seen = await until(async () => v.ev("(()=>{const r=document.documentElement,o=document.getElementById('demo-intro'),m=o&&o.querySelector('.win .msg');if(!m||!window.__demoIntroOwned||!r.classList.contains('demo-intro'))return null;const a=m.getAnimations()[0];if(!a)return null;a.pause();a.currentTime=a.effect.getComputedTiming().endTime/2;const n=m.firstChild.data.length,rg=document.createRange(),c=o.querySelector('.caret').getBoundingClientRect(),cx=o.querySelector('.line').getBoundingClientRect().left;let best=null;for(let i=1;i<=n;i++){rg.setStart(m.firstChild,0);rg.setEnd(m.firstChild,i);const d=Math.abs(rg.getBoundingClientRect().right-cx);if(!best||d<best.d)best={i,d}}const out={cls:r.className,bg:getComputedStyle(document.body).backgroundColor,n,typed:best.i,off:best.d,centre:Math.abs(c.left+c.width/2-innerWidth/2),conn:getComputedStyle(document.querySelector('[data-testid=conn]')||document.body).visibility};a.play();return out})()"), 20_000, 'the opening, mid typing');
-      assert.match(seen.cls, /demo-intro/); assert.equal(seen.bg, 'rgb(0, 0, 0)');
-      assert.ok(seen.typed > 0 && seen.typed < seen.n, `half way through the line (${seen.typed} of ${seen.n})`);
-      assert.ok(seen.off <= 2, `what is typed ends at the line's anchor, where the caret sits (${seen.off}px off)`);
-      assert.ok(seen.centre <= 6, // (the caret's own margin and width, a few px)
-         `the caret is at the centre of the screen (${seen.centre}px off)`);
-      // the connection coming up is never shown during the opening, whatever the stream is doing
-      assert.equal(await v.ev("getComputedStyle(document.querySelector('[data-testid=conn]')).visibility"), 'hidden', 'no connection dot in the opening');
       assert.equal(await settled(v), 'first answer');
+      const text = (await v.state()).openerText;
+      const seen = await v.ev('window.__introSeen || []');
+      const typing = seen.filter((s) => s.value.length > 0 && s.value.length < text.length);
+      assert.ok(typing.length >= Math.min(5, text.length - 1), `the opener was seen mid typing (${typing.length} frames)`);
+      for (const [i, s] of typing.entries()) {
+        assert.ok(text.startsWith(s.value), `what is typed is the opener so far (${JSON.stringify(s.value)})`);
+        if (i) assert.ok(s.value.length >= typing[i - 1].value.length, 'typed forward');
+        assert.match(s.cls, /\bdemo-intro\b/); assert.match(s.cls, /\bdemo-zoomed\b/);
+        assert.ok(s.scale > 1.05, `the app is zoomed in while it types (scale ${s.scale})`);
+        // the camera: the bar centred vertically; centred horizontally, or slid left so its right end (the send button) stays 12 px inside the edge
+        assert.ok(Math.abs(s.bar.cy - s.vh / 2) <= 6, `the message bar is at the middle of the screen (${s.bar.cy} of ${s.vh})`);
+        assert.ok(Math.abs(s.bar.cx - s.vw / 2) <= 6 || Math.abs(s.bar.right - (s.vw - 12)) <= 6, `the bar is centred or its right end is 12 px inside the edge (${JSON.stringify(s.bar)} in ${s.vw})`);
+        assert.ok(s.send && s.send.left >= 0 && s.send.right <= s.vw, `the send button is on screen (${JSON.stringify(s.send)})`);
+        // the connection coming up is never shown during the opening, whatever the stream is doing
+        assert.equal(s.conn, 'hidden', 'no connection dot in the opening');
+      }
       // (the page's own poll, every 2.5 s, ends the opener's pending-state rules once the activity line has left queued/starting)
-      await until(async () => v.ev("!/demo-/.test(document.documentElement.className)"), 9000, 'the opening cleaned up');
+      await until(async () => v.ev("!/demo-/.test(document.documentElement.className)"), 9000, 'the opening cleaned up').catch(async (e) => { throw new Error(e.message + ' cls=' + await v.ev('document.documentElement.className')); });
+      assert.equal(await v.ev('document.body.style.transform'), '', 'the zoom is gone');
       assert.equal(await v.ev("document.querySelectorAll('#demo-intro').length"), 0);
     } finally { await v.close(); }
   });
