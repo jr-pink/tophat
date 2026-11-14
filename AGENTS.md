@@ -147,7 +147,7 @@ one action they must take).
 ## 5. Keep it running
 
 Loading a launchd agent changes the user's machine, so say so and get a yes, then do it: `tophat instance jobs --config FILE --write DIR`
-writes the units (`webchat`, and `intake` once the file has an `intake` block), `tophat instance unit --job NAME`
+writes the units (`webchat`, `intake` once the file has an `intake` block, and `update`, which merges each new upstream release into this clone after its tests pass; README "Updating"), `tophat instance unit --job NAME`
 prints one, and you copy them into `~/Library/LaunchAgents` and load them with `launchctl bootstrap gui/$(id -u)`. Full
 Disk Access and the other grants must be given to the program the unit runs (the `node` binary named in the unit), or
 a stream works in your terminal and fails in the background. Verify the background run: `tophat instance status` shows

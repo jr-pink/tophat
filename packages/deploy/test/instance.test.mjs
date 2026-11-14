@@ -130,9 +130,9 @@ test('runner.env: extra names reach the children; secrets and collisions are ref
 test('instanceJobs: the push plane job is emitted when push and upkeep are components and the file has an intake block', async () => {
   const base = { name: 'demo', deploy: { labelPrefix: 'org.example' }, intake: { everySeconds: 60, model: { provider: 'stub' } } };
   const jobs = (extra) => instanceJobs(resolveInstance({ ...base, ...extra }, { home }), { configFile: '/etc/demo.json' });
-  assert.deepEqual(jobs({ components: ['linknotes', 'runner', 'webchat'] }).map((j) => j.job), ['webchat']);
-  assert.deepEqual(jobs({ components: ['linknotes', 'sources', 'push', 'upkeep', 'runner', 'webchat'] }).map((j) => j.job), ['webchat', 'intake']);
-  assert.deepEqual(jobs({ components: ['linknotes', 'sources', 'push', 'upkeep'], intake: null }).map((j) => j.job), []);
+  assert.deepEqual(jobs({ components: ['linknotes', 'runner', 'webchat'] }).map((j) => j.job), ['webchat', 'update']);
+  assert.deepEqual(jobs({ components: ['linknotes', 'sources', 'push', 'upkeep', 'runner', 'webchat'] }).map((j) => j.job), ['webchat', 'intake', 'update']);
+  assert.deepEqual(jobs({ components: ['linknotes', 'sources', 'push', 'upkeep'], intake: null, update: false }).map((j) => j.job), []);
   const c = resolveInstance({ ...base, components: ['linknotes', 'sources', 'push', 'upkeep', 'runner', 'webchat'] }, { home });
   const intake = serviceUnit(c, { configFile: '/etc/demo.json', bin: '/opt/d.mjs', node: '/usr/bin/node', job: 'intake' });
   assert.match(intake, /<key>Label<\/key><string>org\.example\.demo\.intake<\/string>/);
@@ -178,9 +178,9 @@ test('hub: the token may be pending (defaults to the keyring entry hub-token), a
   assert.deepEqual(c.hub.token, { keyring: 'hub-token' });
   assert.equal(instanceEnv(c).TOPHAT_HUB_TOKEN_FILE, '/home/someone/.config/tophat/demo/secrets/hub-token');
   const jobs = (x) => instanceJobs(resolveInstance({ ...base, ...x }, { home }), { configFile: '/etc/demo.json' });
-  assert.deepEqual(jobs({}).map((j) => j.job), ['webchat', 'sync'], 'no intake block: the sync job is the syncer');
-  assert.deepEqual(jobs({ intake: { everySeconds: 60, model: { provider: 'stub' } } }).map((j) => j.job), ['webchat', 'intake'], 'the intake syncs after each pass; a second syncer would reseal actions');
-  assert.deepEqual(jobs({ hub: null }).map((j) => j.job), ['webchat']);
+  assert.deepEqual(jobs({ update: false }).map((j) => j.job), ['webchat', 'sync'], 'no intake block: the sync job is the syncer');
+  assert.deepEqual(jobs({ intake: { everySeconds: 60, model: { provider: 'stub' } } }).map((j) => j.job), ['webchat', 'intake', 'update'], 'the intake syncs after each pass; a second syncer would reseal actions');
+  assert.deepEqual(jobs({ hub: null }).map((j) => j.job), ['webchat', 'update']);
   const unit = serviceUnit(resolveInstance(base, { home }), { configFile: '/etc/demo.json', bin: '/opt/d.mjs', node: '/usr/bin/node', job: 'sync' });
   for (const a of ['instance', 'sync', '--config', '/etc/demo.json', '--forever', '--every', '60']) assert.ok(unit.includes(`<string>${a}</string>`), a);
   assert.match(unit, /org\.example\.demo\.sync/);

@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { binDir, readResolved, resolvedFile, validateExtensionsBlock } from './extensions.mjs';
 
-const TOP = ['name', 'owner', 'scope', 'hosts', 'ports', 'paths', 'devices', 'models', 'components', 'runner', 'webchat', 'deploy', 'sources', 'hub', 'intake', 'extensions', 'note'];
+const TOP = ['name', 'owner', 'scope', 'hosts', 'ports', 'paths', 'devices', 'models', 'components', 'runner', 'webchat', 'deploy', 'sources', 'hub', 'intake', 'extensions', 'update', 'note'];
 const REF_KEYS = ['env', 'keyring', 'file'];
 const SCOPE_NAME = /^[a-z][a-z0-9-]{1,47}$/;
 
@@ -67,6 +67,20 @@ function validateRunner(r) {
     if (k.startsWith('LINKNOTES_SECRET_')) throw new Error(`instance config: runner.env.${k} is reserved`);
     if (!(typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || isObj(v))) throw new Error(`instance config: runner.env.${k} is a string, number, boolean or object`);
   }
+}
+
+// update: the daily `tophat update` job (update.mjs). Absent is on, once a day; false is off (a run by hand still works).
+export const UPDATE_EVERY_SECONDS = 86400;
+function validateUpdate(u, home) {
+  if (u === false) return false;
+  if (u === undefined || u === true) return { everySeconds: UPDATE_EVERY_SECONDS };
+  if (!isObj(u)) throw new Error('instance config: update is false or { everySeconds?, command?, fixer?, remote? }');
+  for (const k of Object.keys(u)) if (!['everySeconds', 'command', 'fixer', 'remote'].includes(k)) throw new Error(`instance config: unknown key update.${k}`);
+  if (u.everySeconds !== undefined && (!Number.isInteger(u.everySeconds) || u.everySeconds < 60)) throw new Error('instance config: update.everySeconds is a whole number of seconds, at least 60');
+  if (u.command !== undefined && (!Array.isArray(u.command) || !u.command.length || u.command.some((a) => typeof a !== 'string' || !a))) throw new Error('instance config: update.command is an argv list (the release tag is appended)');
+  if (u.fixer !== undefined && typeof u.fixer !== 'boolean') throw new Error('instance config: update.fixer is true or false');
+  if (u.remote !== undefined && (typeof u.remote !== 'string' || !/^[A-Za-z0-9._-]+$/.test(u.remote))) throw new Error('instance config: update.remote is a git remote name');
+  return { ...u, everySeconds: u.everySeconds ?? UPDATE_EVERY_SECONDS, ...(u.command ? { command: u.command.map((a) => expand(a, home)) } : {}) };
 }
 
 /** Validate and default a parsed instance config. `dir` is where relative paths resolve (the config file's directory). */
@@ -162,6 +176,7 @@ export function resolveInstance(raw, { dir = process.cwd(), home = os.homedir() 
   if (isObj(c.intake?.model)) for (const k of ['credential', 'workspace']) if (c.intake.model[k]) c.intake.model[k] = absRef(c.intake.model[k]);
   // Extension packages (extensions.mjs): directories resolve like every other path of the file.
   c.extensions = validateExtensionsBlock(c.extensions);
+  c.update = validateUpdate(raw.update, home);
   if (c.extensions) c.extensions.dirs = c.extensions.dirs.map(abs);
   c.sources = c.sources.map((src) => ({ ...src, config: Object.fromEntries(Object.entries(src.config || {}).map(([k, v]) => [k, isObj(v) ? absRef(v) : typeof v === 'string' && /^~\//.test(v) ? expand(v, home) : v])) }));
   return c;
@@ -290,6 +305,7 @@ const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  *   sync        one hub round every minute (`instance sync --forever`) when the instance file has a hub block and no intake job, which
  *               syncs after each of its own passes: two processes syncing one replica reseal an action twice and the hub refuses the second
  *   fast-proxy  the loopback header proxy for a fast model behind a workspace-scoped key, when models.fast.workspace is set
+ *   update      `tophat update` on an interval (update.everySeconds, daily by default) unless the instance file says update: false
  * `label` is `<deploy.labelPrefix>.<name>` for the webchat and `<that>.<job>` for the others.
  */
 export function instanceJobs(c, { configFile } = {}) {
@@ -300,6 +316,8 @@ export function instanceJobs(c, { configFile } = {}) {
   if (has('push') && has('upkeep') && c.intake) jobs.push({ job: 'intake', label: `${base}.intake`, args: ['instance', 'intake', '--config', configFile, '--forever', '--tick', '30'], log: 'intake' });
   if (c.hub && !jobs.some((j) => j.job === 'intake')) jobs.push({ job: 'sync', label: `${base}.sync`, args: ['instance', 'sync', '--config', configFile, '--forever', '--every', '60'], log: 'sync' });
   if (c.models.fast?.workspace) jobs.push({ job: 'fast-proxy', label: `${base}.fast-proxy`, args: ['instance', 'fast-proxy', '--config', configFile], log: 'fast-proxy' });
+  // The daily update (update.mjs): fetch the newest release, merge it into this checkout in a staging worktree, test, apply.
+  if (c.update !== false) jobs.push({ job: 'update', label: `${base}.update`, args: ['update', '--config', configFile], log: 'update', interval: c.update?.everySeconds ?? UPDATE_EVERY_SECONDS });
   // Extension jobs (slot job.upkeep): one interval unit each, from the set `tophat ext build` resolved last.
   for (const e of (c.extensions && readResolved(c)?.extensions) || []) {
     for (const j of e.jobs || []) jobs.push({ job: `ext-${e.id}-${j.name}`, label: `${base}.ext.${e.id}.${j.name}`, args: ['ext', 'run-job', '--config', configFile, e.id, j.name], log: `ext-${e.id}-${j.name}`, interval: j.everySeconds });

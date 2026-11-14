@@ -18,6 +18,20 @@ Node 22.13 or newer. The core packages have no dependencies; the chat app (`runn
 
 Open http://localhost:4178 and enrol a passkey with the token in `~/.config/tophat/me/secrets/webchat-bootstrap-token`. Coding agents asked to review and install this repository: read [AGENTS.md](AGENTS.md), which covers the review, the install, verification and the trade-offs to tell the user about. **Install means fully setting up**: not just cloning and starting the server, but granting every macOS permission and connecting every stream until each one shows data flowing; AGENTS.md section 4 is the checklist.
 
+## Updating
+
+An install is a git clone, and the owner's own changes live in it in one of two ways: as extensions (`docs/extensions.md`; they never touch tophat's code, so an update never collides with them), or as commits on the clone's branch, usually a fork. `tophat update` merges the newest upstream release tag (`vX.Y.Z`) into that branch, so the branch only moves forward, one merge commit per release, and local commits are never rebased or dropped:
+
+    tophat update --config ~/.config/tophat/me/tophat.instance.json --check      # { current, latest, behind }; changes nothing
+    tophat update --config ~/.config/tophat/me/tophat.instance.json              # merge, check, apply, ship, restart
+    tophat update --config FILE --dry-run | --no-restart | --resume DIR [--accept-ui]
+
+What a run does: fetches tags from the `upstream` remote (else `origin`); commits any uncommitted local work on the branch (`local: snapshot before update to vX`, never a stash); merges the release in a staging worktree under `<paths.state>/update/`, never in the live checkout; there it installs dependencies (`npm ci` when the lock changed, otherwise a copy of the live `node_modules`), runs `npm test`, the extension gate (`tophat ext check`) and the webchat build, and a UI check: the staged and the current release each boot a scratch webchat (empty state, spare loopback port), every main route must load with all its assets, and with Chrome present each route is screenshotted in both and a blank page, a new console error or a large pixel difference is a failure (screenshots are kept for the fixer). Only when all pass does the live branch fast-forward onto the tested merge, followed by `instance ship`, a restart of the instance's launchd jobs and a health check; an instance that does not come back healthy is rolled back to the previous commit.
+
+Any failure (a conflict, a test, the gate, the build, the UI, health) leaves the live checkout as it was, records `<paths.state>/update/last.json`, and posts an automated event into the instance's own chat app naming the staging worktree, the failing command and its log: the agent fixes it there, commits, and runs `tophat update --config FILE --resume DIR`, which merges anything newer, re-runs every check and applies. The next scheduled run resumes the same staging tree too, so a fix is never discarded by a newer release.
+
+The `update` job (`tophat instance jobs`) runs it daily by default (`update.everySeconds`); `update: false` in the instance file drops the job, `update.fixer: false` records failures without waking a chat, and `update.command` hands the release tag to the instance's own deploy command instead (`docs/instances.md`).
+
 ## Packages
 
 | package | what it is | entry |

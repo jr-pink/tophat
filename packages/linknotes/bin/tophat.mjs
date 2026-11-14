@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // tophat: one command in front of the package CLIs.
 //   tophat ask | mcp | push | retrieval | sources | upkeep | verify | viewer ARGS...   runs tophat-<that> ARGS...
-//   tophat components | start | instance | ext ARGS...                         runs tophat-deploy <that> ARGS...
+//   tophat components | start | instance | ext | update ARGS...                runs tophat-deploy <that> ARGS...
 //   tophat setup | chat | graph ARGS...                                     runs tophat-setup <that> ARGS... (in @tophat-md/deploy)
 //   tophat ARGS...                                                          anything else runs tophat-linknotes ARGS...
 // A sub-command whose package is not installed says which package to install.
@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const SUBS = { ask: 'pull', mcp: 'tools', push: 'push', retrieval: 'retrieval', sources: 'sources', upkeep: 'upkeep', verify: 'verify', viewer: 'viewer' };
 /** Sub-commands served by one package CLI that takes the sub-command as its first argument. */
-const PASS = { components: 'deploy', start: 'deploy', instance: 'deploy', ext: 'deploy' };
+const PASS = { components: 'deploy', start: 'deploy', instance: 'deploy', ext: 'deploy', update: 'deploy' };
 /** First-run sub-commands of @tophat-md/deploy, served by its tophat-setup CLI. */
 const SETUP = { setup: 'deploy', chat: 'deploy', graph: 'deploy' };
 const here = path.dirname(fileURLToPath(import.meta.url));

@@ -9,3 +9,5 @@ packages/webchat/build.*.kit/
 packages/webchat/build.ship.lock
 __pycache__/
 *.pyc
+packages/webchat/build.*/
+packages/webchat/build-current

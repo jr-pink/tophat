@@ -27,6 +27,13 @@
 //   tophat ext run-job --config FILE ID JOB           run one extension job once (what its interval unit runs)
 //   tophat instance intake --config FILE [--force] [--forever [--tick S]]   the intake (sources -> replica -> derive) when
 //                                                    due on the instance file's intake.everySeconds; --force runs it now
+//   tophat update --config FILE [--check] [--dry-run] [--no-restart] [--resume DIR] [--accept-ui]   bring this clone up to the newest
+//                                                    upstream release tag: merge it into the branch in a staging worktree under
+//                                                    <paths.state>/update, run npm test, the extension gate, the webchat build and a UI
+//                                                    check there, then fast-forward, ship and restart; a failure is handed to the
+//                                                    instance's own agent (an automated event) to fix in that worktree and --resume.
+//                                                    --check only reports { current, latest, behind }. The `update` job runs it daily
+//                                                    by default (update.everySeconds; update: false turns the job off)
 import path from 'node:path';
 import { WORKSPACE, check, complete, list, loadManifest, tree } from '../src/components.mjs';
 import { instanceEnv, instanceJobs, loadInstance, serviceUnit } from '../src/instance.mjs';
@@ -144,10 +151,16 @@ try {
     else if (sub === 'build') { const r = await ext.buildExtensions(c); out(r); process.exit(r.refused.length ? 1 : 0); }
     else if (sub === 'run-job') { const [id, job] = args; if (!id || !job) die('ext run-job: ID and JOB are required'); out(await ext.runJob(c, { id, job })); }
     else die(`ext: unknown sub-command ${sub} (list | check | build | run-job)`);
+  } else if (cmd === 'update') {
+    const file = path.resolve(flag('--config') || die('update: --config FILE is required'));
+    const resume = flag('--resume');
+    const { update } = await import('../src/update.mjs');
+    const r = await update({ configFile: file, check: has('--check'), dryRun: has('--dry-run'), restart: !has('--no-restart'), acceptUi: has('--accept-ui'), resume });
+    out(r); process.exit(r.ok ? 0 : 1);
   } else if (cmd === 'start') {
     const file = flag('--config');
     if (!file) die('start: --config FILE is required');
     const { start } = await import('../src/start.mjs');
     await start({ configFile: path.resolve(file), buildDir: flag('--build') });
-  } else die('usage: tophat components list|tree|check, tophat ext list|check|build|run-job --config FILE, tophat start --config FILE, tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|join|group|intake --config FILE');
+  } else die('usage: tophat components list|tree|check, tophat ext list|check|build|run-job --config FILE, tophat start --config FILE, tophat update --config FILE [--check], tophat instance env|unit|jobs|fast-proxy|start|stop|status|health|release|ship|sync|join|group|intake --config FILE');
 } catch (e) { die(e.message, 1); }

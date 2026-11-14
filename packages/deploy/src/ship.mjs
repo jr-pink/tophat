@@ -25,7 +25,10 @@ const stamp = (d = new Date()) => `build.${d.toISOString().replace(/[-:]/g, '').
 
 /** Run vite into `out`, through a kit dir of its own (`<out>.kit`, removed after). Returns { ok, status, stderr }. */
 export function viteBuild({ webchat, out, env = process.env }) {
-  const vite = path.join(webchat, 'node_modules', 'vite', 'bin', 'vite.js');
+  // npm workspaces hoist vite to the repository's node_modules (a stock clone has none under the package): look upward like node does.
+  let vite = null;
+  for (let d = webchat; !vite; d = path.dirname(d)) { const f = path.join(d, 'node_modules', 'vite', 'bin', 'vite.js'); if (existsSync(f)) vite = f; else if (d === path.dirname(d)) break; }
+  if (!vite) return { ok: false, status: null, stderr: `vite is not installed under ${webchat} or any directory above it: run npm install` };
   const kit = `${out}.kit`;
   try {
     const r = spawnSync(process.execPath, [vite, 'build', '--configLoader', 'runner'],
