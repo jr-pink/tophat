@@ -3,7 +3,7 @@
 // config.credential (a secret name, see ../lib/secrets.mjs; defaults mercury-api-token, toggl-api-token, hevy-api-key /
 // hevy-web-session) and, for Oura, config.oauthFile (an OAuth token JSON refreshed under a lock; it rotates the refresh
 // token and keeps the previous one for one retry). Oura re-checks 14 days behind the newest day seen, 400 days on a
-// first run. Mercury balances are one snapshot per account per day. Ported from an upstream adapter (VENDOR.json `ported`).
+// first run. Mercury balances are one snapshot per account per day.
 import fs from 'node:fs';
 import { readSecret } from '../lib/secrets.mjs';
 import { fetchJson, guardedFetch, readCapped } from '../lib/http.mjs';

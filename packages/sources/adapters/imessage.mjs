@@ -2,7 +2,7 @@
 // extract): poll for ingest, recent/search/read for tools. Two rules carried over because each once produced wrong
 // statements: `is_from_me` alone decides the speaker (the handle is the counterpart and is 0 on sent rows), and a body
 // is often only in the `attributedBody` typedstream blob, decoded here. Never writes: poll reads a copy; recent() opens
-// the live file mode=ro. Needs Full Disk Access for the process. Ported from an upstream adapter (VENDOR.json `ported`).
+// the live file mode=ro. Needs Full Disk Access for the process.
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';

@@ -44,18 +44,13 @@ One pipeline, two halves:
 - `tophat-demo release --repo DIR` (maintainer's machine) builds the committed `HEAD` and publishes `/Users/Shared/tophat-demo/releases/<sha>`,
   with `current` pointing at it. A git `post-commit` hook runs it after every commit and the LaunchAgent `md.tophat.demo-release` runs it every
   5 minutes as a safety net. Only committed work is published; one build at a time.
-  The timer job passes `--revendor` (`src/revendor.mjs`): from clean checkouts of the upstream app and of this repository it runs
-  `scripts/vendor-app.mjs --check`, and on upstream drift that has been quiet 2 minutes (newest upstream commit under the app's entry
-  directories) it assembles, builds the webchat, and commits only the files the assembly changed (`ASSEMBLY.json`, `packages/webchat`,
-  `packages/runner`) by explicit pathspec; the commit fires the hook. A check problem, a failed assembly or build, or uncommitted edits in an
-  assembled file skip the run (logged as `revendor skipped: ...`); uncommitted upstream work is never vendored.
 - `tophat-demo update --config demo.json` (demo user, LaunchDaemon `md.tophat.tophat-demo.update` every 60 s) installs `current` into the root
   when it differs (the root's own `node_modules` and the instance's state stay), removes any stale copy of a workspace package under a package's own `node_modules` (it shadows the workspace link), regenerates the memory-graph widget and the agent's standing
   context, and restarts only the demo's own processes; launchd brings them back. It refuses, loudly, a release whose `package-lock.json`
   differs from the root's (dependencies need a refresh first).
 - `tophat-demo check [--repo DIR]` exits 1 when the live demo's build (`/healthz`) is not the published release or the repository's `HEAD`.
 
-Webchat changes reach the demo by the usual route: upstream first, `scripts/vendor-app.mjs`, commit; this pipeline does the rest.
+Webchat changes reach the demo by the usual route: edit `packages/`, commit; this pipeline does the rest.
 
 ## Commands (`bin/tophat-demo.mjs`)
 

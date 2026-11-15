@@ -55,6 +55,27 @@ function placeSecret({ file, envName, dest }) {
   return file ? `file ${path.resolve(tilde(file))}` : `$${envName}`;
 }
 
+const git = (repo, ...a) => spawnSync('git', ['-C', repo, ...a], { encoding: 'utf8' });
+
+/**
+ * One checkout, two kinds of branch: `main` is upstream's and only ever fast-forwards; the user's own branch (named after the
+ * instance, or --branch NAME) is where every edit, commit and instance change goes, and `tophat update` merges upstream releases
+ * into it. Called by setup on the checkout it runs from. Returns a step line, or null when there is nothing to do (not a git
+ * checkout, a detached HEAD, or already on a branch other than main/master, which is taken to be the user's own).
+ */
+export function ensureUserBranch(repo, name, { branch } = {}) {
+  if (git(repo, 'rev-parse', '--is-inside-work-tree').stdout.trim() !== 'true') return null;
+  const cur = git(repo, 'symbolic-ref', '--short', '-q', 'HEAD').stdout.trim();
+  if (!cur) return null;
+  const want = branch || name;
+  if (!/^[a-z][a-z0-9-]{0,39}$/.test(want)) throw new Error(`--branch ${want}: lower case letters, digits and dashes, starting with a letter`);
+  if (cur !== 'main' && cur !== 'master') return `on branch ${cur}: all your edits go there; main stays upstream's`;
+  const exists = git(repo, 'rev-parse', '--verify', '-q', `refs/heads/${want}`).status === 0;
+  const r = git(repo, 'switch', ...(exists ? [want] : ['-c', want]));
+  if (r.status !== 0) throw new Error(`could not switch to branch ${want}: ${(r.stderr || '').trim()}`);
+  return `${exists ? 'switched to' : 'created'} branch ${want} from ${cur}: all your edits go there; ${cur} stays upstream's and only fast-forwards (git fetch upstream && git switch ${cur} && git merge --ff-only upstream/${cur} && git switch ${want} && git merge ${cur}), or let \`tophat update\` merge each release`;
+}
+
 /**
  * Set up (or re-check) one local instance. Idempotent: an existing instance file is kept unless `force`; the key is
  * (re)placed only when a source is given; install and build run only when missing.
@@ -64,6 +85,8 @@ export async function setup(o = {}, log = (s) => console.error(s)) {
   if (!NAME_RE.test(name)) throw new Error(`--name ${name}: lower case letters, digits and dashes, starting with a letter`);
   if (!nodeOk()) throw new Error(`Node ${process.versions.node}: tophat needs Node 22.13 or newer`);
   const steps = [];
+
+  if (o.branch !== false) { const b = ensureUserBranch(WORKSPACE, name, { branch: typeof o.branch === 'string' ? o.branch : undefined }); if (b) steps.push(b); }
 
   if (!appDepsInstalled()) {
     if (o.install === false) steps.push('npm dependencies missing and --no-install given: the instance cannot start until `npm install` has run');

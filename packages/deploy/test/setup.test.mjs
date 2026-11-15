@@ -18,7 +18,7 @@ test('setup writes a loopback instance, places the key 0600, never prints it, an
   const saved = process.env.ANTHROPIC_API_KEY; delete process.env.ANTHROPIC_API_KEY;
   t.after(() => { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; });
   const logs = [];
-  const r = await setup({ name: 'demo', owner: 'Sam', config, keyFile, install: false, start: false, port: 47999 }, (s) => logs.push(s));
+  const r = await setup({ name: 'demo', owner: 'Sam', config, keyFile, install: false, start: false, branch: false, port: 47999 }, (s) => logs.push(s));
   assert.equal(r.ok, true);
   assert.equal(r.running, false);
   assert.ok(!JSON.stringify(r).includes(KEY) && !logs.join('\n').includes(KEY), 'the key never reaches the output');
@@ -60,13 +60,31 @@ test('a rerun applies the options it names to the existing file (a port moved af
   process.env.ANTHROPIC_API_KEY = KEY;
   process.env.ANTHROPIC_CUSTOM_HEADERS = 'anthropic-workspace-id: wrk_test_123';
   const config = path.join(dir, 'conf/tophat.instance.json');
-  const first = await setup({ name: 'demo', config, install: false, start: false, port: 47990 }, () => {});
+  const first = await setup({ name: 'demo', config, install: false, start: false, branch: false, port: 47990 }, () => {});
   assert.ok(!JSON.stringify(first).includes('wrk_test_123') && !JSON.stringify(first).includes(KEY));
   let c = loadInstance(config);
   assert.equal(c.ports.webchat, 47990);
   assert.deepEqual(c.models.chat.workspace, { keyring: 'anthropic-workspace-id' });
   assert.equal(readFileSync(path.join(c.paths.secrets, 'anthropic-workspace-id'), 'utf8').trim(), 'wrk_test_123');
-  await setup({ name: 'demo', config, install: false, start: false, port: 47991 }, () => {});
+  await setup({ name: 'demo', config, install: false, start: false, branch: false, port: 47991 }, () => {});
   c = loadInstance(config);
   assert.equal(c.ports.webchat, 47991, 'the rerun moved the port');
+});
+
+import { spawnSync } from 'node:child_process';
+import { ensureUserBranch } from '../src/setup.mjs';
+
+test('ensureUserBranch: a fresh clone on main gets the user branch; a second run and a user branch are left alone', (t) => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'tophat-branch-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const g = (...a) => spawnSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+  g('init', '-q', '-b', 'main'); g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'upstream');
+  assert.match(ensureUserBranch(dir, 'me'), /created branch me from main/);
+  assert.equal(g('symbolic-ref', '--short', 'HEAD').stdout.trim(), 'me');
+  assert.match(ensureUserBranch(dir, 'me'), /on branch me/);
+  g('switch', '-q', 'main');
+  assert.match(ensureUserBranch(dir, 'me'), /switched to branch me/);
+  g('switch', '-q', 'main');
+  assert.match(ensureUserBranch(dir, 'me', { branch: 'mine' }), /created branch mine/);
+  assert.equal(ensureUserBranch(path.join(os.tmpdir(), 'not-a-repo-xyz'), 'me'), null);
 });

@@ -94,7 +94,9 @@ export function eventStream({
         flush();
       };
 
-      const behind = store.cursor() - after;
+      // A store that can count what one reader is behind by (one chat's view of the store) says so; the whole store's head minus the cursor
+      // is only right when the reader follows the whole store.
+      const behind = typeof store.behind === 'function' ? store.behind(after, maxBacklog + 1) : store.cursor() - after;
       if (behind > maxBacklog) {
         delivered = store.cursor();
         write({ resync: true, cursor: delivered, behind });

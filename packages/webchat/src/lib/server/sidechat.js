@@ -8,6 +8,9 @@ function itemsOf(store, id, after) {
   for (const event of store.conversationEvents(id)) {
     const content = event.content || {};
     if (content.agentId) continue;
+    // A thread's own words only: an event copied in from the parent (lineage.copied) is the parent's content, already in the
+    // main chat, and splicing it back would hand the main chat its own transcript as news.
+    if (content.lineage?.copied) continue;
     const type = event.kind === 'message.user' ? 'user' : event.kind === 'assistant.message' ? 'assistant' : null;
     if (!type) continue;
     const itemId = content.itemId || event.event_id;
@@ -120,13 +123,15 @@ function prepareSendCarrying(store, conversationId, text, { staged = [] } = {}) 
       if (hasUserTurn(store, conversationId)) return bare(text);
       const quote = String(conversation.sidechat.quote || '').trim();
       if (!quote) return bare(text);
+      // The side thread runs on a fork of the parent's session (runner resumptionFor: --resume parent --fork-session, on the host the
+      // parent runs on), so the conversation above is already in its context, prompt cache included. The wire only frames it.
+      // Requirement (2026-11-13): the side thread has the same context, cached, and is ready to answer the question in it.
       const preamble = [
-        'User opened a side thread on this passage of your last message:',
+        '[This is a side thread forked from the conversation above, which is in your context as it stood when he opened it.',
+        'He selected this passage of your last message and has a question about it; he is still reading. Answer from the',
+        'whole conversation, briefly. The main conversation carries on separately: do not resume anything it was doing.]',
         '',
         quote.split('\n').map((line) => `> ${line}`).join('\n'),
-        '',
-        'Answer only about that, briefly. This is a margin note, not the main',
-        'conversation; he is still reading.',
         ''
       ].join('\n');
       return { wire: `${preamble}\n${text}`, display: text, carried: 0, marks: [] };

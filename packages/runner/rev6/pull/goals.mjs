@@ -12,13 +12,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { goalsDir, memoryDb } from '../base/paths.mjs';
+import { storeRepo } from '../../src/store-repo.mjs';
 
 export const CONTINUATION_CAP = 8, CONTINUATION_TOTAL_CAP = 24, SWEEP_MIN_CALLS = 3;
 const REPO = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 /** The shared task ledger (rev5/cli.py tasks), synchronously; throws with `current` on a stale write. */
 export function taskRequest(request, env = process.env, command = 'tasks') {
-  const repo = env.TOPHAT_REPO || REPO;
+  // A long-lived runner's own release dir may be gone (src/store-repo.mjs): resolve a checkout that still exists.
+  const repo = storeRepo(env, REPO);
   const result = spawnSync(process.execPath, [join(repo, 'store', 'cli.mjs'), '--db', memoryDb(env), command], {
     cwd: repo, env: { ...env, PYTHONPATH: repo }, input: JSON.stringify(request), encoding: 'utf8', timeout: 20000, maxBuffer: 8 * 1024 * 1024 });
   let answer;

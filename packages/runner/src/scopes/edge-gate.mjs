@@ -19,10 +19,10 @@ export const EDGE_COOKIE = '__Secure-edge_session';
 const FRESH_MS = 5 * 60_000;
 const OFFLINE_MS = 12 * 3600_000;
 
-export function sessionToken(cookieHeader) {
+export function sessionToken(cookieHeader, name = EDGE_COOKIE) {
   for (const part of String(cookieHeader || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0 && part.slice(0, i).trim() === EDGE_COOKIE) return part.slice(i + 1).trim() || null;
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim() || null;
   }
   return null;
 }
@@ -50,9 +50,10 @@ const json = (status, body) => new Response(JSON.stringify(body), {
  * @param {string|null} o.publicBase  where this server is reached, for the post-sign-in return
  * @param {() => object} o.registry   returns a parsed registry (registryFromFile)
  * @param {Function} [o.fetchSession] test seam: (cookieHeader) => {email, org} | null, throws if unreachable
+ * @param {string} [o.cookieName]  the session cookie the sign-in service sets (default EDGE_COOKIE)
  * @param {() => number} [o.now]
  */
-export function makeScopeGate({ authBase, orgDomain, publicBase = null, registry, fetchSession, now = Date.now }) {
+export function makeScopeGate({ authBase, orgDomain, publicBase = null, registry, fetchSession, cookieName = EDGE_COOKIE, now = Date.now }) {
   if (!authBase || !orgDomain) throw new Error('scope gate needs authBase and orgDomain');
   const suffix = '@' + String(orgDomain).replace(/^@/, '').toLowerCase();
   const seen = new Map();
@@ -67,7 +68,7 @@ export function makeScopeGate({ authBase, orgDomain, publicBase = null, registry
     const hit = seen.get(token);
     if (hit && now() - hit.at < FRESH_MS) return hit;
     try {
-      const s = await ask(`${EDGE_COOKIE}=${token}`);
+      const s = await ask(`${cookieName}=${token}`);
       if (!s || typeof s.email !== 'string') { seen.delete(token); return null; }
       const rec = { email: s.email.trim().toLowerCase(), org: Boolean(s.org), at: now() };
       seen.set(token, rec);
@@ -84,9 +85,9 @@ export function makeScopeGate({ authBase, orgDomain, publicBase = null, registry
    * or 403 JSON.
    */
   return async function check(request) {
-    const token = sessionToken(request.headers.get('cookie'));
-    const s = token ? await who(token) : null;
     const url = new URL(request.url);
+    const token = sessionToken(request.headers.get('cookie'), cookieName);
+    const s = token ? await who(token) : null;
     const page = request.method === 'GET' && (request.headers.get('accept') || '').includes('text/html');
     if (!s) {
       if (page) {

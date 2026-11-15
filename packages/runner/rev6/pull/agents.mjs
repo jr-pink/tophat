@@ -10,6 +10,7 @@ import { agentEnv, createTools } from './tools.mjs';
 import { emptyUsage, runAgent, textOf } from './loop.mjs';
 import { progressDigest } from './progress.mjs';
 import { isBackgroundTurn } from './background.mjs';
+import { doorOf, withDoorNotice } from '../base/door-tag.mjs';
 
 export function checkInInterval(env = process.env) {
   const given = env.TOPHAT_RUNNER_AGENT_CHECKIN_MS;
@@ -41,7 +42,9 @@ export function restartNote(row) {
 }
 
 export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = process.env, permissionMode = 'bypassPermissions', model, now = () => new Date().toISOString(),
-  emit = () => {}, systemContext = () => '', depth = 0, onOwnerWord = null, onSettled = null, toolFactories = {}, stream = null }) {
+  emit = () => {}, systemContext = () => '', depth = 0, onOwnerWord = null, onSettled = null, toolFactories = {}, stream = null, door = () => null }) {
+  // `door()`: the home host's door grant of the turn starting work now ({ grant, notice } or null; base/door-tag.mjs). Every row this
+  // writes carries it, and a child's own subagents and jobs inherit its row's grant, so the home host can keep that turn's door open.
   env = { ...resolveCredentials(env).env };
   env.TOPHAT_RUNNER_CACHE_TTL = env.TOPHAT_RUNNER_AGENT_CACHE_TTL || '5m';
   const db = ledger.db, limits = agentLimits(env), q = (sql) => db.prepare(sql);
@@ -95,8 +98,9 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
     const emit = emitFor(id);
     const row = get.get(id, parentSessionId), entry = live.get(id);
     const instructions = createInstructions({ cwd, roots, env }), childEnv = agentEnv(id, env);
-    const tools = createTools({ db, sessionId: row.session_id, cwd, roots, env: childEnv, permissionMode, now, onPath: (p) => instructions.touch(p), factories: toolFactories,
-      agents: depth + 1 < limits.depth ? createAgents({ ledger, parentSessionId: row.session_id, cwd, roots, env: childEnv, permissionMode, model: row.model, now, emit, systemContext, depth: depth + 1, toolFactories, stream }) : null });
+    const rowDoor = () => (row.door ? { grant: row.door, notice: doorOf(row.prompt)?.notice || null } : null);
+    const tools = createTools({ db, sessionId: row.session_id, cwd, roots, env: childEnv, permissionMode, now, onPath: (p) => instructions.touch(p), factories: toolFactories, door: rowDoor,
+      agents: depth + 1 < limits.depth ? createAgents({ ledger, parentSessionId: row.session_id, cwd, roots, env: childEnv, permissionMode, model: row.model, now, emit, systemContext, depth: depth + 1, toolFactories, stream, door: rowDoor }) : null });
     // Held on the entry so a cancel can kill its foreground tool calls (a `sleep 90` kept a cancelled child alive past the stop).
     if (entry) entry.tools = tools;
     const usage = emptyUsage(priorUsage(row));
@@ -209,10 +213,12 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
       const id = `agent_${randomUUID().slice(0, 8)}`, session = `${parentSessionId}/agent/${id}`;
       const checkinMs = Number.isFinite(Number(checkIn)) && Number(checkIn) >= 0 ? Math.round(Number(checkIn) * 1000) : null;
       const expectedMinutes = Number(expected) > 0 && Number.isFinite(Number(expected)) ? Number(expected) : null;
-      q('INSERT INTO agents (id, parent_session, session_id, spawn_call, description, prompt, model, status, created_at, checkin_ms, owner_pid, caller, expected_minutes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, parentSessionId, session, callId || null, String(description).slice(0, 200), String(prompt), wanted || model, 'running', now(), checkinMs, process.pid, kind === 'search' ? 'subagent-search' : 'subagent-build', expectedMinutes);
+      const turnDoor = door();
+      const brief = withDoorNotice(prompt, turnDoor); // the turn's door line goes along, so the subagent can reach his host too
+      q('INSERT INTO agents (id, parent_session, session_id, spawn_call, description, prompt, model, status, created_at, checkin_ms, owner_pid, caller, expected_minutes, door) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, parentSessionId, session, callId || null, String(description).slice(0, 200), brief, wanted || model, 'running', now(), checkinMs, process.pid, kind === 'search' ? 'subagent-search' : 'subagent-build', expectedMinutes, turnDoor?.grant || '');
       ledger.ensureSession(session, { model: wanted || model, cwd, forkedFrom: parentSessionId, at: now() });
-      ledger.append(session, 'user', 'owner', [{ type: 'text', text: String(prompt) }], now());
+      ledger.append(session, 'user', 'owner', [{ type: 'text', text: brief }], now());
       launch(id);
       if (!wait) return { agent_id: id, status: 'running', note: 'running in the background; its report arrives on its own when it ends, waking this conversation if nothing else is happening, or ask with agent_wait' };
       const [done] = await waitFor([id], limits.waitMs);
@@ -259,8 +265,8 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
      */
     adopt({ id, sessionId, description, model: turnModel, done }) {
       if (runningCount() >= limits.concurrent) return { error: `${runningCount()} subagents are already running (limit ${limits.concurrent})` };
-      q('INSERT INTO agents (id, parent_session, session_id, spawn_call, description, prompt, model, status, created_at, checkin_ms, owner_pid, caller) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 0, ?, ?)')
-        .run(id, parentSessionId, sessionId, String(description || 'background turn').slice(0, 200), turnModel || model, 'running', now(), process.pid, 'subagent-build');
+      q('INSERT INTO agents (id, parent_session, session_id, spawn_call, description, prompt, model, status, created_at, checkin_ms, owner_pid, caller, door) VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 0, ?, ?, ?)')
+        .run(id, parentSessionId, sessionId, String(description || 'background turn').slice(0, 200), turnModel || model, 'running', now(), process.pid, 'subagent-build', door()?.grant || '');
       const entry = { controller: new AbortController(), waiters: [], queue: [], running: true };
       live.set(id, entry);
       entry.promise = Promise.resolve(done).then((r = {}) => {

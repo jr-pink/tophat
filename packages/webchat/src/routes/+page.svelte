@@ -376,9 +376,12 @@
     paneRefs[layout.focused]?.attachFiles(event.dataTransfer?.files);
   }
 
+  // A browser extension's overlay lives in a shadow root, so its input reaches us retargeted to the host element; look inside.
   function typingInAField(target) {
-    return target instanceof HTMLElement
-      && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+    let el = target;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    return el instanceof HTMLElement
+      && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   }
 
   

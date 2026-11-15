@@ -1,13 +1,5 @@
-# Never in a release (git archive): the vendoring step, its repo-local upstream config, and the traceability deny list.
-scripts/vendor.mjs export-ignore
-scripts/vendor.upstream.json export-ignore
+# Never in a release (git archive): the traceability deny list.
 scripts/traceability-deny.txt export-ignore
-scripts/vendor-app.mjs export-ignore
-scripts/vendor-app.upstream.json export-ignore
-scripts/scrub.mjs export-ignore
-# Manifests of the vendoring and assembly steps carry upstream commit ids and source paths: kept in the source repository, never shipped.
-ASSEMBLY.json export-ignore
-VENDOR.json export-ignore
 scripts/release.mjs export-ignore
 # Publishing to the GitHub repository: the script, its test (it imports the script) and the maintainer notes.
 scripts/publish.mjs export-ignore
@@ -19,9 +11,7 @@ RELEASING.md export-ignore
 packages/demo/edge export-ignore
 packages/demo/bin/preview-proxy.mjs export-ignore
 packages/demo/test/widgets.test.mjs export-ignore
-# Source-repository-only: the re-vendor test copies this repository's assembly scripts (export-ignored above), and build-graph writes a gitignored
-# widget from a private graph snapshot (a release has neither, so the path-refs test cannot find its output there).
-packages/demo/test/revendor.test.mjs export-ignore
+# Source-repository-only: build-graph writes a gitignored widget from a private graph snapshot (a release has none, so the path-refs test cannot find its output there).
 packages/demo/widgets/build-graph.mjs export-ignore
 # Owner-only: the retired icon archive and the demo's starting-sidebar spec (his own words and dates), with the test that reads it.
 archive export-ignore

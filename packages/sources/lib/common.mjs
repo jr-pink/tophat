@@ -1,7 +1,7 @@
 // Shared by every source adapter: hashing, coded failures, the bounded per-unit read (a unit that fails costs its own
 // coverage, never the batch), and the copy-then-open of a native SQLite store. Why copy: native stores (chat.db,
 // CallHistory, Photos) are hot and owned by other apps; a copy opened read-only with query_only cannot write,
-// checkpoint or lock them. Ported from an upstream adapter (VENDOR.json `ported`).
+// checkpoint or lock them.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

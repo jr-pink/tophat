@@ -237,7 +237,7 @@ export function guardProtected(target, { force } = {}, action, env = process.env
 export const jobsDir = (env = process.env) => envGet(env, 'TOPHAT_CDP_JOBS') || path.join(stateDir(env), 'cdp/jobs');
 export const uiJobsDir = (env = process.env) => envGet(env, 'TOPHAT_UI_JOBS') || path.join(stateDir(env), 'ui/jobs');
 const JOB_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/;
-export const MUTATING_VERBS = ['close', 'activate', 'navigate', 'reload', 'click', 'dom-click', 'type', 'keys', 'fill', 'eval', 'tap', 'clear', 'dialog', 'cookies', 'upload', 'headers', 'window'];
+export const MUTATING_VERBS = ['close', 'activate', 'navigate', 'reload', 'click', 'dom-click', 'type', 'keys', 'fill', 'eval', 'tap', 'clear', 'dialog', 'cookies', 'upload', 'headers', 'window', 'captcha'];
 export const TARGET_VERBS = [...MUTATING_VERBS, 'info', 'html', 'text', 'screenshot', 'pdf', 'download', 'wait-for', 'frame-map', 'point'];
 
 const pad = (n, w = 2) => String(Math.trunc(Math.abs(n))).padStart(w, '0');

@@ -13,8 +13,8 @@ import { cleanTitle } from '$lib/core/arrival-title.js';
 import { canonicalWorkspace } from '$lib/core/workspaces.js';
 import { conversationEventStream, SSE_HEADERS } from '$lib/server/conversation-stream.js';
 import { receiveUpload } from '$lib/server/peer-upload.js';
-import { realpath } from 'node:fs/promises';
-import { GRANT_TTL_MS } from '$lib/server/host-grant.js';
+import { importChat } from '$lib/server/chat-import.js';
+import { scopeServiceFor } from '$lib/server/scopes.js';
 import { injectedContext, normalizeWriter, tagMember } from '../../../../../runner/rev6/base/writer-scope.mjs';
 
 const SECRETS = secretsDir();
@@ -145,17 +145,14 @@ export async function POST({ request, getClientAddress }) {
     }
   }
 
-  // Read-only access for the team host's runner to this host's files for the length of one turn (host-grant.js, prototype): the grant is
-  // bound to this host's chat and its cwd, answers only on loopback (/api/hostfile), and ends with the turn. The tunnel that carries it is
-  // opened by the caller and is not part of this op.
-  if (op === 'host-grant' || op === 'host-grant-revoke') {
-    const id = resolveConversation(app.store, String(body.conversationId || ''));
-    if (!id) return json({ error: `no conversation ${body.conversationId}` }, { status: 404 });
-    if (op === 'host-grant-revoke') return json({ ok: true, revoked: app.hostGrants.revoke(id) }, { headers: { 'cache-control': 'no-store' } });
-    if (!app.remoteRuntimes.twin(id)) return json({ error: 'this chat does not run on another host' }, { status: 409 });
-    const cwd = app.store.conversation(id)?.cwd || DEFAULT_CWD;
-    let root; try { root = await realpath(cwd); } catch { return json({ error: 'the chat folder is not readable' }, { status: 409 }); }
-    return json({ ok: true, chat: id, ...app.hostGrants.grant(id, root, { ttlMs: Math.min(Number(body.ttlMs) || GRANT_TTL_MS, GRANT_TTL_MS) }) }, { headers: { 'cache-control': 'no-store' } });
+  if (op === 'import-conversation') {
+    // A chat written on another host, put whole into a group scope here (server/chat-import.js): checked by digest, never replaces a
+    // chat, never writes a personal scope. { conversation, events, scope, digest?, origin?, cwd? }; answers { ok, id, scope, count, hash }.
+    try {
+      return json(importChat({ store: app.store, scopes: scopeServiceFor(app.store, { runner: app.runner }), body, defaultCwd: DEFAULT_CWD }), { headers: { 'cache-control': 'no-store' } });
+    } catch (cause) {
+      return json({ error: cause.message, code: cause.code || 'error' }, { status: cause.status || 500 });
+    }
   }
 
   if (op === 'upload') {
@@ -181,7 +178,7 @@ export async function POST({ request, getClientAddress }) {
     const display = typeof body.display === 'string' && body.display.trim() ? body.display.trim() : text;
     // The writer (rev6/base/writer-scope.mjs): a peer front end sending its owner's message names him a member acting as part of the group.
     const writer = normalizeWriter(body.writer);
-    const { injected } = app.runner.send(id, tagMember(text, writer), { display, ...(writer ? { writer } : {}) });
+    const { injected } = app.runner.send(id, tagMember(text, writer), { display, ...(typeof body.itemId === 'string' && body.itemId ? { itemId: body.itemId } : {}), ...(writer ? { writer } : {}) });
     return json({ id, injected, cursor }, { headers: { 'cache-control': 'no-store' } });
   }
 
@@ -244,7 +241,7 @@ export async function POST({ request, getClientAddress }) {
     app.store.append(id, 'conversation.created', { title, settings, cwd }, { at });
     const cursor = app.store.cursor();
     const writer = normalizeWriter(body.writer);
-    app.runner.send(id, tagMember(prompt, writer), { display: typeof body.display === 'string' && body.display.trim() ? body.display.trim() : prompt, ...(writer ? { writer } : {}) });
+    app.runner.send(id, tagMember(prompt, writer), { display: typeof body.display === 'string' && body.display.trim() ? body.display.trim() : prompt, ...(typeof body.itemId === 'string' && body.itemId ? { itemId: body.itemId } : {}), ...(writer ? { writer } : {}) });
     return json({ id, provider: settings.provider, model: settings.model, cursor }, { headers: { 'cache-control': 'no-store' } });
   }
 

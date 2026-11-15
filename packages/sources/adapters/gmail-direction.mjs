@@ -3,7 +3,7 @@
 // (it lands in INBOX without SENT). DRAFT is the owner's writing but was not sent.
 // The owner's addresses are configuration only: the source's own `account`, `config.account`, `config.aliases`, and
 // the adapter-wide `ownerAddresses` list (sources config). No address is in code.
-// Ported from an upstream adapter (VENDOR.json `ported`).
+//
 
 /** The bare, lowercased address of a From header ("Name <a@b>" or "a@b"), or ''. */
 export function addressOf(fromHeader) {

@@ -72,7 +72,7 @@ export function loadConfig({home, configFile, overrides = {}} = {}) {
     // Scoped accounts (src/scopes/). Off by default, so a single-owner install behaves as before.
     // authBase is the sign-in service, orgDomain the one email domain allowed in (no leading @),
     // registryFile the JSON registry.
-    scopes: {enabled: false, registryFile: null, authBase: null, orgDomain: null, publicBase: null, ...raw.scopes},
+    scopes: {enabled: false, registryFile: null, authBase: null, orgDomain: null, publicBase: null, cookieName: null, ...raw.scopes},
     sources: raw.sources || [],
     // Speech validates itself in `speechSettings`, which owns the closed key
     // list for this block; passing it through is all loadConfig has to do, and

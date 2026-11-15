@@ -4,7 +4,7 @@
 // client owns. Accounts are configuration: one source entry per mailbox (sources config), nothing in code.
 // One rate-limit cooldown per mailbox shared by every process (../lib/gmail-cooldown.mjs).
 // Records carry metadata {type, direction, sender, labels} from ./gmail-direction.mjs. modify is the only write and is
-// never called by poll. Ported from an upstream adapter (VENDOR.json `ported`).
+// never called by poll.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

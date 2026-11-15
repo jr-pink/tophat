@@ -62,6 +62,9 @@ export function plan({ configFile, buildDir = null, env = process.env, root = WO
     ...base,
     // The claude provider's SessionStart/UserPromptSubmit hooks run this script; the webchat package ships it.
     TOPHAT_CONTEXT_HOOK: path.join(webchat, 'scripts', 'context-hook.mjs'),
+    // The checkout every runner child spawns store/cli.mjs from (runner/src/store-repo.mjs), as the launcher reached it (the
+    // unit's path, not its realpath), so an instance served from a stable worktree keeps naming it; an instance env may override.
+    TOPHAT_REPO: runner,
     ...instanceEnv(c, { buildDir: pinned ? build : null }),
     ...credentialEnv(c, { env }),
     TOPHAT_RUNTIME_DIR: runner,

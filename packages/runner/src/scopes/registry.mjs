@@ -63,7 +63,8 @@ export function parseRegistry(json) {
     const personal = Object.values(scopes).find((s) => s.kind === 'personal' && s.owner === id);
     acct.personalScope = personal ? personal.id : null;
   }
-  return { version: raw.version || 1, accounts, scopes, byEmail };
+  const autoDomains = (Array.isArray(raw.autoDomains) ? raw.autoDomains : []).map((d) => norm(d).replace(/^@/, '')).filter(Boolean);
+  return { version: raw.version || 1, accounts, scopes, byEmail, autoDomains };
 }
 
 export function loadRegistry(path) {
@@ -82,11 +83,26 @@ function inScope(registry, accountId, scope) {
   return scope.everyone || scope.members.includes(accountId);
 }
 
+// Self-serve: an address on one of the registry's `autoDomains` (identity is verified upstream, e.g. by a sign-in service) gets an
+// account named after its local part, plus a personal scope, created in the parsed registry on first sight. Nothing is written to
+// the file; a reload re-creates it on the next lookup. A local part that is not a plain id, or an id another address already owns,
+// gets nothing.
+function selfServe(r, email) {
+  const at = email.lastIndexOf('@');
+  if (at < 1 || !(r.autoDomains || []).includes(email.slice(at + 1))) return null;
+  const id = email.slice(0, at);
+  if (!/^[a-z0-9][a-z0-9._+-]{0,63}$/.test(id) || r.accounts[id]) return null;
+  r.accounts[id] = { id, name: id, emails: [email], personalScope: `personal:${id}` };
+  r.scopes[`personal:${id}`] = { id: `personal:${id}`, kind: 'personal', label: `${id} (personal)`, owner: id, members: [], everyone: false, serving: null };
+  r.byEmail.set(email, id);
+  return id;
+}
+
 // identity: an email string or {email}. Unknown identities get null (no account, no scopes).
 export function accountsFor(identity, registry) {
   const r = use(registry);
   const email = norm(typeof identity === 'string' ? identity : identity?.email);
-  const id = r.byEmail.get(email);
+  const id = r.byEmail.get(email) || selfServe(r, email);
   if (!id) return null;
   const acct = r.accounts[id];
   const scopes = Object.values(r.scopes).filter((s) => inScope(r, id, s)).map((s) => s.id);

@@ -3,7 +3,7 @@
 // ends in another 429 escalates (15, 30, 60, then 120 minutes at most), and for five minutes after a window closes only
 // the process marked LINKNOTES_GMAIL_PROBER=1 may call, so jobs on a fixed interval do not land on every expiry.
 // State: <stateDir>/automation/gmail-cooldown.json (+ -streak.json), written by atomic temp+rename; lockless.
-// Ported from an upstream adapter (VENDOR.json `ported`).
+//
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
