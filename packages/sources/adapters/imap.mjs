@@ -3,7 +3,7 @@
 // refreshed under a lock file and replaced by rename keeping every key: each refresh rotates the refresh token, and a
 // lost write loses the grant. invalid_grant is a dead grant: ReauthRequired (a human signs in again). The default client
 // id is Thunderbird's public one, which tenants that refuse Microsoft first-party ids accept. Read-only: EXAMINE and
-// BODY.PEEK only. Folders, the sent folder and the owner's addresses are config. Ported from an upstream adapter (VENDOR.json `ported`).
+// BODY.PEEK only. Folders, the sent folder and the owner's addresses are config.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

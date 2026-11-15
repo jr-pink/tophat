@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { redactSecrets } from '../tools/runner/redact.mjs';
+import { doorOf } from '../base/door-tag.mjs';
 import { costOf } from './call.mjs';
 import { modelFor } from './wire.mjs';
 import { providersAvailable, resolveCredentials } from './credentials.mjs';
@@ -33,6 +34,47 @@ import { abortableSleep, raceAbort, streamMessage } from './wire.mjs';
 import { INCOGNITO_NOTE, incognitoEnv, isIncognito, removeIncognitoScratch } from './incognito.mjs';
 import { installProcessGuards } from './process-guard.mjs';
 import { harnessFeatures, memoryStatusLine, prefetchWaitMs, settleWithin } from './harness-v2.mjs';
+
+/**
+ * The door a wake inherits from what caused it (the owner 2026-11-14 20:57 PST: "we should just track that the thing started by something with a
+ * grant also gets a grant", "its like recursive children"; 22:56: "fix it and make it correct"): the grant of the first subagent, background
+ * turn or job among `causes` ({ agentIds, jobIds }) whose row carries one, with the notice line of that grant (from the row's brief, else the
+ * owner message that carried it). Null when none of them ran under a door.
+ */
+export function doorOfCauses(ledger, sessionId, { agentIds = [], jobIds = [] } = {}) {
+  try {
+    const db = ledger.db;
+    let grant = null, notice = null;
+    for (const id of agentIds) {
+      const row = db.prepare('SELECT door, prompt FROM agents WHERE id = ?').get(id);
+      if (row?.door) { grant = row.door; notice = doorOf(row.prompt)?.notice || null; break; }
+    }
+    if (!grant) for (const id of jobIds) {
+      const row = db.prepare('SELECT door FROM jobs WHERE id = ?').get(id);
+      if (row?.door) { grant = row.door; break; }
+    }
+    if (!grant) return null;
+    if (!notice && sessionId) {
+      const msg = db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' AND content LIKE ? ORDER BY seq DESC LIMIT 1").get(sessionId, `%/${grant}/door%`);
+      notice = doorOf(msg?.content)?.notice || null;
+    }
+    return { grant, notice };
+  } catch { return null; }
+}
+
+/** The ids an automated wake text names (subagent and background turn ids, job ids), for doorOfCauses. */
+export function causesOf(text) {
+  const s = String(text ?? '');
+  return { agentIds: [...s.matchAll(/\b(agent_[A-Za-z0-9]+)\b/gu)].map((m) => m[1]), jobIds: [...s.matchAll(/\bjob (job_[A-Za-z0-9]+)\b/gu)].map((m) => m[1]) };
+}
+
+/** The door grant of the session's latest owner message (base/door-tag.mjs), or null. */
+export function lastOwnerDoor(ledger, sessionId) {
+  try {
+    const row = ledger.db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' AND kind = 'owner' ORDER BY seq DESC LIMIT 1").get(sessionId);
+    return row ? doorOf(row.content) : null;
+  } catch { return null; }
+}
 
 export const COMPACT_COMMAND = '/compact';
 export const PACE_CUT_MARK = '[the ten-minute checkpoint cut this message off here]';
@@ -101,9 +143,19 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   const state = { pendingImages: [], turn: null, queue: [], running: null, pushing: null, lastInputTokens: 0, compactRequested: false, compacting: null, compactGeneration: 0, ownerWaiters: new Set(), paceWaiters: new Set(), stopIds: new Set(),
     chatWork: null, checkInTimer: null, settleTimer: null, started: false, stopped: false, restarting: false,
     // the watchdog's view: when the oldest owner message no request has carried yet arrived, and when a request last left
-    ownerPendingSince: null, lastRequestAt: 0, watchdogTimer: null, compactAbort: null };
+    ownerPendingSince: null, lastRequestAt: 0, watchdogTimer: null, compactAbort: null,
+    // The home host's door grant the owner's latest message carries (base/door-tag.mjs): what the subagents, background turns and jobs
+    // started from now are tagged with. Read back from the ledger on a restart, so a relaunched runner tags the same way.
+    door: lastOwnerDoor(ledger, sessionId) };
+  // The grant work starts under: inside a tool call of a turn, that turn's own grant (turnTools sets callDoor around the synchronous part
+  // of the call, where agents.spawn and jobs.start read it), so a turn moved to the background keeps its grant after the owner types under
+  // another; otherwise the live turn's grant, else the one the next turn will start under.
+  const NO_CALL = Symbol('no call');
+  let callDoor = NO_CALL;
+  const doorNow = () => (callDoor !== NO_CALL ? callDoor : state.turn ? state.turn.door : state.door);
+  const withDoor = (door, fn) => { const prev = callDoor; callDoor = door; try { return fn(); } finally { callDoor = prev; } };
   const agents = env.TOPHAT_RUNNER_AGENTS === '0' ? null : (factories.agents || createAgents)({ ledger, parentSessionId: sessionId, cwd, roots: args.addDirs, env, permissionMode, model, now,
-    emit: (p) => emit(p), onOwnerWord: (cb) => { state.ownerWaiters.add(cb); return () => state.ownerWaiters.delete(cb); },
+    door: doorNow, emit: (p) => emit(p), onOwnerWord: (cb) => { state.ownerWaiters.add(cb); return () => state.ownerWaiters.delete(cb); },
     onSettled: (id) => { if (state.stopIds.delete(id)) return settledByStop(id); announceBackground(id); return scheduleAgentWake(); }, systemContext: () => (publicPrompt(env) ? `Your tools: ${tools.specs.map((t) => t.name).join(', ')}.${incognito ? ` ${INCOGNITO_NOTE}` : ''}` : `Workspace: ${cwd}. Allowed file roots: ${tools.roots.join(', ')}. ${DATES_RULE}${incognito ? ` ${INCOGNITO_NOTE}` : ''}`), toolFactories: factories.childTools || {}, stream: factories.streamMessage || null });
   const instructions = createInstructions({ cwd, roots: args.addDirs, env });
   const goals = env.TOPHAT_RUNNER_GOAL_HOOK === '0' ? null : (factories.goals ? factories.goals(sessionId) : openGoals({ sessionId, env, now }));
@@ -113,7 +165,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   const chatTools = incognito || env.TOPHAT_RUNNER_CHAT_TOOLS === '0' ? null : (factories.chat ? factories.chat(env) : createChatTools({ env }));
   // The turn remembers what chat_archive it called, so a wake-born turn can be filed when it ends (archiveWakeChat).
   const chat = chatTools && { ...chatTools, chat_archive(i) { if (state.turn) state.turn.archiveCall = i?.archived !== false; return chatTools.chat_archive(i); } };
-  const tools = (factories.tools || createTools)({ db: ledger.db, sessionId, cwd, roots: args.addDirs, env: toolEnv, permissionMode, now, agents, goals, chat, onPath: (path) => {
+  const tools = (factories.tools || createTools)({ db: ledger.db, sessionId, cwd, roots: args.addDirs, env: toolEnv, permissionMode, now, agents, goals, chat, door: doorNow, onPath: (path) => {
     const text = instructions.touch(path);
     if (!text) return;
     const block = contextBlock('Instructions', text);
@@ -175,10 +227,12 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     try { prefetch(state.turn, text, now(), { home, prefix: 'joined_' }); } catch (error) { process.stderr.write(`[rev6 pull] joined-message prefetch failed: ${error.message}\n`); return null; }
     return home;
   }
-  const checkInBlocks = () => (agents ? agents.checkIns().map((a) => contextBlock('Subagent check-in', checkInText(a))) : []);
+  // Every block a wake delivers notes the row that caused it (cause.agentIds / cause.jobIds), so the woken turn runs under that row's door grant.
+  const cause = { agentIds: [], jobIds: [] };
+  const checkInBlocks = () => (agents ? agents.checkIns().map((a) => { cause.agentIds.push(a.agent_id); return contextBlock('Subagent check-in', checkInText(a)); }) : []);
   function jobBlocks() {
-    const jobs = tools.jobs.undelivered().map((j) => contextBlock('Background job', `job ${j.job_id} (${j.tool}) is ${j.status}${j.exit_code !== null && j.exit_code !== undefined ? ` with exit code ${j.exit_code}` : ''}.\n${j.output_tail}`));
-    const reports = agents ? agents.undelivered().map((a) => (isBackgroundTurn(a.agent_id) ? contextBlock('Background turn report', backgroundReportText(a))
+    const jobs = tools.jobs.undelivered().map((j) => cause.jobIds.push(j.job_id) && contextBlock('Background job', `job ${j.job_id} (${j.tool}) is ${j.status}${j.exit_code !== null && j.exit_code !== undefined ? ` with exit code ${j.exit_code}` : ''}.\n${j.output_tail}`));
+    const reports = agents ? agents.undelivered().map((a) => cause.agentIds.push(a.agent_id) && (isBackgroundTurn(a.agent_id) ? contextBlock('Background turn report', backgroundReportText(a))
       : contextBlock('Subagent report', `subagent ${a.agent_id} (${a.description}) is ${a.status}${a.cost_usd != null ? `, cost ${a.cost_usd} USD` : ''}.\n${a.result || ''}`))) : [];
     return [...jobs, ...reports, ...checkInBlocks()];
   }
@@ -196,6 +250,10 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   const SUBAGENT_INBOX = 'If the work this subagent belongs to began with an automated event (push wake, projects-watch, goal retry timer) '
     + `rather than a message from ${owner()}, apply the inbox rule to this wake; if ${owner()} asked for it, leave the chat as it is. ` + INBOX_RULE;
   function wakeTurn(blocks, reason) {
+    // The woken turn runs under the grant of what woke it, none when that ran under none; the stale grant of the owner's last message may have
+    // closed long ago, and work a doorless cause starts has no lineage to it.
+    state.door = doorOfCauses(ledger, sessionId, cause);
+    cause.agentIds = []; cause.jobIds = [];
     if (chat) blocks = [...blocks, contextBlock('Inbox', SUBAGENT_INBOX)];
     inject(blocks);
     emit({ type: 'system', subtype: 'status', status: 'continuing', reason, goal_items: [], continuation: 0 });
@@ -253,10 +311,16 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     } catch (error) { process.stderr.write(`[rev6 pull] a landed upload was not added as an image: ${error.message}\n`); }
   }
 
+  /** The tools as one turn calls them: every call, and every call moved to a background job, starts its work under the turn's own grant. */
+  function turnTools(t) {
+    const jobs = Object.assign(Object.create(tools.jobs), { adopt: (...a) => withDoor(t.door, () => tools.jobs.adopt(...a)) });
+    return Object.assign(Object.create(tools), { jobs, run: (...a) => withDoor(t.door, () => tools.run(...a)) });
+  }
+
   async function turn(first, { prefetch: wantPrefetch = true, joined = null, holder = null } = {}) {
     const turnStart = Date.now(), fromSeq = pushFromSeq(), budget = BUDGET();
     const thisTurn = state.turn = { controller: new AbortController(), requestStop: null, paceCut: false, ownerCut: false, interrupted: false, arrivals: [], staged: [], timings: { first_token_ms: null, retrieval_ms: null, source_search_ms: null },
-      automated: isAutomatedEvent(first), ownerJoined: false, archiveCall: null,
+      automated: isAutomatedEvent(first), ownerJoined: false, archiveCall: null, door: state.door,
       // Background-turn state (backgroundTurn()): `sid` is the session this turn writes to, the main one until it is
       // moved; `bg` is set when it is; `opts` is the runAgent options object, whose sessionId is retargeted then.
       sid: sessionId, bg: null, opts: null, first, fromSeq, streaming: false, streamText: '', live: createLiveView(), gen: { since: null, last: null, ms: 0 }, calls: null, wakes: new Set(), log: [], snap: null, diffs: [] };
@@ -276,7 +340,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     if (joined) { prefetchStarted = true; adopt(joined, thisTurn); }
     else if (hf.has('early') && wantPrefetch) { prefetchStarted = true; prefetchPending = prefetch(thisTurn, first, now()); }
     await tools.ready();
-    const opts = thisTurn.opts = { role: 'root', ledger, sessionId, env, now, emit: out, parent: null, tools, usage,
+    const opts = thisTurn.opts = { role: 'root', ledger, sessionId, env, now, emit: out, parent: null, tools: turnTools(thisTurn), usage,
       getModel: () => model, setModel: (m) => { model = m; }, canCompact: true, compact: (t) => (thisTurn.bg ? Promise.resolve('nothing') : raceAbort(startCompact(t), thisTurn.requestStop?.signal)),
       request: (m) => ({ model: m, ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}), system: systemPrompt(), cache_tail_skip: 1, tools: tools.specs, max_tokens: 16_000 }),
       async beforeStep() {
@@ -342,6 +406,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         await landImages({ holdMs: firstStep ? uploadHoldMs(env) : 0, stop: () => thisTurn.interrupted || Boolean(prep?.aborted) });
         firstStep = false;
         const pending = [...thisTurn.arrivals.splice(0), ...jobBlocks(), ...state.queue.splice(0).filter((q) => !q.seq).flatMap((q) => q.blocks)];
+        cause.agentIds = []; cause.jobIds = []; // delivered inside a running turn: that turn keeps its own grant
         if (pending.length) inject(pending);
         const ownerWaiting = ownerRecords.length > 0 || state.queue.some((q) => !q.pace);
         if (state.compactRequested) { state.compactRequested = false; if (ownerWaiting) startCompact('manual'); else await bounded(startCompact('manual')); }
@@ -567,6 +632,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       return undefined;
     }
     const pace = primary.startsWith('<runtime-clock>');
+    let inheritedDoor; // undefined: not an automated event; null: one that runs under no door
     // including the subagent launch which is often what i interrupt) and then that should go in background, hidden /
     // ephemeral... "its not about the stop/interrupt control, it's the typing interrupt"). The turn is not cut: it moves to
     // a fork and carries on out of sight, and this message is a fresh turn on the main session at once. Done before intake
@@ -575,11 +641,19 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     // requests (nothing to move yet).
     if (!pace && !isContextOnly(primary) && backgroundable(state.turn) && keepsInBackground(state.turn)) backgroundTurn(state.turn);
     const { blocks, spoken, redactions, seq: at } = intake(texts, pace ? 'pace' : 'owner');
+    if (!pace) {
+      const d = doorOf(texts.join('\n'));
+      // The owner's message joins the live turn (or starts the next): its door governs from here. An automated event joining a live turn
+      // leaves that turn's grant alone; one that starts its own turn (idle now, or queued behind a compaction) runs under its cause's grant,
+      // or under none when it names no cause that ran under a door (a push wake has no lineage to the owner's last message's grant).
+      if (d || !isContextOnly(primary)) { state.door = d; if (state.turn) state.turn.door = d; }
+      else { inheritedDoor = doorOfCauses(ledger, sessionId, causesOf(texts.join('\n'))); if (!state.turn && !state.running) state.door = inheritedDoor; }
+    } // a message of the owner's without a door starts work under none
     if (!pace) emit({ type: 'user', message: { role: 'user', content: spoken }, isReplay: true, parent_tool_use_id: null });
     if (redactions.length) process.stderr.write(`[rev6 pull] redacted ${redactions.join(', ')} from an owner message before it reached the model\n`);
     if (state.turn || state.running) {
       if (!pace && state.turn && !isContextOnly(blocks[0].text)) state.turn.ownerJoined = true;
-      if (!pace || state.turn) state.queue.push({ blocks, seq: at, pace, arrivedMs: Date.now(), home: pace ? null : joinPrefetch(blocks[0].text) });
+      if (!pace || state.turn) state.queue.push({ blocks, seq: at, pace, arrivedMs: Date.now(), home: pace ? null : joinPrefetch(blocks[0].text), door: inheritedDoor });
       if (!pace) armOwnerWatchdog();
       if (!pace) {
         for (const cb of [...state.ownerWaiters]) { state.ownerWaiters.delete(cb); try { cb(); } catch { /* waiter gone */ } }
@@ -756,6 +830,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     const at = state.queue.findIndex((q) => !q.pace);
     if (at < 0) return;
     const next = state.queue.splice(at, 1)[0];
+    if (next.door !== undefined) state.door = next.door; // an automated event that waited for its own turn runs under its cause's grant (or none)
     runTurn(next.blocks[0].text, next.home ? { joined: next.home } : undefined);
   }
 

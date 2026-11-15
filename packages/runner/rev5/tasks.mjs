@@ -11,12 +11,14 @@ import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { isLive, liveRoots, realHome, underTest } from '../src/live-state-guard.mjs';
 import { scrubForStore } from '../src/vault/scrub-store.mjs';
+import { storeRepo } from '../src/store-repo.mjs';
 import { settleWaitsForWork } from './waits.mjs';
 
 /** The checkout holding rev5/cli.py: this file's own, unless the environment names another. */
 export function rev5Repo(env = process.env) {
   const local = dirname(dirname(fileURLToPath(import.meta.url)));
-  return env.TOPHAT_REPO || (existsSync(join(local, 'store/cli.mjs')) ? local : env.TOPHAT_RUNTIME_DIR || local);
+  // the first of TOPHAT_REPO, this checkout and the runtime dirs still holding store/cli.mjs (src/store-repo.mjs)
+  try { return storeRepo(env, local); } catch { return env.TOPHAT_REPO || local; }
 }
 
 /** The interpreter. src/core/rev5-heartbeat.mjs reads the first of these; the webchat reads both. */

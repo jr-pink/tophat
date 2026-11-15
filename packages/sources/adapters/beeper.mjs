@@ -4,7 +4,7 @@
 // cursor {rowid, edit_ms} catches new rows and edits alike. Records carry metadata.nativeMessageId = eventID and
 // metadata.accountId (the bridge), revision "1" or the edit stamp. Text: the base column text_content is usually NULL;
 // words are in the message JSON, the FTS content table and derived image OCR, merged by one extractor.
-// Ported from an upstream adapter (VENDOR.json `ported`).
+//
 import os from 'node:os';
 import path from 'node:path';
 import { fail, hasTable, openRo, columnsOf } from '../lib/common.mjs';

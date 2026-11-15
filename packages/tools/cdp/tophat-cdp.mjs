@@ -12,6 +12,8 @@ import { envGet } from '../lib/paths.mjs';
 import { HelpExit, ParseError, helpText, parse, scrubMessage } from './argparse.mjs';
 import * as K from './browser/kernel.mjs';
 import * as S from './browser/secrets.mjs';
+import * as Captcha from './captcha.mjs';
+import * as CaptchaRun from './captcha-run.mjs';
 
 const X = EXIT_CODES.cdp;
 const E = (m, kind) => new K.CdpError(m, kind);
@@ -103,6 +105,12 @@ const VERBS = {
   'frame-map': v('Every iframe in a tab, named by the element that embeds it.', [TARGET], [opt('--depth', { type: 'int', default: 3 }), flag('--json')]),
   'wait-for': v('Poll a target until a condition holds; exit 4 on timeout.', [TARGET], [opt('--selector'), flag('--url-changes'), opt('--url-contains'), opt('--text-contains'),
     opt('--timeout', { type: 'float', default: 30.0 }), opt('--poll', { type: 'float', default: 0.25 })]),
+  captcha: v('Solve a captcha in an owned tab through 2Captcha. `captcha solve`: detect reCAPTCHA v2/v3, hCaptcha or Cloudflare Turnstile (a widget, or the Cloudflare challenge page), buy a token, put it in the page and fire its callback (--submit also submits the form when the page had no callback). `captcha detect`: what is on the page, nothing bought. `captcha balance` / `captcha spend`: account balance and the ledger against the caps (no tab needed). Limits come from the "captcha" section of the config file, never from code; a solve that would break one is refused (exit 5) before anything is bought. The token is never printed.',
+    [TARGET, pos('what', { choices: ['solve', 'detect', 'balance', 'spend'], help: 'solve | detect | balance | spend' })],
+    [opt('--kind', { choices: Captcha.KINDS, default: null, help: 'only this kind (with --sitekey: the kind to buy)' }), opt('--sitekey', { default: null, help: 'skip detection and buy this key (with --kind, default recaptcha_v2)' }),
+      opt('--page-url', { default: null, help: 'websiteURL to send (default: the tab url)' }), opt('--index', { type: 'int', default: null, help: 'the Nth detected captcha, visible ones first' }),
+      opt('--action', { dest: 'ts_action', default: null, help: 'Turnstile / reCAPTCHA v3 action' }), opt('--min-score', { type: 'float', default: 0.7 }),
+      flag('--submit'), flag('--no-inject'), flag('--no-hook'), opt('--settle', { type: 'float', default: 4 }), FORCE]),
   protected: v('Show the target ids that mutating verbs refuse to touch, and whether they are still live.'),
 };
 const PKJOB = [opt('--job', { metavar: 'NAME' }), flag('--steal'), FORCE];
@@ -657,6 +665,13 @@ const CMD = {
         await K.sleep(a.poll * 1000);
       }
     } finally { c.close(); }
+  },
+  async captcha(ep, a) {
+    if (a.what === 'balance') return dump(await Captcha.balance());
+    if (a.what === 'spend') return dump(Captcha.spend(), { indent: 2 });
+    const { target } = await select(ep, a, a.what === 'solve' ? 'solve a captcha on' : null);
+    if (a.what === 'detect') return dump(await CaptchaRun.detect(ep, target), { indent: 2 });
+    try { dump(await CaptchaRun.solve(ep, target, a), { indent: 2 }); } catch (e) { if (e.result) dump(e.result, { indent: 2 }); throw e; }
   },
   async protected(ep) {
     const known = new Map((await K.listTargets(ep)).map((t) => [t.id.toUpperCase(), t]));

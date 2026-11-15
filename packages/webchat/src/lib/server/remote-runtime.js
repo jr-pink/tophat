@@ -1,13 +1,21 @@
 // Peer hosting: a chat lives on one host, the peer whose runner answers it (hosts.js lists the peers, the conversation's
 // `host` names one, null is this host). This server stays the front end for every chat; for a chat hosted on a peer it
-// attaches to that peer's live event stream and writes what arrives into its own log, so the local UI streams tokens, thinking,
+// attaches to that peer's live event feed and writes what arrives into its own log, so the local UI streams tokens, thinking,
 // tool input and run state exactly as for a local run, the transcript reads offline, and a restart resumes from the stored cursor.
 //
+// The link is the host's own actions (the Docstore A1 corollary (native actions, never a private protocol), docs/HOST-DESIGN.md section 6. His message is ONE intent with ONE id
+// minted at home (A7): it is posted to the host's /api/actions as the same message.send (or conversation.fork for a side thread) a browser would post, action id = the home item id,
+// so a retry is a no-op there (the host answers `replayed`). The chat has the same id on both sides, so a send to an unknown conversation creates it, as in a browser. What the host
+// writes comes back on its own feed (/api/events?conversation=, resumable by cursor; /api/sync for a catch-up) and is stored here keyed by the host's event id (`hostEvent`), a row
+// whose id is already stored being a no-op. His own message comes back under his own item id and is therefore already here; one typed on the host by another member has its own id
+// and is added. Nothing matches on text, nothing is re-emitted under an invented id, and the only cursor kept is the feed's resume point.
+//
 // How a turn runs. wrap(runner) returns the runner with send/interrupt/isBusy/phase/warm decided per conversation. A send to a
-// chat whose host is a peer writes the owner's message into the local log, then forwards it over the peer's machine surface
-// (/api/agent: spawn for the first message, send after), seeded with the transcript the peer has not seen. The chat's events
-// then arrive on one held-open stream per chat (/api/agent op events, conversation-stream.js: the frames /api/events carries,
-// narrowed to the chat, resumable by cursor) and are appended locally as they come.
+// chat whose host is a peer writes the owner's message into the local log, then posts it, seeded with the transcript the peer has
+// not seen. The chat's events then arrive on one held-open feed per chat and are appended locally as they come.
+//
+// A host that predates the actions build (its /api/health lacks `peer.actions`) is served by remote-runtime-legacy.js, chosen by
+// that capability handshake and never by guessing.
 //
 // Rules the module holds: only a chat whose host is a peer goes remote (never by content: choosing a host is the user's, or the
 // router's with confirmation); a chat mid-run is not moved mid-turn; an unreachable peer is a visible "offline" state with the
@@ -28,6 +36,8 @@ import { createHostedMemory } from './hosted-memory.js';
 import { SEED_CLOSE, seedMarker, unseeded } from '../core/automated-event.js';
 import { UPLOAD_ROOT } from './uploads.js';
 import { findUploadPaths, pushFile, replacePaths } from './peer-upload.js';
+import { ACTIONS, makeAction, newId } from '../core/contract.js';
+import * as legacy from './remote-runtime-legacy.js';
 
 const TWINS = () => webchatStorePath('remote-twins.json');
 const DECISIONS = () => webchatStorePath('remote-routing.jsonl');
@@ -38,6 +48,7 @@ export const STREAM_IDLE_MS = 60_000; // the host pings every 20 s (sse.js): sil
 export const RECONNECT_MIN_MS = 1_000;
 export const RECONNECT_MAX_MS = 10_000;
 export const CONFIG_TTL_MS = 10_000;
+export const CAPABILITY_TTL_MS = 30_000; // how long a host's answer about which protocol it speaks is trusted (a host updated in place is noticed within this)
 export const SEED_CHARS = 24_000;
 // How long a new chat's first message waits for the router's host decision before it runs on this host.
 export const HOST_GATE_MS = 3_000;
@@ -115,7 +126,7 @@ export class RemoteError extends Error {
 export function createRemoteRuntimes({
   store, runtimes = loadRuntimes, twinsPath = TWINS(), decisionsPath = DECISIONS(), fetchImpl = fetch, now = () => Date.now(),
   uploadRoot = UPLOAD_ROOT, pushImpl = pushFile, onUserMessage = null, onTurnEnd = null, decideHost = null, hostGateMs = HOST_GATE_MS, selfHost = selfDevice(),
-  hostedMemory = createHostedMemory({ store, outboxPath: join(dirname(twinsPath), 'hosted-memory-outbox.jsonl'), log: (line) => console.log(line) }), hostGateWanted = () => true, log = (line) => console.log(line), sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); })
+  hostedMemory = createHostedMemory({ store, outboxPath: join(dirname(twinsPath), 'hosted-memory-outbox.jsonl'), log: (line) => console.log(line) }), hostGateWanted = () => true, door = null, log = (line) => console.log(line), sleep = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); })
 } = {}) {
   let twins = {};
   try { twins = JSON.parse(readFileSync(twinsPath, 'utf8')) || {}; } catch { twins = {}; }
@@ -159,17 +170,17 @@ export function createRemoteRuntimes({
     try { return (await readFile(rt.tokenFile, 'utf8')).trim(); } catch { throw new RemoteError(`no service token for ${rt.label} (${rt.tokenFile})`, { offline: false }); }
   }
 
-  /** The peer's machine surface: one authenticated request. Network failures and 5xx are `offline`; a refusal is not. */
-  async function request(runtimeId, body, { timeoutMs = CALL_TIMEOUT_MS, signal = null } = {}) {
+  /** One authenticated request to a peer. Network failures and 5xx are `offline`; a refusal is not. */
+  async function fetchPeer(runtimeId, path, { method = 'POST', body = undefined, timeoutMs = CALL_TIMEOUT_MS, signal = null } = {}) {
     const rt = config()[runtimeId];
     if (!rt) throw new RemoteError(`host "${runtimeId}" is not configured on this server`, { offline: false });
     const token = await tokenOf(rt);
     let response;
     try {
-      response = await fetchImpl(`${rt.url}/api/agent`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-        body: JSON.stringify(body),
+      response = await fetchImpl(`${rt.url}${path}`, {
+        method,
+        headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), authorization: `Bearer ${token}` },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: signal || AbortSignal.timeout(timeoutMs)
       });
     } catch (cause) {
@@ -184,16 +195,56 @@ export function createRemoteRuntimes({
     return { response, rt };
   }
 
-  /** One /api/agent call answered with JSON. */
-  async function call(runtimeId, body, options) {
-    const { response, rt } = await request(runtimeId, body, options);
+  /** The peer's machine surface (/api/agent): what is not a chat action (uploads, inject, grants) and the legacy host branch. */
+  const request = (runtimeId, body, options) => fetchPeer(runtimeId, '/api/agent', { ...options, body });
+
+  /** One answer read as JSON; a 404 "not found" is a wrong token or a non-loopback peer, a 404 with another error is a good caller. */
+  async function readJson(runtimeId, { response, rt }) {
     let data = {};
     try { data = await response.json(); } catch { data = {}; }
-    // The machine surface answers 404 "not found" to a wrong token or a non-loopback peer, and 404 "no conversation" to a good one.
     const refused = response.status === 404 && /^not found$/iu.test(String(data?.error || ''));
     mark(runtimeId, !refused, refused ? 'refused: wrong service token, or the forward is not loopback' : null);
     if (!response.ok) throw new RemoteError(refused ? `${rt.label} refused the service token` : (data?.error || `${rt.label} refused the request (HTTP ${response.status})`), { status: response.status });
     return data;
+  }
+
+  /** One /api/agent call answered with JSON. */
+  async function call(runtimeId, body, options) {
+    return readJson(runtimeId, await request(runtimeId, body, options));
+  }
+
+  // ---- the host's own actions ------------------------------------------------------------------------------------------------
+
+  const deviceId = () => selfHost || 'home-server';
+  let lastSeq = 0;
+  /** Monotone per process and across restarts (wall clock floors it); /api/actions dedupes on the action id, so the seq only has to be valid. */
+  const nextSeq = () => { lastSeq = Math.max(lastSeq + 1, now()); return lastSeq; };
+
+  /** Post one action to a host's /api/actions, as a browser would. `actionId` is the intent's id: a retry of the same id changes nothing there. */
+  async function postAction(runtimeId, { op, conversationId, payload, actionId }) {
+    const action = makeAction({ op, conversationId, payload, deviceId: deviceId(), deviceSeq: nextSeq(), actionId, at: new Date(now()).toISOString() });
+    return readJson(runtimeId, await fetchPeer(runtimeId, '/api/actions', { body: action }));
+  }
+
+  const capabilities = new Map(); // peer id -> { actions: boolean, at }
+
+  /**
+   * Whether this host speaks the actions protocol, asked of the host itself (/api/health `peer.actions`). A host that answers without it
+   * is a legacy host (remote-runtime-legacy.js). An unreachable host throws `offline`; the answer is never assumed.
+   */
+  async function speaksActions(runtimeId) {
+    const known = capabilities.get(runtimeId);
+    if (known && now() - known.at < CAPABILITY_TTL_MS) return known.actions;
+    const got = await fetchPeer(runtimeId, '/api/health', { method: 'GET', timeoutMs: 4000 });
+    let data = {};
+    try { data = await got.response.json(); } catch { data = {}; }
+    if (!got.response.ok) throw new RemoteError(`${got.rt.label} would not say what it speaks (HTTP ${got.response.status})`, { status: got.response.status });
+    mark(runtimeId, true);
+    const actions = Number(data?.peer?.actions) >= 1;
+    if (known && known.actions !== actions) decide({ event: 'capability-changed', runtime: runtimeId, actions });
+    else if (!known) decide({ event: 'capability', runtime: runtimeId, actions });
+    capabilities.set(runtimeId, { actions, at: now() });
+    return actions;
   }
 
   /** Reachability for the host menu: a cheap authenticated call, at most once per `maxAgeMs`. */
@@ -227,8 +278,19 @@ export function createRemoteRuntimes({
     if (twin && isRemoteBusy(id)) return { runtime: twin.runtime, reason: 'a remote turn is in progress; it is not moved mid-turn' };
     if (localBusy) return { runtime: null, reason: 'a local turn is in progress; it is not moved mid-turn' };
     const host = conversation.host || null;
+    // A side thread runs where its parent runs: the parent's session (the transcript the model saw and the prompt cache over it)
+    // lives in that host's ledger, so a fork anywhere else starts with an empty context.
+    const home = sideParentTwin(conversation);
+    if (home && !host && !twin) return { runtime: home.runtime, reason: `a side thread runs where its parent chat runs (${home.runtime})` };
     if (host && !twin && autoHostSkipped(id)) return { runtime: null, reason: `the router's pick (${host}) is not used: the chat already worked on files on this host` };
     return host ? { runtime: host, reason: `the chat's host is ${host}` } : { runtime: null, reason: 'the chat runs here' };
+  }
+
+  /** The twin of a side thread's parent chat when the parent runs on a host (its remote chat has a session to fork), else null. */
+  function sideParentTwin(conversation) {
+    if (!conversation?.sidechat || !conversation.parentId) return null;
+    const parent = twinOf(conversation.parentId);
+    return parent?.remoteId ? parent : null;
   }
 
   // The router picks a host on a chat's first message, while this host's run of it has already started. If that run went on to
@@ -318,6 +380,15 @@ export function createRemoteRuntimes({
       sentAt: 0, offlineNoted: false, conversationId, uploads: {} };
   }
 
+  const sideSettings = (conversation) => {
+    const settings = conversation?.settings || {};
+    return {
+      ...(settings.provider ? { provider: settings.provider } : {}),
+      ...(settings.model ? { model: settings.model } : {}),
+      ...(settings.reasoningEffort ? { reasoningEffort: settings.reasoningEffort } : {})
+    };
+  };
+
   function sendRemote(id, wire, { itemId, display = wire, runtimeId, reason }) {
     let twin = twins[id];
     if (twin && twin.runtime !== runtimeId) { detach(id); twin = null; } // the chat moved to another host: a new twin there, the old chat stays where it is
@@ -336,6 +407,7 @@ export function createRemoteRuntimes({
     decide({ event: 'route', chat: id, runtime: runtimeId, label: labelOf(runtimeId), reason, seededChars: seed.length, first: !twin.remoteId });
     // He writes here as a member of the host's group: the tag keeps these words his (hosted-memory.js) and out of the host's memory.
     emit(id, 'message.user', { itemId, text: display, writer: writerOf() });
+    seenOf(id).add(`item:${itemId}`); // the host's row for this message comes back under this id and is already here
     if (onUserMessage) { try { onUserMessage(id); } catch { /* a hook never blocks a send */ } }
     if (!twin.running) { twin.running = true; emit(id, 'run.status', { state: 'starting', note: `Running on ${labelOf(runtimeId)}` }); save(); }
     flush(id).catch(() => {});
@@ -355,7 +427,7 @@ export function createRemoteRuntimes({
     while (twin.pending.length) {
       const item = twin.pending[0];
       // His files go to the host first; the host sees its own paths (his message here keeps the local ones).
-      let wire;
+      let wire, withdraw = () => {};
       if (item.notBefore && now() < item.notBefore) return;
       try { wire = await stage(id, twin, item); item.notBefore = 0; }
       catch (cause) {
@@ -366,20 +438,29 @@ export function createRemoteRuntimes({
         emit(id, 'run.error', { message: `${labelOf(twin.runtime)} would not take the message: ${cause.message}` });
         return;
       }
-      // The host writes his message to its log and the stream can deliver that row before this call's reply: the echo is
-      // registered before the call, so apply() never mistakes it for a message typed on the host (the chat showed every
-      // message twice), and withdrawn if the host did not take the message.
-      const echoKey = wire.text.trim();
-      twin.echo.push(echoKey);
-      if (twin.echo.length > 50) twin.echo.splice(0, twin.echo.length - 50);
-      const withdraw = () => { const at = twin.echo.indexOf(echoKey); if (at >= 0) twin.echo.splice(at, 1); };
       try {
-        if (!twin.remoteId) {
-          const out = await call(twin.runtime, { op: 'spawn', prompt: wire.text, display: wire.display, writer: writerOf(), title: String(store.conversation(id)?.title || item.display).slice(0, 72) });
-          twin.remoteId = out.id;
-          twin.cursor = Number(out.cursor) || 0; // the host's cursor before it ran the prompt: the stream starts there
+        const conversation = store.conversation(id);
+        // A side thread opens as a child of its parent's chat on the host: the host's runner then resumes a fork of the parent's session
+        // (the same transcript and the same cached prompt prefix), with the model and effort the side thread was given.
+        const parentTwin = !twin.remoteId ? sideParentTwin(conversation) : null;
+        const forkOf = parentTwin && parentTwin.runtime === twin.runtime ? { parentId: parentTwin.remoteId, ...sideSettings(conversation) } : null;
+        const title = String(conversation?.title || item.display).slice(0, 72);
+        if (await speaksActions(twin.runtime)) {
+          // His message is one action with one id, posted to the host's own reducer; the chat has this id there too, so the host's
+          // log, its feed and this log name it the same. A known id is a no-op on the host, so a retry after a lost reply is safe.
+          const hostChat = twin.remoteId || id;
+          // The door back into this host's folder for the turn (host-door.js): its address rides in what the host's model reads.
+          let doorText = '';
+          if (door) { try { doorText = await door.open(id, twin.runtime, config()[twin.runtime]); } catch (cause) { log(`[remote-runtime] door for ${id}: ${cause?.message || cause}`); } }
+          const payload = { text: wire.display, wire: doorText ? `${wire.text}\n\n${doorText}` : wire.text, writer: writerOf(), title };
+          if (forkOf) await postAction(twin.runtime, { op: ACTIONS.FORK, conversationId: hostChat, actionId: item.itemId, payload: { ...payload, parentId: forkOf.parentId, settings: sideSettings(conversation), sidechat: conversation.sidechat || {} } });
+          else await postAction(twin.runtime, { op: ACTIONS.SEND, conversationId: hostChat, actionId: item.itemId, payload });
+          if (!twin.remoteId) { twin.remoteId = hostChat; twin.cursor = 0; } // the feed starts at the beginning of a chat this host has just been given
+          if (!twin.sentIds.includes(item.itemId)) twin.sentIds.push(item.itemId);
         } else {
-          await call(twin.runtime, { op: 'send', conversationId: twin.remoteId, text: wire.text, display: wire.display, writer: writerOf() });
+          // LEGACY HOST: no id-keyed action to post; the host's echo of this message is recognised by its words (remote-runtime-legacy.js).
+          withdraw = legacy.registerEcho(twin, wire, item);
+          await legacy.forward({ call, twin, item, wire, writer: writerOf(), title, forkOf: forkOf || {} });
         }
       } catch (cause) {
         withdraw();
@@ -391,7 +472,6 @@ export function createRemoteRuntimes({
         return;
       }
       twin.pending.shift();
-      twin.sentIds.push(item.itemId);
       if (twin.sentIds.length > 200) twin.sentIds.splice(0, twin.sentIds.length - 200);
       twin.offlineNoted = false;
       save();
@@ -468,8 +548,24 @@ export function createRemoteRuntimes({
     if (twin.pending.length) return; // a message still waiting to be forwarded keeps the chat busy
     twin.busy = false; twin.running = false;
     twin.remoteSeen = store.cursor();
+    // The door back into this host stays open while this turn's work runs on the host (subagents, background turns, jobs it started)
+    // and closes after a grace once none is left (host-door.js): the host is asked per grant, not about the chat as a whole.
+    door?.turnEnded?.(id, { probe: (grant) => doorProbe(twin, grant) });
     hostedMemory?.flush(id, twin, { hostLabel: labelOf(twin.runtime), group: config()[twin.runtime]?.group || null }).then(save).catch(() => {});
     if (onTurnEnd) { try { onTurnEnd(id); } catch { /* a hook never blocks */ } }
+  }
+
+  /**
+   * What of one door grant still runs on the host ({ live, why }; the host's /api/door, door-work.js). A host on a build without that route
+   * answers by the chat's busy flag (/api/sync). Throws when the host is unreachable (the door then stays: host-door.js).
+   */
+  async function doorProbe(twin, grant) {
+    const chat = encodeURIComponent(twin.remoteId || '');
+    const asked = await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&grant=${encodeURIComponent(grant)}`, { method: 'GET' });
+    if (asked.response.ok) return readJson(twin.runtime, asked);
+    if (asked.response.status !== 401 && asked.response.status !== 404) return readJson(twin.runtime, asked);
+    const sync = await readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/sync?conversation=${chat}&after=${Number.MAX_SAFE_INTEGER}`, { method: 'GET' }));
+    return { live: Boolean(sync.busy), why: sync.busy ? 'chat busy (older host)' : '' };
   }
 
   // A settled assistant.message names `firstCursor`, the cursor its block began at, and the reducer places the row there. The
@@ -482,18 +578,63 @@ export function createRemoteRuntimes({
   const startsOf = (twin) => { let m = blockStarts.get(twin); if (!m) { m = new Map(); blockStarts.set(twin, m); } return m; };
   function forgetBlockStarts(twin) { blockStarts.delete(twin); }
 
-  /** One host event into the local log, as the same event a local run writes. */
-  function apply(id, twin, e) {
+  // The ids of the host events and of his messages this log already holds, per chat, built from the log itself on first use (so a restart
+  // knows what the last life stored) and kept current as rows are written. This is the whole of the dedupe: an id seen is a no-op.
+  const seenIds = new Map();
+  function seenOf(id) {
+    let seen = seenIds.get(id);
+    if (!seen) {
+      seen = new Set();
+      for (const e of store.allConversationEvents(id)) {
+        const c = e.content || {};
+        if (c.hostEvent) seen.add(c.hostEvent);
+        if (e.kind === 'message.user' && c.itemId) seen.add(`item:${c.itemId}`);
+      }
+      seenIds.set(id, seen);
+    }
+    return seen;
+  }
+  const hostEventId = (twin, e) => e.event_id || `${twin.remoteId}:${e.cursor}`;
+
+  /** One host event into the local log, as the same event a local run writes. `actions` is the protocol the feed was opened under. */
+  function apply(id, twin, e, actions = true) {
+    const c = e.content || {};
+    if (!actions) return applyLegacy(id, twin, e);
+    // The feed resumes after the stored cursor, so an event at or below it was already taken; the id check below is what makes a
+    // replay (a resync, a restart between the append and the save of the cursor) harmless.
+    // (A token fragment is not stored on the host's log and has no committed id, so the cursor is its only guard.)
+    const fragment = e.kind === 'assistant.delta' || e.kind === 'thinking.delta' || e.kind === 'tool.input_delta';
+    if (typeof e.cursor === 'number') { if (fragment && e.cursor <= twin.cursor) return; twin.cursor = Math.max(twin.cursor, e.cursor); }
+    const seen = seenOf(id);
+    const hostEvent = hostEventId(twin, e);
+    if (e.kind === 'message.user') {
+      if (seen.has(hostEvent)) return;
+      seen.add(hostEvent);
+      // Under his own item id: the row he sent from here, stored already.
+      if (c.itemId && seen.has(`item:${c.itemId}`)) return;
+      // Typed on the host by someone else: it keeps its own item id and is written here as theirs.
+      if (c.text) { seen.add(`item:${c.itemId}`); emit(id, 'message.user', { itemId: c.itemId || `host:${hostEvent}`, text: c.text, writer: { scope: 'peer', host: twin.runtime }, hostEvent }, e.at); }
+      return;
+    }
+    if (MIRRORED.has(e.kind) || TERMINAL.has(e.kind)) {
+      if (!fragment) { if (seen.has(hostEvent)) return; seen.add(hostEvent); }
+      mirror(id, twin, e, fragment ? c : { ...c, hostEvent });
+    }
+  }
+
+  /** The legacy host's rows: his echo recognised by its words, a row typed on the host given an `rt:` id (remote-runtime-legacy.js). */
+  function applyLegacy(id, twin, e) {
     const c = e.content || {};
     if (typeof e.cursor === 'number') twin.cursor = Math.max(twin.cursor, e.cursor);
     if (e.kind === 'message.user') {
-      const text = String(c.text || '').trim();
-      let at = twin.echo.indexOf(text);
-      if (at < 0) at = twin.echo.findIndex((sent) => unseeded(sent) === unseeded(text));
-      if (at >= 0) twin.echo.splice(at, 1);
-      else if (c.text) emit(id, 'message.user', { itemId: `rt:${e.cursor}`, text: c.text }, e.at);
+      if (!legacy.consumeEcho(twin, c) && c.text) emit(id, 'message.user', { itemId: `rt:${e.cursor}`, text: c.text }, e.at);
       return;
     }
+    if (MIRRORED.has(e.kind) || TERMINAL.has(e.kind)) mirror(id, twin, e, c);
+  }
+
+  /** A run's own events (deltas, tools, run state) written here as a local run writes them; the settled block is placed at its first delta's row here. */
+  function mirror(id, twin, e, c) {
     if (MIRRORED.has(e.kind)) {
       if (!twin.busy) { twin.busy = true; twin.running = true; }
       let content = c;
@@ -516,18 +657,37 @@ export function createRemoteRuntimes({
   }
 
   /** The turn may have ended while the stream was down and left no event this side saw (the host restarted mid-run): ask once per connection. */
-  async function reconcile(id, twin) {
+  async function reconcile(id, twin, actions) {
     if (!twin.busy || twin.pending.length || now() - twin.sentAt < 6000) return;
     let data;
-    try { data = await call(twin.runtime, { op: 'read', conversationId: twin.remoteId, after: twin.cursor }); } catch { return; }
-    if (!twin.busy || data.busy || (data.rows || []).length) return;
+    try {
+      if (actions) data = await readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/sync?conversation=${encodeURIComponent(twin.remoteId)}&after=${twin.cursor}`, { method: 'GET' }));
+      else data = await call(twin.runtime, { op: 'read', conversationId: twin.remoteId, after: twin.cursor });
+    } catch { return; }
+    if (!twin.busy || data.busy || (data.rows || data.events || []).length) return;
     emit(id, 'run.completed', { remote: true, synthesized: true });
     endTurn(id, twin);
     save();
   }
 
+  /** The chat's events after the stored cursor, read by cursor in pages and applied by id; ends when the host has nothing more. */
+  async function catchUp(id, twin) {
+    for (let page = 0; page < 500; page += 1) {
+      const data = await readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/sync?conversation=${encodeURIComponent(twin.remoteId)}&after=${twin.cursor}`, { method: 'GET' }));
+      const events = data.events || [];
+      for (const e of events) apply(id, twin, e, true);
+      if (events.length) save();
+      if (!data.truncated || !events.length) return;
+    }
+  }
+
   async function consume(id, twin, s) {
-    const { response, rt } = await request(twin.runtime, { op: 'events', conversationId: twin.remoteId, after: twin.cursor }, { signal: s.ctl.signal });
+    // The protocol is asked of the host before the feed opens, and holds for this connection (an offline host throws here and is retried).
+    const actions = await speaksActions(twin.runtime);
+    s.actions = actions;
+    const { response, rt } = actions
+      ? await fetchPeer(twin.runtime, `/api/events?conversation=${encodeURIComponent(twin.remoteId)}&after=${twin.cursor}`, { method: 'GET', signal: s.ctl.signal })
+      : await request(twin.runtime, { op: 'events', conversationId: twin.remoteId, after: twin.cursor }, { signal: s.ctl.signal });
     if (!response.ok || !response.body) {
       const refused = response.status === 404;
       mark(twin.runtime, !refused, refused ? 'refused or no such chat on the host' : `HTTP ${response.status}`);
@@ -546,11 +706,11 @@ export function createRemoteRuntimes({
         watch();
         let changed = false;
         for (const frame of parse(decoder.decode(value, { stream: true }))) {
-          if (frame.events) { for (const e of frame.events) apply(id, twin, e); changed = true; }
+          if (frame.events) { for (const e of frame.events) apply(id, twin, e, actions); changed = true; }
           else if (frame.hello) {
             mark(twin.runtime, true);
             twin.offlineNoted = false;
-            reconcile(id, twin).catch(() => {});
+            reconcile(id, twin, actions).catch(() => {});
           } else if (frame.resync) { s.resync = true; s.ctl.abort(); changed = true; } // too far behind for the held events: reconnect from the stored cursor, which replays them from the host's log
         }
         if (changed) save();
@@ -571,7 +731,15 @@ export function createRemoteRuntimes({
         try { await consume(id, twin, s); delay = RECONNECT_MIN_MS; }
         catch (cause) {
           if (s.stop) break;
-          if (s.resync) { s.resync = false; delay = RECONNECT_MIN_MS; continue; } // our own abort: reconnect at once from the stored cursor
+          if (s.resync) {
+            // The host said this feed is too far behind its log head to replay (sse.js). Its backlog was skipped, so reconnecting from the same
+            // cursor would be told the same thing again, forever, and lose what the run wrote meanwhile: read the chat by cursor
+            // (/api/sync, the same events, paged) and reconnect from where that reached.
+            s.resync = false; delay = RECONNECT_MIN_MS;
+            if (s.actions) await catchUp(id, twin).catch(() => {});
+            else continue; // a legacy host replays from the stored cursor
+            continue;
+          }
           const err = cause instanceof RemoteError ? cause : new RemoteError(`${labelOf(twin.runtime)} is offline (${cause?.cause?.code || cause?.name || cause?.message})`, { offline: true });
           if (err.offline) mark(twin.runtime, false, err.message);
           noteOffline(id, twin, err);
@@ -593,7 +761,7 @@ export function createRemoteRuntimes({
     for (const [id, twin] of Object.entries(twins)) {
       if (!twin.busy && !twin.pending.length && store.conversation(id)?.archived) {
         // An archived chat that has gone quiet releases its twin and its stream; unarchiving and sending starts a new twin seeded with the transcript.
-        detach(id); delete twins[id]; save(); decide({ event: 'twin-released', chat: id, runtime: twin.runtime }); continue;
+        detach(id); delete twins[id]; seenIds.delete(id); save(); decide({ event: 'twin-released', chat: id, runtime: twin.runtime }); continue;
       }
       if (twin.pending.length) await flush(id).catch(() => {});
       attach(id);
@@ -612,11 +780,16 @@ export function createRemoteRuntimes({
       emit(id, 'run.cancelled', { reason: 'Stopped before it was sent.' });
       return true;
     }
-    // The host answers with its own run.cancelled on the stream.
-    call(twin.runtime, { op: 'interrupt', conversationId: twin.remoteId }).catch((cause) => {
+    // The host answers with its own run.cancelled on the feed. Stop is the host's own run.interrupt action.
+    const failed = (cause) => {
       twin.busy = false; twin.running = false; save();
       emit(id, 'run.error', { message: `Stop could not reach ${label}: ${cause.message}` });
-    });
+    };
+    speaksActions(twin.runtime)
+      .then((actions) => (actions
+        ? postAction(twin.runtime, { op: ACTIONS.INTERRUPT, conversationId: twin.remoteId, actionId: newId(), payload: { cancelQueued: false } })
+        : call(twin.runtime, { op: 'interrupt', conversationId: twin.remoteId })))
+      .catch(failed);
     return true;
   }
 

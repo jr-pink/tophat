@@ -7,10 +7,11 @@
 // holds an address and token for its webchat.
 //
 // One file in the webchat state dir, hosts.json, one entry per hub device id:
-//   { "<device id>": { "label"?, "url", "tokenFile", "group"?, "description"?, "auto"?, "at"? } }
+//   { "<device id>": { "label"?, "url", "tokenFile", "group"?, "ssh"?, "description"?, "auto"?, "at"? } }
 // `url` (the peer's webchat machine surface, normally a supervised port-forward on loopback) and `tokenFile` (that peer's
 // service token) are written by hand once per peer; `group` names the memory group that host's team shares (what a chat of his
-// there is shared to by default, hosted-memory.js). `description` and `auto` (the router may choose this host) are edited from
+// there is shared to by default, hosted-memory.js). `ssh` is this host's own ssh name for that peer: a chat there gets a per-turn door
+// back into its folder here over a reverse tunnel on that name (host-door.js); without it no door opens. `description` and `auto` (the router may choose this host) are edited from
 // the host menu; the newest edit per host wins on an offline replay, and the server is their only writer (temp + rename).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -53,7 +54,8 @@ export function loadRuntimes({ file = FILE(), peers = hubPeers(), self = selfDev
     if (id === self || !v?.url || !v?.tokenFile) continue;
     // A configured peer the hub does not list is still reachable (a replica that has not synced yet): the hub list adds names, it does not gate.
     if (peers.length && !known.has(id)) continue;
-    out[id] = { id, label: String(v.label || id), url: String(v.url).replace(/\/+$/u, ''), tokenFile: String(v.tokenFile), group: v.group ? String(v.group) : null };
+    out[id] = { id, label: String(v.label || id), url: String(v.url).replace(/\/+$/u, ''), tokenFile: String(v.tokenFile), group: v.group ? String(v.group) : null,
+      ssh: v.ssh ? String(v.ssh) : null };
   }
   return out;
 }

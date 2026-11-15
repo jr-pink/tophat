@@ -1,4 +1,5 @@
 <script>
+  import { chatSpan } from '../core/chat-span.js';
   import { automatedTitle } from '$lib/core/title.js';
   import { plainText } from '$lib/core/summary.js';
   import { indicatorOf, unreadOf } from '$lib/core/rowstate.js';
@@ -379,11 +380,11 @@
   const asideRows = $derived(asideOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyAside: true }), hits) : []);
   const deferredRows = $derived(deferredOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyDeferred: true }), hits) : []);
   const recentsAll = $derived(recentsOpen
-    ? rankConversations(listed, { now, match, sorted: false })
+    ? rankConversations(listed, { now, match, sorted: false, includeArchived: true })
         .sort((a, b) => String(b.activeAt || b.updatedAt).localeCompare(String(a.activeAt || a.updatedAt)) || a.id.localeCompare(b.id))
         .slice(0, RECENTS_LIMIT)
     : []);
-  const recentsCount = $derived(recentsOpen ? recentsAll.length : Math.min(RECENTS_LIMIT, Object.values(listed).filter((c) => !c.sidechat && !c.archived && !c.aside).length));
+  const recentsCount = $derived(recentsOpen ? recentsAll.length : Math.min(RECENTS_LIMIT, Object.values(listed).filter((c) => !c.sidechat && !c.aside).length));
   let rows = $state([]);
   $effect(() => {
     const next = ordering;
@@ -891,7 +892,7 @@
     listtestid="recents-list"
   >
     {#each recentsAll as row (row.id)}
-      {@render chatRow(row, false)}
+      <div class:dim={row.archived}>{@render chatRow(row, false, true)}</div>
     {/each}
   </Tray>
 
@@ -1058,7 +1059,7 @@
     </div>
   {/snippet}
 
-{#snippet chatRow(row, isFork)}
+{#snippet chatRow(row, isFork, spanned = false)}
     <!-- Two-finger swipe left archives and swipe right pins, and the same buttons appear on
          hover; the reader library rows are the same component, where right stars instead. -->
     <div class="rowwrap" class:fork={isFork} class:cut={$sb.clip === `c:${row.id}`} data-ctx="chat" data-ctx-id={row.id}>
@@ -1141,7 +1142,7 @@
           <span class="mark" data-indicator={row.indicator}>
             {#if row.indicator === 'live'}<span class="dot live-dot"></span>
             {:else if row.indicator === 'unread'}<span class="dot unread-dot"></span>
-            {:else}<span class="time">{ago(row.activeAt || row.updatedAt)}</span>{/if}
+            {:else}<span class="time">{spanned || filter.trim() ? chatSpan(row.createdAt, row.activeAt || row.updatedAt, now) : ago(row.activeAt || row.updatedAt)}</span>{/if}
           </span>
           {#if row.pinned}<span class="pinmark" title="Pinned"><Icon name="pin" size={11} /></span>{/if}
           {#if row.turns > 6}<span class="turns" title="{row.turns} turns">{row.turns}</span>{/if}

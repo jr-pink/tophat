@@ -9,6 +9,7 @@ import { bootCodeShape, busyConversations, liveConversations, runnerShape, store
 import { deliverySummary } from '$lib/server/client-lag.js';
 import { healthOf } from '$lib/server/extensions.js';
 import { extensions } from '$lib/server/extensions-boot.js';
+import { PEER_CAPABILITY } from '$lib/server/peer-actions.js';
 
 const instance = `${process.pid}:${Date.now()}`;
 let handover = null;
@@ -49,6 +50,8 @@ export async function GET(event) {
     // Not part of `ok` (a restart cannot fix a browser): the deploy guard's verdict is unchanged, and a person or agent reading health sees the warning.
     ...(clientDelivery.ok === false ? { warning: `client delivery: ${clientDelivery.open.length} send(s) stuck or failed in the last ${Math.round((clientDelivery.windowMs || 0) / 60000)} min (see clientDelivery)` } : {}),
     clientDelivery,
+    // What a peer home server may speak to this host (peer-actions.js): it picks its protocol from this, never by guessing.
+    peer: PEER_CAPABILITY,
     product: process.env.PRODUCT_NAME || 'tophat',
     instance,
     uptimeSeconds: process.uptime(),

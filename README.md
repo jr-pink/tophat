@@ -11,7 +11,7 @@ Node 22.13 or newer. The core packages have no dependencies; the chat app (`runn
     alias tophat="node $PWD/packages/linknotes/bin/tophat.mjs"                      # or: npm link -w packages/linknotes
     tophat setup --name me --owner "Your Name"                                       # reads ANTHROPIC_API_KEY, or --key-file PATH
 
-`tophat setup` builds the chat app, writes `~/.config/tophat/me/tophat.instance.json`, copies the model key into the instance's keyring (0600, never printed) and starts the instance on http://localhost:4178 (loopback only). Then:
+`tophat setup` first moves the clone off `main` onto a branch of your own, named after the instance (`me` above; `--branch NAME` picks another, `--no-branch` skips it): `main` is upstream's and only ever fast-forwards, and every edit, commit and instance change you make goes on your branch. Then it builds the chat app, writes `~/.config/tophat/me/tophat.instance.json`, copies the model key into the instance's keyring (0600, never printed) and starts the instance on http://localhost:4178 (loopback only). Then:
 
     tophat chat --config ~/.config/tophat/me/tophat.instance.json "Remember that my favourite tea is genmaicha."   # a first turn; it writes memory
     tophat graph --config ~/.config/tophat/me/tophat.instance.json                                                 # the memory graph on http://localhost:4179/graph
@@ -20,7 +20,13 @@ Open http://localhost:4178 and enrol a passkey with the token in `~/.config/toph
 
 ## Updating
 
-An install is a git clone, and the owner's own changes live in it in one of two ways: as extensions (`docs/extensions.md`; they never touch tophat's code, so an update never collides with them), or as commits on the clone's branch, usually a fork. `tophat update` merges the newest upstream release tag (`vX.Y.Z`) into that branch, so the branch only moves forward, one merge commit per release, and local commits are never rebased or dropped:
+An install is a git clone with two kinds of branch. `main` is upstream's: never commit to it, only fast-forward it. Your own branch (created by `tophat setup`, named after the instance) is where everything of yours goes, so upstream can always be merged in. Your changes live there in one of two ways: as extensions (`docs/extensions.md`; they never touch tophat's code, so an update never collides with them), or as commits on your branch. To take upstream by hand:
+
+    git fetch upstream                      # `origin` when you cloned without renaming it
+    git switch main && git merge --ff-only upstream/main
+    git switch me && git merge main         # `me` is your branch; conflicts are yours to resolve, on your branch
+
+A second copy running at once (a staging or test instance) is a `git worktree add ../tophat-test me`, never another clone, so every checkout shares one object store and one history. Changes meant for everyone go in as a pull request from a branch cut from `main`, not from yours. `tophat update` merges the newest upstream release tag (`vX.Y.Z`) into that branch, so the branch only moves forward, one merge commit per release, and local commits are never rebased or dropped:
 
     tophat update --config ~/.config/tophat/me/tophat.instance.json --check      # { current, latest, behind }; changes nothing
     tophat update --config ~/.config/tophat/me/tophat.instance.json              # merge, check, apply, ship, restart
@@ -196,15 +202,12 @@ The bundle is committed under `packages/viewer/assets` (about 550 KB, 150 KB gzi
 ## Tests
 
     npm test                    # every package
-    npm run vendor:check        # source repository only: vendored core equals VENDOR.json; reports upstream drift
 
-The store suite runs one conformance file twice over a real hub on a temp port: on a single replica, and on two replicas of one user (A writes, and every read the suite makes is answered by both A and B after hub sync and must be identical). The two-party test gives each party its own replica (one party on two devices) and checks visibility, page composition and the leak property on file bytes: no private note reaches the other party's replica, reads, search or pages, and the hub file holds no plaintext at all. The viewer's tests check its WebCrypto cipher byte for byte against the store's, its replay against a replica of the same user on a generated three-party log (visible notes and entities, the whole graph, every page; paged, incremental and from the encrypted cache), and the scope-leak property; an opt-in smoke test (`VIEWER_SMOKE_CDP`, `VIEWER_SMOKE_TARGET`) loads the built bundle in a real browser against a local hub. `verify` adds a multi-party fuzz (three users, one on two devices) and an origin-vs-replica differential; two known issues in the vendored core are kept as `todo` tests (they report, the suite stays green): concurrent scope changes to one note on two devices can leave the devices disagreeing, and notes with the same `at` can render in a different order on each device. Tests never touch a live store.
+The store suite runs one conformance file twice over a real hub on a temp port: on a single replica, and on two replicas of one user (A writes, and every read the suite makes is answered by both A and B after hub sync and must be identical). The two-party test gives each party its own replica (one party on two devices) and checks visibility, page composition and the leak property on file bytes: no private note reaches the other party's replica, reads, search or pages, and the hub file holds no plaintext at all. The viewer's tests check its WebCrypto cipher byte for byte against the store's, its replay against a replica of the same user on a generated three-party log (visible notes and entities, the whole graph, every page; paged, incremental and from the encrypted cache), and the scope-leak property; an opt-in smoke test (`VIEWER_SMOKE_CDP`, `VIEWER_SMOKE_TARGET`) loads the built bundle in a real browser against a local hub. `verify` adds a multi-party fuzz (three users, one on two devices) and an origin-vs-replica differential; two known issues in the replicated core are kept as `todo` tests (they report, the suite stays green): concurrent scope changes to one note on two devices can leave the devices disagreeing, and notes with the same `at` can render in a different order on each device. Tests never touch a live store.
 
 ## Where the code comes from
 
-The replicated store core (TenantStore, policy, crypto, sync and hub) and a few generic helpers are maintained upstream and copied in by a vendoring step that lives only in the source repository (not in release tarballs): byte-for-byte copies plus a short list of exact-match transforms that drop deployment-specific defaults (a content-screen word list, a roster file, local paths), a comment scrub, and a gate that refuses any output naming the deployment it came from. Each copy is recorded in `VENDOR.json` (source repository only) with its source and output sha256. Change those files upstream and re-vendor; never edit them here (`packages/linknotes/test/vendor.test.mjs` fails on an in-place edit). Ported adapters are forks with the upstream hash at port time, so `npm run vendor:check` (source repository only) says when upstream moved. Everything else (interface, backend, push, CLI) is this repo's own.
-
-The app components `packages/runner` and `packages/webchat` are assembled the same way from an upstream application: the import closure of the app's entries, one rename table applied to every file, exact transforms that move deployment wiring into the environment `tophat start` builds from the instance file, generated stubs for device-specific features, the comment scrub and the same gate. `ASSEMBLY.json` (source repository only) records each file (`packages/deploy/test/app.test.mjs` fails on an in-place edit). The app tests need the packages' npm dependencies and skip without them.
+`packages/` is the source: everything here is edited here, including the replicated store core under `packages/linknotes/core`, the runner and the webchat. The app tests need the packages' npm dependencies and skip without them.
 
 ## License
 

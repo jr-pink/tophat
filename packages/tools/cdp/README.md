@@ -154,12 +154,49 @@ The two registries stay separate files (a tab and a window are different things,
 | `fill TARGET SEL TEXT` | **Replace a field's value for real.** Resolves the element (frame-piercing `>>>` selector), scrolls it into view, hit-tests it, clicks it at page coordinates, selects all with the `selectAll` editing command, inserts the text into the **page** target, reads the value back from the frame that owns the element, and checks the embedding page for a validation message about that field. `--append` (no select-all), `--no-click`, `--no-scroll`, `--no-focus-check`, `--allow-error`, `--settle MS`, `--dom-value` (plain forms only). `--input-target` is obsolete and ignored. Exit 7 if it could not be put under the pointer, exit 8 if the readback or the page disagrees. |
 | `wait-for TARGET` | Poll until a condition holds, else exit 4. `--selector SEL`, `--url-changes`, `--url-contains SUBSTR`, `--text-contains SUBSTR`, `--timeout S` (default 30), `--poll S`. |
 | `cookies TARGET` | Cookies the tab's url sends: name, domain, path, httpOnly/secure/session, size; never values. `--delete NAME_REGEX` removes matching names through `Network.deleteCookies`, HttpOnly ones included (`--dry-run` lists them). |
+| `captcha solve\|detect\|balance\|spend` | Solve a captcha through 2Captcha; see [Captchas](#captchas). `balance` and `spend` need no tab. Node tool only (the Python twin has no `captcha`). |
 | `protected` | Show the target ids that mutating verbs refuse, and whether each is still live. |
 | `job ...` | Own a tab under a name; see [Jobs](#jobs-one-job-one-tab) above. |
 
 Every verb that takes a `TARGET` also takes `--job NAME` in its place, plus `--steal` and `--expect-url PREFIX`. Every verb takes `--help`. No arguments at all is `status`, as before.
 
 Exit codes: `0` ok, `1` usage or configuration, `2` endpoint unreachable, `3` target or JavaScript error (including an ambiguous selector), `4` timeout, `5` refused (protected target, or a tab owned by another job), `6` the tab is not where the job left it, **`7` the element could not be put under the pointer** (not in view after scrolling, or the hit test landed on something else) and nothing was dispatched, **`8` the action was dispatched and the verification disagreed** (the readback is not what was typed, or the embedding page shows a validation message for the field).
+
+### Captchas
+
+A captcha is not an owner blocker: solve it. In a tab you own:
+
+```sh
+tophat-cdp job claim NAME --url https://site.example/page
+tophat-cdp --job NAME captcha detect            # what is on the page; nothing bought
+tophat-cdp --job NAME captcha solve             # buy a token, put it in the page, fire the page's callback
+tophat-cdp --job NAME captcha solve --submit    # ... and submit the form if no callback fired, or the page stayed put after it
+tophat-cdp captcha spend                        # today / lifetime spend against the caps, no tab needed
+tophat-cdp captcha balance                      # the provider account balance
+```
+
+`solve` reads the tab, finds the widget (reCAPTCHA v2 and Enterprise, reCAPTCHA v3, hCaptcha, Cloudflare Turnstile; a widget in the page or an `<iframe>` that names its sitekey), sends the sitekey and the page URL to 2Captcha (v2 JSON API, `createTask` then `getTaskResult`), waits, writes the token into every response field (`g-recaptcha-response`, `h-captcha-response`, `cf-turnstile-response`) and calls the page's own callback: `data-callback`, else the callback found in `___grecaptcha_cfg`, else the callback `turnstile.render` was given. It prints JSON: kind, sitekey, cost the provider reported, which callback fired, and `after` (the tab's url and title once `--settle` seconds, default 4, have passed; a challenge page navigates away when the callback verified). The token is never printed or logged; it is only in the page and in the provider's reply.
+
+A Cloudflare **challenge page** ("Just a moment...") has no widget in the DOM until its script renders one, and 2Captcha needs the `cData`, `chlPageData` and `action` that script passes to `turnstile.render`. `solve` reloads the tab with `turnstile.render` hooked (`Page.addScriptToEvaluateOnNewDocument`, the method 2Captcha documents), reads those parameters and buys with them. `--no-hook` skips the reload. Not verified end to end: on the one public challenge page tried (`nopecha.com/demo/cloudflare`, 2026-11-13) this Chrome's challenge sat at "Performing security verification" and never called `turnstile.render`, so nothing was bought. A Cloudflare **block** page ("Sorry, you have been blocked") is a ban, not a captcha; `detect` says so. Image captchas, PerimeterX press-and-hold and DataDome are reported as unsupported and nothing is bought.
+
+Flags: `--kind` (only that kind; with `--sitekey` the kind to buy, default `recaptcha_v2`), `--sitekey` (skip detection), `--page-url`, `--index N` (the Nth detected, visible ones first), `--action` (Turnstile or v3 action), `--min-score` (v3, default 0.7), `--submit` (submit the form when no callback fired, or when one fired and the page did not move), `--no-inject` (buy and discard; for a cost check only), `--no-hook`, `--settle S`.
+
+**Money.** Every limit is in the `captcha` section of the tophat config file (`TOPHAT_CONFIG`); the code has no default for any of them and exits 1 naming the missing key:
+
+```json
+"captcha": {
+  "provider": "2captcha", "keyFile": "~/.config/<keyring>/2captcha-api-key", "apiBase": "https://api.2captcha.com",
+  "maxUsdPerSolve": 0.05, "maxUsdPerDay": 2, "maxUsdTotal": 40,
+  "estimateUsd": { "recaptcha_v2": 0.005, "recaptcha_v2_enterprise": 0.005, "recaptcha_v3": 0.005, "hcaptcha": 0.005, "turnstile": 0.005 },
+  "maxAttempts": 2, "initialWaitSeconds": 8, "pollSeconds": 4, "timeoutSeconds": 150
+}
+```
+
+Optional: `ledgerFile` (default `<state dir>/captcha/ledger.jsonl`), `"enabled": false` to switch the verb off. Before anything is bought, the kind's `estimateUsd` must fit under `maxUsdPerSolve`, and today's spend (local day) and the lifetime spend plus that estimate must fit under `maxUsdPerDay` and `maxUsdTotal`; otherwise exit 5, nothing bought. The ledger is an append-only jsonl: a `submit` line before the purchase and a `done` line after it with the provider's reported `cost`. A solve with no `done` line, or a timeout (2Captcha may still charge it), counts at its estimate; a refused request or an unsolvable task counts as 0. An unsolvable task is retried up to `maxAttempts`. The key file is read in process and taught to the output redactor with every token.
+
+Exit codes for `captcha`: 0 solved and injected; 1 config missing or invalid; 3 no solvable captcha on the page; 4 the provider did not answer in `timeoutSeconds`; 5 a spend cap refused it (or the verb is switched off); 8 the provider failed, or it solved but the page had no field or callback to take the token (the result JSON is still printed; the solve was paid for).
+
+`web_open` (the chat runner's page reader) calls this itself: when its real-browser route lands on a captcha wall it runs `captcha solve` in its own tab, re-reads the page, and reports an owner blocker only if that fails. `TOPHAT_RUNNER_WEB_CAPTCHA=0` turns that off.
 
 ### Target selectors
 

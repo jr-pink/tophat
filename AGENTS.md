@@ -56,7 +56,12 @@ alias tophat="node $PWD/packages/linknotes/bin/tophat.mjs"   # every later comma
 tophat setup --name me --owner "Your Name"
 ```
 
-`setup` is idempotent. It runs `npm install` and the webchat build if they are missing, writes the instance file
+`setup` is idempotent. **First it creates the user's branch**: it switches the clone off `main` onto a branch named after
+the instance (`me` here; `--branch NAME` to choose, `--no-branch` to skip) and says so in its `steps`. Tell the user the
+rule and keep to it yourself: `main` is upstream's and only fast-forwards from `upstream/main` (or `origin/main`); every
+edit, commit and local change goes on their branch, so an update is `git merge main` or `tophat update` (which merges the
+newest release tag into the branch). Never commit to `main`, never rebase or force-push the user's branch; a second running
+copy is a `git worktree add`, not a second clone; a change for everyone is a PR from a branch cut from `main`. It runs `npm install` and the webchat build if they are missing, writes the instance file
 `~/.config/tophat/me/tophat.instance.json`, copies the model key into the instance keyring, starts the instance in the
 background on http://localhost:4178 and waits for its health check. It prints JSON with the paths and the next steps.
 

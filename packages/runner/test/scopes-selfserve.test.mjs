@@ -3,23 +3,23 @@ import assert from 'node:assert/strict';
 import { parseRegistry, accountsFor, canAccess } from '../src/scopes/registry.mjs';
 
 const reg = () => parseRegistry({
-  accounts: { albert: { emails: ['albert@pinkmatter.io'] } },
-  autoDomains: ['pinkmatter.io'],
-  scopes: { 'personal:albert': { kind: 'personal', owner: 'albert' }, all: { kind: 'group', everyone: true } }
+  accounts: { alice: { emails: ['alice@example.org'] } },
+  autoDomains: ['example.org'],
+  scopes: { 'personal:alice': { kind: 'personal', owner: 'alice' }, all: { kind: 'group', everyone: true } }
 });
 
 test('an address on an autoDomain gets an account and its own personal scope', () => {
   const r = reg();
-  const a = accountsFor('JrPink@pinkmatter.io', r);
-  assert.equal(a.account, 'jrpink');
-  assert.equal(a.personalScope, 'personal:jrpink');
-  assert.ok(canAccess('jrpink', 'personal:jrpink', r) && canAccess('jrpink', 'all', r));
-  assert.ok(!canAccess('jrpink', 'personal:albert', r));
+  const a = accountsFor('Bob@example.org', r);
+  assert.equal(a.account, 'bob');
+  assert.equal(a.personalScope, 'personal:bob');
+  assert.ok(canAccess('bob', 'personal:bob', r) && canAccess('bob', 'all', r));
+  assert.ok(!canAccess('bob', 'personal:alice', r));
 });
 
 test('other domains, subdomains and listed accounts are unchanged', () => {
   const r = reg();
   assert.equal(accountsFor('x@evil.com', r), null);
-  assert.equal(accountsFor('a@sub.pinkmatter.io', r), null);
-  assert.equal(accountsFor('albert@pinkmatter.io', r).account, 'albert');
+  assert.equal(accountsFor('a@sub.example.org', r), null);
+  assert.equal(accountsFor('alice@example.org', r).account, 'alice');
 });

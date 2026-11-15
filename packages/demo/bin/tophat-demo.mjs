@@ -6,7 +6,7 @@
 //   tophat-demo pages --config demo.json [--force]                 write the model-written entity pages (at most once a day; --force overrides), then the graph snapshot
 //   tophat-demo daily --config demo.json                          seed, write the day's pages (once a day), then re-run every slot marked daily
 //   tophat-demo widgets|instructions --config demo.json           regenerate the memory-graph widget / the agent's standing context from their sources
-//   tophat-demo release --repo DIR [--revendor]                    (maintainer) build main and publish it for the demo user; --revendor first re-assembles packages/webchat from the upstream app when it drifted and has been quiet 2 minutes (the timer job only)
+//   tophat-demo release --repo DIR                    (maintainer) build main and publish it for the demo user
 //   tophat-demo instance --config demo.json [--check]            write seed/instance-policy.json into the instance file (--check: report only; exit 1 on a difference or any webchat row in memory)
 //   tophat-demo update --config demo.json [--root DIR]                          (demo user) install the published release into the root, restart the demo
 //   tophat-demo check [--repo DIR] [--port 4472]              exit 1 when the live demo is not on the repository's main
@@ -80,11 +80,6 @@ if (cmd === 'export') {
   if (flags.check ? !r.ok : r.policy.length) process.exit(1); // an update only applies; webchat rows are the check's finding
 } else if (cmd === 'release') {
   const { release } = await import('../src/release.mjs');
-  if (flags.revendor) {
-    const { revendor } = await import('../src/revendor.mjs');
-    const stamp = (l) => console.log(`${new Date().toISOString()} ${l}`);
-    try { revendor({ repo: expand(flags.repo || die('--repo')), node: flags.node ? expand(flags.node) : undefined, npm: flags.npm ? expand(flags.npm) : null, log: stamp }); } catch (e) { stamp(`revendor error (publishing continues): ${String(e.message || e).split('\n')[0]}`); }
-  }
   print(release({ repo: expand(flags.repo || die('--repo')), out: flags.out ? expand(flags.out) : undefined, node: flags.node ? expand(flags.node) : undefined, npm: flags.npm ? expand(flags.npm) : null }));
 } else if (cmd === 'update') {
   const c = config();

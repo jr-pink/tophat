@@ -31,7 +31,10 @@ import { BEAT_MS, startLiveness } from './liveness.js';
 import { drainObservations, RETENTION_DAYS } from './interaction.js';
 import { agentsOwed } from './owed-work.js';
 import { createRemoteRuntimes, logDecision as remoteDecision } from './remote-runtime.js';
+import { peerSendOf } from './peer-actions.js';
 import { createGrantBook } from './host-grant.js';
+import { createHostDoors } from './host-door.js';
+import { selfDevice } from './hosts.js';
 import { runnerLedgerPath } from './translate.js';
 import { installClaudeFallback } from './claude-fallback.js';
 import { RETRY_SWEEP_MS, startRetryWakes, storeDeliver, storeProbe } from './retry-wakes.js';
@@ -381,9 +384,10 @@ function build() {
   // and only with the relay script serve.mjs names; WEBCHAT_RELAYS=0 turns it off.
   const relays = relayConfig({ building });
   const onUserMessage = (id) => { if (!process.env.VITEST) folderRouter.schedule(id, 0); };
-  // Read grants for a team host's runner (host-grant.js): one per hosted chat, ended with its turn.
+  // The per-turn grants behind the host door (host-grant.js, host-door.js): one per turn he starts on a peer, ended by host-door.js when
+  // that turn and everything it started have ended (never here at turn end, which would cut its subagents off).
   const hostGrants = createGrantBook();
-  const onTurnEnd = (id) => { hostGrants.revoke(id); titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); };
+  const onTurnEnd = (id) => { titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); };
   const localRunner = createRunner({ store, defaultCwd: DEFAULT_CWD, liveChildren, beforeDispatch: createEvaluationCapture({ store }), onUserMessage, onTurnEnd,
     ...(relays ? { relaySpawnImpl: relaySpawner({ script: relays.script, dir: relays.dir }), handover: { path: relays.handover, shape: handoverShape(), accepts: acceptedHandoverShapes() } } : {}) });
   // Chats whose host is a peer (hosts.js) are answered there and attached live into this log (remote-runtime.js);
@@ -391,7 +395,12 @@ function build() {
   // The first message of a new chat waits (up to HOST_GATE_MS) for the router's host decision, so a team-level first message goes to the
   // team host instead of starting here (docs/HOST-DESIGN.md, item 1). The router picks on the message in hand; nothing is delayed when no
   // host is opted in for auto-routing.
-  const remoteRuntimes = createRemoteRuntimes({ store, onUserMessage, onTurnEnd,
+  // A chat on a peer gets a door back into its folder here for each turn (host-door.js): a reverse tunnel this host opens to the peer
+  // named by its hosts.json `ssh`, open while that turn and what it started run there. Tests open none.
+  const hostDoors = process.env.VITEST || building ? null : createHostDoors({ grants: hostGrants, cwdOf: (id) => store.conversation(id)?.cwd || DEFAULT_CWD,
+    logPath: webchatStorePath('host-door.jsonl'), home: selfDevice() || 'his home host' });
+  if (hostDoors) process.once('exit', () => hostDoors.closeAll());
+  const remoteRuntimes = createRemoteRuntimes({ store, onUserMessage, onTurnEnd, door: hostDoors,
     decideHost: (id, { text, signal }) => folderRouter.routeHost(id, { text, gate: true, signal }),
     hostGateWanted: () => folderRouter.hasRemoteCandidate() });
   const runner = remoteRuntimes.wrap(localRunner);
@@ -559,7 +568,7 @@ function build() {
   
   
   const built = builtShapeDetail();
-  return { store, runner, remoteRuntimes, hostGrants, auth, titler, folderRouter, splices, code: built.hash, codeFiles: built.files };
+  return { store, runner, remoteRuntimes, hostGrants, hostDoors, auth, titler, folderRouter, splices, code: built.hash, codeFiles: built.files };
 }
 
 const key = Symbol.for('tophat.webchat.app');
@@ -903,6 +912,8 @@ export function applyAction(action, {
         'tool.started', 'tool.input_delta', 'tool.completed',
         'agent.started', 'agent.completed'
       ]);
+      // A side thread copies no events: it shows only its own words, and the model's context is the parent's session forked by the
+      // runner (resumptionFor; on the parent's host when the parent runs on one, remote-runtime route), prompt cache included.
       if (!payload.sidechat) {
         let sweeping = false;
         for (const event of store.allConversationEvents(parent.id)) {
@@ -926,7 +937,9 @@ export function applyAction(action, {
       
       
       
-      if (payload.text) {
+      const peerFork = peerSendOf(payload);
+      if (peerFork) runner.send(id, peerFork.wire, { itemId: action.action_id, display: peerFork.display, writer: peerFork.writer, ...evaluation });
+      else if (payload.text) {
         const first = prepareSend(store, id, payload.text, { staged: splices.pending(id), pendingUploads: payload.pending_uploads });
         runner.send(id, first.wire, { itemId: action.action_id, display: first.display, ...evaluation });
         splices.stage(id, first.marks);
@@ -950,13 +963,19 @@ export function applyAction(action, {
       
       
       
+      const peer = peerSendOf(payload);
       let conversation = store.conversation(id);
       if (!conversation) {
         const settings = normalizeSettings(pinnedDefaults(payload.settings || {}));
-        const scope = scopes.scopeForNewChat(identity, payload.scope || null);
-        store.ensureConversation(id, { at, cwd: payload.cwd || DEFAULT_CWD, settings, title: 'New chat', scope });
-        store.append(id, 'conversation.created', { title: 'New chat', settings, cwd: payload.cwd || DEFAULT_CWD, ...(scope ? { scope } : {}) }, { at });
+        const scope = peer ? null : scopes.scopeForNewChat(identity, payload.scope || null);
+        const title = (peer?.title || '').replace(/\s+/gu, ' ').trim().slice(0, 72) || 'New chat';
+        store.ensureConversation(id, { at, cwd: payload.cwd || DEFAULT_CWD, settings, title, scope, ...(peer ? { source: 'agent' } : {}) });
+        store.append(id, 'conversation.created', { title, settings, cwd: payload.cwd || DEFAULT_CWD, ...(scope ? { scope } : {}) }, { at });
         conversation = store.conversation(id);
+      }
+      if (peer) {
+        runner.send(id, peer.wire, { itemId: action.action_id, display: peer.display, writer: peer.writer, ...evaluation });
+        break;
       }
       
       

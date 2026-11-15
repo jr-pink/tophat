@@ -21,7 +21,6 @@ const freePort = () => new Promise((ok, fail) => { const s = net.createServer();
 
 
 const RUNNER = path.join(WORKSPACE, 'packages/runner'), WEBCHAT = path.join(WORKSPACE, 'packages/webchat');
-const ASSEMBLY = path.join(WORKSPACE, 'ASSEMBLY.json');
 const has = (dir, dep) => existsSync(path.join(dir, dep, 'package.json'));
 function modulesFor(pkg, deps, envName) {
   for (const d of [process.env[envName], path.join(pkg, 'node_modules'), path.join(WORKSPACE, 'node_modules')]) if (d && deps.every((x) => has(d, x))) return d;
@@ -46,17 +45,6 @@ function scratch() {
   return dir;
 }
 
-test('ASSEMBLY.json matches every assembled file', { skip: !existsSync(ASSEMBLY) && 'no ASSEMBLY.json' }, () => {
-  const m = JSON.parse(readFileSync(ASSEMBLY, 'utf8'));
-  assert.match(m.upstream, /^upstream\/app@/);
-  const files = Object.entries(m.files);
-  assert.ok(files.length > 400, `${files.length} files`);
-  const bad = files.filter(([f, r]) => !existsSync(path.join(WORKSPACE, f)) || createHash('sha256').update(readFileSync(path.join(WORKSPACE, f))).digest('hex') !== r.out).map(([f]) => f);
-  assert.deepEqual(bad, [], 'assembled files edited in place; change them upstream or in the assembly config');
-  for (const pkg of ['packages/runner/package.json', 'packages/webchat/package.json']) assert.equal(m.files[pkg]?.kind, 'generated');
-  const roster = JSON.parse(readFileSync(path.join(RUNNER, 'rev6/base/private-people.json'), 'utf8'));
-  assert.deepEqual(roster.people, [], 'the shipped private roster is empty');
-});
 
 test('runner: one turn against a local fake model provider', { skip: !runnerModules && 'runner dependencies not installed (npm install, or TOPHAT_RUNNER_NODE_MODULES)' }, async () => {
   const dir = scratch();

@@ -28,6 +28,7 @@ import { LIST_DOC, LIST_PROPS, listCall } from '../base/memory-list.mjs';
 import { GROUPS_DOC, confineToScope, groupedApplyCall, scopedWriteError, wantsGroups } from '../base/memory-groups.mjs';
 import { runnerChatVerdict } from './chat-scope.mjs';
 import { scrubForStore } from '../../src/vault/scrub-store.mjs';
+import { storeRepo } from '../../src/store-repo.mjs';
 import { createCua } from '../tools/runner/cua.mjs';
 import { createTabWatcher } from '../tools/runner/cua.mjs';
 import { checkDrop, goalHandlers, taskRequest } from './goals.mjs';
@@ -148,7 +149,11 @@ export function withoutHome(result, home) {
   return result;
 }
 export function memoryStore(env = process.env) {
-  return { db: resolve(memoryDb(env)), installed: true, python: process.execPath, cli: join(REPO, 'store', 'cli.mjs'), cwd: REPO };
+  // Resolved per call, so a runner whose release dir was removed under it spawns from a checkout that still exists
+  // (src/store-repo.mjs); none left keeps REPO and the call fails as before.
+  let repo = REPO;
+  try { repo = storeRepo(env, REPO); } catch { /* none exists */ }
+  return { db: resolve(memoryDb(env)), installed: true, python: process.execPath, cli: join(repo, 'store', 'cli.mjs'), cwd: repo };
 }
 // search and read go to a warm reader (memory-worker.mjs, rev5/cli.py serve) unless TOPHAT_RUNNER_MEMORY_WORKER=0 or the
 // caller asks for the one-shot process (spawn: true); anything else, and any reader that cannot take it, spawns the CLI.
@@ -215,11 +220,11 @@ export function receiptComplete(records, receipt) {
 }
 
 // ---- background jobs: shell commands started with background=true, and tool calls moved off the turn.
-export function createJobs(db, { sessionId, cwd, env = process.env, now = () => new Date().toISOString(), redact = (t) => t }) {
+export function createJobs(db, { sessionId, cwd, env = process.env, now = () => new Date().toISOString(), redact = (t) => t, door = () => null }) {
   ensureTables(db);
   const live = new Map(), get = db.prepare('SELECT * FROM jobs WHERE id = ? AND session_id = ?');
   const finish = db.prepare('UPDATE jobs SET status = ?, exit_code = ?, output = ?, ended_at = ? WHERE id = ?');
-  const insert = (id, tool, input, pid) => db.prepare('INSERT INTO jobs (id, session_id, tool, input, status, pid, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, sessionId, tool, JSON.stringify(input), 'running', pid, now());
+  const insert = (id, tool, input, pid) => db.prepare('INSERT INTO jobs (id, session_id, tool, input, status, pid, started_at, door) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, sessionId, tool, JSON.stringify(input), 'running', pid, now(), door()?.grant || '');
   for (const row of db.prepare("SELECT id, pid FROM jobs WHERE session_id = ? AND status = 'running'").all(sessionId)) {
     let alive = false;
     try { process.kill(row.pid, 0); alive = true; } catch { /* gone */ }
@@ -354,14 +359,14 @@ export function searchDeps({ env = process.env, sessionId = null, clock = () => 
  * Tools for one agent (root or child). `agents`, `goals` and `chat` (chat_rename/chat_archive, root only: chat.mjs) are optional; `factories` replaces the plug-ins
  * (cua, tabs, browser) in tests. run() always returns {content, isError} scrubbed of known secrets.
  */
-export function createTools({ db, sessionId, cwd, roots = [], env = process.env, permissionMode = 'bypassPermissions', now, browserFactory = null, agents = null, goals = null, chat = null, onPath = null, mail = true, secrets, factories = {} }) {
+export function createTools({ db, sessionId, cwd, roots = [], env = process.env, permissionMode = 'bypassPermissions', now, browserFactory = null, agents = null, goals = null, chat = null, onPath = null, mail = true, secrets, factories = {}, door = () => null }) {
   const fs = createFilesystem({ cwd, roots: [...roots, askConfigured(env) ? askRoot(env) : null], env });
   const noting = (set) => ({ ...set, check(path, at) { const r = set.check(path, at); try { onPath?.(r); } catch { /* best effort */ } return r; } });
   const boundary = noting(fs), writable = fs.confined ? noting(createRoots([cwd, ...roots])) : boundary;
   const clock = now || (() => new Date().toISOString());
   const mailTools = mail && mailConfigured(env) ? createMailTools({ db, sessionId, env, now: clock }) : null;
   const secretIndex = secrets === undefined ? sharedSecretIndex(env) : secrets;
-  const jobs = createJobs(db, { sessionId, cwd, env, now, redact: (text) => redactToolResult({ content: text }, secretIndex).content });
+  const jobs = createJobs(db, { sessionId, cwd, env, now, redact: (text) => redactToolResult({ content: text }, secretIndex).content, door });
   const web = webConfigured(env) ? createWebTools({ env, now: clock }) : null;
   const cua = (factories.cua || createCua)({ env, sessionId });
   const tabs = (factories.tabs || createTabWatcher)({ db, env, sessionId });

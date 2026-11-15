@@ -96,8 +96,12 @@ export function isPublicPath({ path, method = 'GET', bearer = false, shareToken 
   // state composer or a repair agent runs with no browser session at all. Exempted here only when it
   // presents a bearer, so an anonymous read of the state area is still refused.
   if (path === '/api/state' && bearer) return true;
-  // A team host's runner reading one granted folder over the reverse path (host-grant.js): loopback plus the per-turn grant token, checked in the handler.
-  if (path === '/api/hostfile' && bearer) return true;
+  // A peer host reading and writing a chat that runs on it, in the app's own shapes (peer-actions.js): the same /api/actions, /api/sync and
+  // /api/events a browser uses, entered with a bearer. Open here only with one; each handler runs peerCaller (loopback plus the service
+  // token) and answers 404 to a bearer that fails it.
+  if (bearer && (path === '/api/actions' || path === '/api/sync' || path === '/api/events')) return true;
+  // A peer host's member asking whether work of one door grant still runs here (door-work.js): bearer only, the handler runs peerCaller.
+  if (bearer && method === 'GET' && path === '/api/door') return true;
 
   // The Shortcut's POST, and nothing else. See the header: the GET on this path hands the token out
   // and is the owner's alone.

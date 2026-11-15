@@ -24,7 +24,7 @@ const JOBS = `CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, session_id T
   CREATE INDEX IF NOT EXISTS jobs_session ON jobs(session_id, status)`;
 const ADDED = [['push_queue', 'receipt TEXT'], ['sessions', 'runner_pid INTEGER'], ['agents', 'stop_reason TEXT'], ['agents', 'resumes INTEGER NOT NULL DEFAULT 0'],
   ['agents', 'owner_pid INTEGER'], ['agents', 'checkin_ms INTEGER'], ['agents', 'checked_at TEXT'], ['agents', 'caller TEXT'],
-  ['agents', 'expected_minutes REAL']];
+  ['agents', 'expected_minutes REAL'], ['agents', 'door TEXT'], ['jobs', 'door TEXT']]; // door: the home host's door grant the starting turn ran under (base/door-tag.mjs)
 
 /** The agents and jobs tables and the columns added since rev5 began; idempotent, so tools and agents can call it on any db. */
 export function ensureTables(db) {

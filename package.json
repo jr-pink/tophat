@@ -10,9 +10,7 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "node --import ./test/hermetic-env.mjs --test --test-concurrency=1 packages/*/test/*.test.mjs test/*.test.mjs",
-    "vendor": "node scripts/vendor.mjs",
-    "vendor:check": "node scripts/vendor.mjs --check"
+    "test": "node --import ./test/hermetic-env.mjs --test packages/*/test/*.test.mjs test/*.test.mjs"
   },
   "license": "MIT",
   "author": "tophat contributors"

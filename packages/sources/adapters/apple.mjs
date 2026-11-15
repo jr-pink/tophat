@@ -7,7 +7,7 @@
 //   apple-photos                                  config.library(ies): metadata only, never pixels, filenames or recognition tables
 //   contacts-backup, photos-export                copies kept outside the store (WAL-safe AddressBook backup; osxphotos export)
 // A denied grant fails by name (full-disk-access-required), never as an empty source.
-// Ported from an upstream adapter (VENDOR.json `ported`).
+//
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

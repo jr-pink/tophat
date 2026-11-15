@@ -83,7 +83,7 @@ function inScope(registry, accountId, scope) {
   return scope.everyone || scope.members.includes(accountId);
 }
 
-// Self-serve: an address on one of the registry's `autoDomains` (identity is verified upstream, e.g. by auth.eng.pink) gets an
+// Self-serve: an address on one of the registry's `autoDomains` (identity is verified upstream, e.g. by a sign-in service) gets an
 // account named after its local part, plus a personal scope, created in the parsed registry on first sight. Nothing is written to
 // the file; a reload re-creates it on the next lookup. A local part that is not a plain id, or an id another address already owns,
 // gets nothing.

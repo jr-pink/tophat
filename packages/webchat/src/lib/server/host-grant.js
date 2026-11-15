@@ -1,81 +1,136 @@
-// A per-chat, per-turn read path from a team host back to his home host (docs/HOST-DESIGN.md, item 5. PROTOTYPE, read-only, and nothing here
-// opens a port or a tunnel by itself.
+// The per-turn grant behind the host door (host-door.js; docs/HOST-DESIGN.md item 5).
 //
-// The model. The home host (the one holding the files) grants; the team host never reaches in on its own.
-//   grant      a random token bound to one chat and one folder (the chat's cwd, as a real path), valid until the turn ends (remote-runtime
-//              endTurn revokes it), the TTL passes, or the home restarts (grants live in memory only).
-//   door       GET /api/hostfile (routes/api/hostfile): loopback only, not through the tunnel proxy, the grant token as the bearer. It answers
-//              a listing or the text of one file under the grant's folder, never a credential store, never outside it by `..` or a symlink.
-//   path       the home host starts the reverse tunnel when it grants (reverseTunnelArgv: ssh -N -R 127.0.0.1:<port>:127.0.0.1:<home webchat
-//              port> <team host>), so the team host's loopback port reaches only this door; the team host's runner is handed the port and token
-//              as injected context (op inject: not a message, not memory). The tunnel is killed when the grant ends.
-// Writes ("the runner on server should be able to edit the files on my mac") are not here: see the design doc, they need a separate
-// grant mode with a per-write ledger and his confirmation, and are not built.
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { open, readdir, realpath, stat } from 'node:fs/promises';
-import { isAbsolute, join, sep } from 'node:path';
-import { credential } from './files.js';
+// The boundary is the grant and nothing else. A grant is a random bearer token minted by this (home) host for one chat the owner is in, for
+// one turn he started; it lives in this process's memory only and dies when that turn and everything it started have ended (host-door.js),
+// at the 2 hour cap after his last message in the chat, or on restart. Inside it the door is
+// plain access as his user: run a command, read or write any file he could. There are no path fences, because a command could step over
+// any of them. What stays: a timeout and an output cap on commands, a size cap on what a read returns, and one append-only log line per call.
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { appendFile, mkdir, open, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
-export const GRANT_TTL_MS = 30 * 60_000;
-export const MAX_READS = 300;
-export const MAX_BYTES = 400_000;
-export const MAX_ENTRIES = 500;
+export const GRANT_TTL_MS = 2 * 60 * 60_000; // the hard cap: 2 h after his last message in the chat
+export const READ_BYTES = 8_000_000;    // what one read returns (the rest is marked truncated)
+export const WRITE_BYTES = 8_000_000;   // one write body
+export const MAX_ENTRIES = 2000;        // one listing
+export const EXEC_TIMEOUT_MS = 120_000;
+export const EXEC_TIMEOUT_CAP_MS = 10 * 60_000;
+export const EXEC_OUTPUT_BYTES = 200_000;
 
 export class GrantError extends Error { constructor(message, status) { super(message); this.status = status; } }
 
 export function createGrantBook({ now = () => Date.now(), makeToken = () => randomBytes(24).toString('base64url'), makeId = () => randomBytes(6).toString('hex') } = {}) {
-  const byChat = new Map(); // chat id -> grant
+  const byId = new Map(); // grant id -> grant (one per turn; a chat may hold several while earlier turns' work still runs)
   return {
-    /** A new grant for the chat (any earlier one for it is replaced). `root` must already be a real path. */
+    /** A new grant for one turn of the chat. `root` is the chat folder, the default cwd. */
     grant(chatId, root, { ttlMs = GRANT_TTL_MS } = {}) {
-      const g = { id: makeId(), chatId: String(chatId), root, token: makeToken(), expiresAt: now() + ttlMs, reads: 0 };
-      byChat.set(g.chatId, g);
+      const g = { id: makeId(), chatId: String(chatId), root, token: makeToken(), expiresAt: now() + ttlMs };
+      byId.set(g.id, g);
       return { id: g.id, token: g.token, expiresAt: new Date(g.expiresAt).toISOString(), root };
     },
-    revoke(chatId) { return byChat.delete(String(chatId)); },
+    revoke(grantId) { return byId.delete(String(grantId)); },
+    /** Move a live grant's end to `untilMs` (his next message in the chat pushes the hard cap out). */
+    extend(grantId, untilMs) { const g = byId.get(String(grantId)); if (!g) return false; g.expiresAt = untilMs; return true; },
     /** The live grant this id and token name, else null; an expired one is removed on the way. */
     authorize(id, token) {
-      for (const g of byChat.values()) {
-        if (g.id !== String(id)) continue;
-        if (g.expiresAt <= now()) { byChat.delete(g.chatId); return null; }
-        const a = Buffer.from(String(token ?? '')), b = Buffer.from(g.token);
-        return a.length === b.length && timingSafeEqual(a, b) ? g : null;
-      }
-      return null;
+      const g = byId.get(String(id));
+      if (!g) return null;
+      if (g.expiresAt <= now()) { byId.delete(g.id); return null; }
+      const a = Buffer.from(String(token ?? '')), b = Buffer.from(g.token);
+      return a.length === b.length && timingSafeEqual(a, b) ? g : null;
     },
     /** What is granted now, without the tokens (for a status line). */
-    active() { return [...byChat.values()].map((g) => ({ id: g.id, chat: g.chatId, root: g.root, expiresAt: new Date(g.expiresAt).toISOString(), reads: g.reads })); }
+    active() { return [...byId.values()].map((g) => ({ id: g.id, chat: g.chatId, root: g.root, expiresAt: new Date(g.expiresAt).toISOString() })); }
   };
 }
 
-/** The listing or text of one path under the grant's folder. Throws GrantError (403 outside the folder or a credential, 404 absent, 429 over the read cap). */
-export async function readUnderGrant(grant, requested) {
-  if (grant.reads >= MAX_READS) throw new GrantError('read limit for this turn reached', 429);
-  grant.reads += 1;
-  const rootReal = await realpath(grant.root);
-  const wanted = String(requested || '.').replace(/^~(?=\/|$)/u, '');
-  const joined = isAbsolute(wanted) ? wanted : join(rootReal, wanted);
-  let real;
-  try { real = await realpath(joined); } catch { throw new GrantError('no such path', 404); }
-  // Containment is on the real path: a `..` or a symlink that leaves the folder is the same refusal as naming the outside path.
-  if (real !== rootReal && !real.startsWith(rootReal + sep)) throw new GrantError('outside the folder this turn was granted', 403);
-  if (credential(real)) throw new GrantError('credential stores are never served', 403);
-  const s = await stat(real);
-  if (s.isDirectory()) {
-    const names = (await readdir(real, { withFileTypes: true })).filter((d) => !credential(join(real, d.name))).slice(0, MAX_ENTRIES);
-    return { kind: 'dir', path: real, entries: names.map((d) => (d.isDirectory() ? `${d.name}/` : d.name)) };
-  }
-  const handle = await open(real, 'r');
+const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+/** A path as he would type it: `~` is his home (his own paths, not a store: the one homedir() the lint allows here), a relative path is under the chat folder. */
+const place = (grant, p) => { const s = String(p || '.').replace(/^~(?=\/|$)/u, homedir()); return isAbsolute(s) ? resolve(s) : resolve(grant.root, s); };
+
+/** One append-only line per door call: { at, chat, grant, op, path|cwd, ..., exit }. */
+export async function logCall(logPath, line) {
+  if (!logPath) return;
+  await mkdir(dirname(logPath), { recursive: true });
+  await appendFile(logPath, JSON.stringify(line) + '\n');
+}
+
+/** A folder listing. */
+export async function listPath(grant, requested) {
+  const at = place(grant, requested);
+  let all;
+  try { all = await readdir(at, { withFileTypes: true }); } catch (cause) { throw new GrantError(cause.code === 'ENOTDIR' ? 'not a folder' : 'no such folder', cause.code === 'ENOTDIR' ? 400 : 404); }
+  return { path: at, entries: all.slice(0, MAX_ENTRIES).map((d) => (d.isDirectory() ? `${d.name}/` : d.name)), truncated: all.length > MAX_ENTRIES };
+}
+
+/** The bytes of one file, up to READ_BYTES (`truncated` marks the rest). */
+export async function catPath(grant, requested) {
+  const at = place(grant, requested);
+  let s;
+  try { s = await stat(at); } catch { throw new GrantError('no such file', 404); }
+  if (s.isDirectory()) throw new GrantError('that path is a folder', 400);
+  const handle = await open(at, 'r');
   try {
-    const buffer = Buffer.alloc(Math.min(s.size, MAX_BYTES));
+    const buffer = Buffer.alloc(Math.min(s.size, READ_BYTES));
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    const bytes = buffer.subarray(0, bytesRead);
-    if (bytes.includes(0)) return { kind: 'file', path: real, size: s.size, binary: true };
-    return { kind: 'file', path: real, size: s.size, mtime: s.mtimeMs, text: bytes.toString('utf8'), truncated: s.size > MAX_BYTES };
+    return { path: at, size: s.size, bytes: buffer.subarray(0, bytesRead), truncated: s.size > READ_BYTES };
   } finally { await handle.close(); }
 }
 
-/** The command the home host runs to open the reverse path while a grant lives (not run by this module; the caller kills it when the grant ends). */
+/** Replace or create one file (temp + rename, mode kept, parent folders made). */
+export async function writePath(grant, requested, bytes) {
+  if (!requested) throw new GrantError('a path is required', 400);
+  let at = place(grant, requested);
+  try { at = await realpath(at); } catch { /* a new file */ }
+  let mode = null;
+  try { const s = await stat(at); if (s.isDirectory()) throw new GrantError('that path is a folder', 400); mode = s.mode & 0o7777; } catch (cause) { if (cause instanceof GrantError) throw cause; }
+  await mkdir(dirname(at), { recursive: true });
+  const tmp = `${at}.door-${process.pid}-${Date.now()}.tmp`;
+  await writeFile(tmp, bytes, mode != null ? { mode } : {});
+  await rename(tmp, at);
+  return { kind: 'written', path: at, bytes: bytes.length, sha256: sha(bytes) };
+}
+
+/**
+ * Run one command as this user with this server's environment. `argv` (array, no shell) or `shell` (a string for /bin/bash -c); `cwd`
+ * defaults to the chat folder. Timeout (default 120 s, cap 10 min) kills the process group; stdout and stderr are kept up to
+ * EXEC_OUTPUT_BYTES together (`truncated` marks a cut). `onSpawn(child)` lets the door kill it when the grant ends.
+ */
+export async function execCommand(grant, { argv = null, shell = null, cwd = null, timeoutMs = EXEC_TIMEOUT_MS } = {}, { onSpawn = () => {}, env = process.env } = {}) {
+  const hasArgv = Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === 'string');
+  const hasShell = typeof shell === 'string' && shell.trim() !== '';
+  if (hasArgv === hasShell) throw new GrantError('give exactly one of argv (an array of strings) or shell (a string)', 400);
+  const dir = place(grant, cwd || '.');
+  try { if (!(await stat(dir)).isDirectory()) throw new Error(); } catch { throw new GrantError('cwd is not a folder', 400); }
+  const limit = Math.min(Math.max(Number(timeoutMs) || EXEC_TIMEOUT_MS, 1000), EXEC_TIMEOUT_CAP_MS);
+  const [cmd, args] = hasArgv ? [argv[0], argv.slice(1)] : ['/bin/bash', ['-c', shell]];
+  const started = Date.now();
+  const kept = []; let keptBytes = 0, truncated = false, timedOut = false;
+  const result = await new Promise((done) => {
+    let child;
+    try { child = spawn(cmd, args, { cwd: dir, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true }); }
+    catch (cause) { done({ exit: null, signal: null, error: cause.message }); return; }
+    onSpawn(child);
+    const take = (stream) => (chunk) => {
+      const room = EXEC_OUTPUT_BYTES - keptBytes;
+      if (room <= 0) { truncated = true; return; }
+      const part = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      if (part.length < chunk.length) truncated = true;
+      kept.push({ stream, part }); keptBytes += part.length;
+    };
+    child.stdout.on('data', take('stdout')); child.stderr.on('data', take('stderr'));
+    const timer = setTimeout(() => { timedOut = true; try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } } }, limit);
+    child.on('error', (e) => { clearTimeout(timer); done({ exit: null, signal: null, error: e.message }); });
+    child.on('close', (code, signal) => { clearTimeout(timer); done({ exit: code, signal }); });
+  });
+  const text = (which) => Buffer.concat(kept.filter((k) => k.stream === which).map((k) => k.part)).toString('utf8');
+  return { kind: 'exec', cwd: dir, exit: result.exit, signal: result.signal || null, timedOut, ms: Date.now() - started,
+    stdout: text('stdout'), stderr: text('stderr'), truncated, ...(result.error ? { error: result.error } : {}) };
+}
+
+/** The command the home host runs to open the reverse path while a grant lives (the caller kills it when the grant ends). */
 export function reverseTunnelArgv({ teamHost, remotePort, localPort }) {
   if (!/^[A-Za-z0-9._-]+(@[A-Za-z0-9._-]+)?$/u.test(String(teamHost || ''))) throw new Error('a team host name is required');
   for (const p of [remotePort, localPort]) if (!Number.isInteger(p) || p < 1024 || p > 65535) throw new Error('ports must be unprivileged integers');

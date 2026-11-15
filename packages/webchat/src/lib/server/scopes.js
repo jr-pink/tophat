@@ -75,7 +75,9 @@ export function registryApi(source, api = registryModule) {
     accountsFor: (identity) => api.accountsFor(identity, current()),
     canAccess: (account, scope) => api.canAccess(account, scope, current()),
     listScopes: (account) => api.listScopes(account, current()).map((entry) => ({ ...entry, openness: opennessFor(entry.id) })),
-    opennessOf: opennessFor
+    opennessOf: opennessFor,
+    // One scope's registry entry ({ id, kind, label, everyone, ... }) or null: what a machine caller with no account is checked against.
+    entry: (id) => scopeEntry(id)
   };
 }
 
@@ -351,6 +353,7 @@ export function createScopeService({
     enabled, defaultScope, config,
     contextFor, canAccess, canSee, seerFor, assertCanSee, scopeOf, scopeForNewChat, backfill,
     rulesFor, setRules, move, resumePending,
+    scopeEntry: (scope) => (enabled ? registry.entry?.(scope) ?? null : null),
     personalOf: (account) => personalScopeOf(account),
     isPersonal: isPersonalScope,
     accountOfPersonal

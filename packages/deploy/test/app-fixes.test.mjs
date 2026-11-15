@@ -196,11 +196,3 @@ test('the log-first store folds the same rule', async () => {
   } finally { await store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ASSEMBLY.json is export-ignored (it names the private source layout), so a clean release tree has none.
-test('the assembly record names the context hook and carries no hand edits of the fixed modules', { skip: !existsSync(path.join(WORKSPACE, 'ASSEMBLY.json')) && 'no ASSEMBLY.json in a release tree' }, () => {
-  const m = JSON.parse(readFileSync(path.join(WORKSPACE, 'ASSEMBLY.json'), 'utf8'));
-  assert.ok(m.files['packages/webchat/scripts/context-hook.mjs'], 'the hook is part of the assembly');
-  for (const f of ['core/contract.js', 'core/model-route.js', 'server/store.js', 'server/store-shared.js', 'server/log-store.js']) {
-    assert.equal(m.files[`packages/webchat/src/lib/${f}`]?.kind, 'transformed', `${f} carries its assembly transform`);
-  }
-});

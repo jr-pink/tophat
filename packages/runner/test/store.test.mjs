@@ -181,7 +181,7 @@ test('the assembled callers reach this store, not a Python CLI', async () => {
   assert.equal(listed.tasks[0].title, 'through the assembled caller');
   // rev6/pull/tools.mjs needs the runner's npm dependencies to import, so the store wiring is read from its text.
   const tools = readFileSync(path.join(HERE, '../rev6/pull/tools.mjs'), 'utf8');
-  assert.match(tools, /installed: true, python: process\.execPath, cli: join\(REPO, 'store', 'cli\.mjs'\)/);
+  assert.match(tools, /installed: true, python: process\.execPath, cli: join\(repo, 'store', 'cli\.mjs'\)/);
   assert.ok(existsSync(path.join(HERE, '../store/cli.mjs')));
 });
 

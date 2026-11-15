@@ -21,5 +21,5 @@ export function scopeGate() {
   const registry = registryFromFile(cfg.registryFile);
   registry(); // fail at boot, not on the first request, if the file is unreadable
   loadRegistry(cfg.registryFile); // the default registry other modules (the scope binding) import
-  return (memo = makeScopeGate({ authBase: cfg.authBase, orgDomain: cfg.orgDomain, publicBase: cfg.publicBase, registry }));
+  return (memo = makeScopeGate({ authBase: cfg.authBase, orgDomain: cfg.orgDomain, publicBase: cfg.publicBase, cookieName: cfg.cookieName || undefined, registry }));
 }

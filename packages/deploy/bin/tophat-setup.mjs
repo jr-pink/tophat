@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // tophat setup | chat | graph: the first-run path of a local instance.
-//   tophat setup [--name me] [--owner LABEL] [--email ADDR] [--port 4178] [--key-file PATH | --key-env NAME]
+//   tophat setup [--name me] [--branch NAME | --no-branch] [--owner LABEL] [--email ADDR] [--port 4178] [--key-file PATH | --key-env NAME]
 //                [--model ID] [--base-url URL] [--workspace-id-file PATH] [--config FILE] [--no-confine]
 //                [--no-install] [--no-start] [--rebuild] [--force]
 //       npm install and the webchat build when missing, the instance file (default ~/.config/tophat/<name>/tophat.instance.json),
@@ -24,7 +24,7 @@ try {
   if (cmd === 'setup') {
     const o = { name: flag('--name'), owner: flag('--owner'), email: flag('--email'), port: flag('--port'), keyFile: flag('--key-file'), keyEnv: flag('--key-env'),
       model: flag('--model'), baseUrl: flag('--base-url'), workspaceIdFile: flag('--workspace-id-file'), config: flag('--config'),
-      confine: !has('--no-confine'), install: !has('--no-install'), start: !has('--no-start'), rebuild: has('--rebuild'), force: has('--force') };
+      confine: !has('--no-confine'), install: !has('--no-install'), start: !has('--no-start'), rebuild: has('--rebuild'), force: has('--force'), branch: has('--no-branch') ? false : flag('--branch') };
     if (args.length) die(`unknown arguments: ${args.join(' ')}`);
     const r = await setup(o);
     out(r);

@@ -1,13 +1,14 @@
 // Memory ownership for a chat hosted on a peer.
 //
-// The team host never records a member's words as its memory (rev6/base/writer-scope.mjs). Nothing else writes them, because no local
-// run happened here. Each turn end appends the new rows of the hosted chat to the outbox (append-only, one JSON line per row, ids
-// keyed by chat and cursor so a replay is a no-op) and, when an ingest is configured, hands them to his store; the per-chat cursor
-// moves only after the outbox write, so a failed write is retried at the next turn end.
+// The team host never records a member's words as its memory (rev6/base/writer-scope.mjs). Nothing else writes them, because no local run
+// happened here. Each turn end appends the new rows of the hosted chat to the outbox (append-only, one JSON line per row, ids keyed by chat
+// and cursor so a replay is a no-op) and, when an ingest is configured, hands them to his store; the per-chat cursor moves only after the
+// outbox write, so a failed write is retried at the next turn end.
 //
 // A row is raw memory, which the store files under this instance's own group (his personal scope); the group it is shared to by
 // default (the host's `group` in hosts.json) rides in the row's locator as `share_to`, where the consolidation step that derives notes
-// reads it and applies `groups`. A message someone else typed on the host (itemId rt:...) is not his and is not written.
+// reads it and applies `groups`. A message someone else typed on the host is stored here with writer scope `peer` (an older build gave it an
+// `rt:` item id); either way it is not his and is not written.
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { isAutomatedEvent, unseeded } from '../core/automated-event.js';

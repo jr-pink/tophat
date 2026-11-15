@@ -6,9 +6,9 @@ Every component of tophat and whether it ships. "ships" = in this workspace with
 
 | component | status | notes |
 |---|---|---|
-| TenantStore (groups, roles, per-row ACLs, append-only notes, action log, per-viewer CNF page cache, links) | ships, vendored | copied from upstream; the content screen is config `screens` |
-| policy, crypto, sync, hub | ships, vendored | hub service name `tophat-hub` (one transform) |
-| the memory store TenantStore subclasses (store, common, identity, pages, schema) | ships, vendored | no default store path (pass a file or `LINKNOTES_DB`); native roster paths for group names are env-configured, empty by default |
+| TenantStore (groups, roles, per-row ACLs, append-only notes, action log, per-viewer CNF page cache, links) | ships | the content screen is config `screens` |
+| policy, crypto, sync, hub | ships | hub service name `tophat-hub` |
+| the memory store TenantStore subclasses (store, common, identity, pages, schema) | ships | no default store path (pass a file or `LINKNOTES_DB`); native roster paths for group names are env-configured, empty by default |
 | private-people blocklist | ships | the shipped roster is `[]`; the blocklist is config (`people` / `peopleFile`) |
 | owner name in prompts | replaced | from `LINKNOTES_OWNER_NAME`, default "the owner" |
 | graph viewer (`/graph`) | ships, optional | `packages/viewer`, below: it runs in the browser over the ciphertext log, so the hub serves static files and never plaintext |
@@ -79,7 +79,7 @@ The one service shipped is the hub (`tophat-linknotes hub serve`, service name `
 
 | component | status | notes |
 |---|---|---|
-| tokenizer, document frequency, rare terms; ranking | ships, vendored | |
+| tokenizer, document frequency, rare terms; ranking | ships | |
 | corpus registry + `refresh` + `ask` (reciprocal-rank fusion) | ships | |
 | built-in corpora | ships | `linknotes` (the store through the interface), `files` (a text directory in SQLite FTS5, incremental); register more with `registerCorpus` |
 
@@ -114,7 +114,7 @@ The one service shipped is the hub (`tophat-linknotes hub serve`, service name `
 | component | status | notes |
 |---|---|---|
 | `fuzzParties` (multi-party visibility, page and byte-leak property across replicas through one hub, one user on two devices), `differential` (one user's origin and second replica after hub sync read the same: entities, notes, pages, search), CLI `tophat-verify` | ships | the two former core issues (concurrent share divergence, equal-`at` order) are now ordinary passing tests; `differential({ concurrent: true })` exercises the first |
-| model checks, differential and mutation testing of the vendored core | upstream | they test the vendored files where they are maintained |
+| model checks, differential and mutation testing of the replicated core | ships | they test the files here |
 
 ## Groups (`packages/groups`), optional
 
@@ -126,7 +126,7 @@ The one service shipped is the hub (`tophat-linknotes hub serve`, service name `
 | facet re-ranking through an injected `rankFacets`, tiered layout `allocate`, `render`, `buildPage` | ships | model calls are injected; tests use deterministic stubs |
 | `memoryLog` (in-process PageNode log) | ships | the `append` / `list` interface a replicated log implements; kept for pure tests |
 | `storeLog(store)`: the same interface over a replica (`putPageNode` / `pageNodes`) | ships | page nodes replicate like notes; the store re-derives the audience and refuses scopes outside it, so `publish`'s check is a pre-filter |
-| PageNode as a record kind in the replicated store log | ships | vendored core `mc_pagenodes`: derived, never a note; `apply` refuses a source ref naming a page node |
+| PageNode as a record kind in the replicated store log | ships | core `mc_pagenodes`: derived, never a note; `apply` refuses a source ref naming a page node |
 
 ## The component manifest and instances (`tophat.components.json`, `packages/deploy`), ships
 
