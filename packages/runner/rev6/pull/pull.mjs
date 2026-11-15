@@ -16,7 +16,7 @@ import { modelFor } from './wire.mjs';
 import { providersAvailable, resolveCredentials } from './credentials.mjs';
 import { buildMessages, compactionCut, ledgerPath, openLedger } from './ledger.mjs';
 import { DATES_RULE, baselinePrompt, contextBlock, createInstructions, imageBlocksFor, landedImageBlocks, liveBlock, publicPrompt, rootSystem, withLiveContext } from './context.mjs';
-import { continuationDecision, openGoals } from './goals.mjs';
+import { continuationDecision, continuationMessage, openGoals } from './goals.mjs';
 import { agentEnv, createTools, memoryCli, memoryStore, receiptComplete, rootAgentId, searchDeps, warmMemoryStore } from './tools.mjs';
 import { createAgents } from './agents.mjs';
 import { BACKGROUND_CALL_NOTE, BACKGROUND_CANCEL_MARK, BACKGROUND_FORK_NOTE, BACKGROUND_MARK, BACKGROUND_NOTE, BACKGROUND_TURN_PREFIX, backgroundGist, backgroundMinGeneratingMs, backgroundReportText,
@@ -271,10 +271,37 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     state.settleTimer = setTimeout(() => { state.settleTimer = null; wakeForAgents(); }, AGENT_SETTLE_WAKE_MS);
     state.settleTimer.unref?.();
   }
+  // The wake is retried while it keeps failing to start, so a transient error never strands a finished child's report.
+  const WAKE_RETRY_MS = 5_000, WAKE_RETRY_MAX = 6;
   function wakeForAgents() {
     if (!agents || state.stopped || state.restarting || !state.started || state.turn || state.running) return;
-    try { if (!agents.pendingReports()) return; const blocks = jobBlocks(); if (blocks.length) wakeTurn(blocks, 'a subagent finished'); }
-    catch (error) { process.stderr.write(`[rev6 pull] subagent wake failed: ${error.message}\n`); }
+    const taken = { agentIds: [], jobIds: [] };
+    try {
+      if (agents.pendingReports()) {
+        const blocks = jobBlocks();
+        taken.agentIds = [...cause.agentIds]; taken.jobIds = [...cause.jobIds];
+        if (blocks.length) { state.wakeFailures = 0; state.goalsDeferred = null; return wakeTurn(blocks, 'a subagent finished'); }
+        return undefined;
+      }
+      // No report is owed, yet the last turn ended with goal items open only because a subagent was still running (it expected that
+      // child's report to wake the chat). The child has ended and the report was already taken (delivered by agent_wait, or a stale
+      // stamp): nothing else will hand the turn back, so hand it back here.
+      if (state.goalsDeferred && !agents.running().length) {
+        const items = (goals ? goals.read().items : []).filter((i) => i.status === 'todo' && !i.waiting_until);
+        state.goalsDeferred = null;
+        if (items.length) { const blocks = [contextBlock('Continuation', continuationMessage(items))]; return wakeTurn(blocks, 'a subagent ended while goal items stayed open'); }
+      }
+    } catch (error) {
+      process.stderr.write(`[rev6 pull] subagent wake failed: ${error.message}\n`);
+      // The reports were stamped delivered when they were read for the wake; give them back and try again shortly.
+      try { agents.redeliver(taken.agentIds); tools.jobs.redeliver?.(taken.jobIds); } catch (e2) { process.stderr.write(`[rev6 pull] reports not handed back after a failed wake: ${e2.message}\n`); }
+      state.wakeFailures = (state.wakeFailures || 0) + 1;
+      if (state.wakeFailures <= WAKE_RETRY_MAX && !state.stopped && !state.settleTimer) {
+        state.settleTimer = setTimeout(() => { state.settleTimer = null; wakeForAgents(); }, WAKE_RETRY_MS * state.wakeFailures);
+        state.settleTimer.unref?.();
+      }
+    }
+    return undefined;
   }
 
   function intake(texts, kind) {
@@ -325,6 +352,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
       // moved; `bg` is set when it is; `opts` is the runAgent options object, whose sessionId is retargeted then.
       sid: sessionId, bg: null, opts: null, first, fromSeq, streaming: false, streamText: '', live: createLiveView(), gen: { since: null, last: null, ms: 0 }, calls: null, wakes: new Set(), log: [], snap: null, diffs: [] };
     if (holder) holder.turn = thisTurn;
+    state.goalsDeferred = null; // set again only if this turn's end defers its open goals to a running subagent
     const out = (p) => { if (!thisTurn.bg && !thisTurn.abandoned) emit(p); };
     const lastOwnerSeq = ledger.lastOwnerSeq(sessionId);
     let ownerCursor = Math.min(fromSeq, lastOwnerSeq ? lastOwnerSeq - 1 : fromSeq), prefetchStarted = false, measuredGeneration = 0, requestStart = 0, said = false, cacheRead = 0, cacheWrite = 0;
@@ -508,6 +536,8 @@ export function createRunner({ args, env = process.env, write = (line) => proces
           const decision = continuationDecision({ ledger: ledgerState, text, consecutive: sinceProgress, total: continuations, ownerWaiting: state.queue.length > 0, interrupted: thisTurn.interrupted,
             worked: callsThisTurn, workersRunning: agents ? agents.running().length : 0, looseEndsChecked, toolsAvailable: tools.specs.length > 0 });
           goalStop = decision.reason;
+          // Open items kept open only because a subagent is running: its end must hand the turn back (wakeForAgents), report or not.
+          state.goalsDeferred = !decision.continue && /subagents? (?:is|are) still running/.test(decision.reason) ? { at: now() } : null;
           if (decision.continue) {
             if (decision.loose) looseEndsChecked = true; else { continuations += 1; sinceProgress += 1; }
             out({ type: 'system', subtype: 'status', status: 'continuing', reason: decision.reason, goal_items: decision.items.map((i) => `${i.id}: ${i.text}`), continuation: continuations });
