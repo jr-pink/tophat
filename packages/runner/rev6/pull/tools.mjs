@@ -277,6 +277,8 @@ export function createJobs(db, { sessionId, cwd, env = process.env, now = () => 
       for (const r of rows) stamp.run(now(), r.id);
       return rows.map(describe);
     },
+    /** Hand job reports back that were taken for a wake which then failed to start. */
+    redeliver(ids) { const un = db.prepare('UPDATE jobs SET delivered_at = NULL WHERE id = ? AND session_id = ?'); for (const id of ids || []) un.run(id, sessionId); },
     running() { return db.prepare("SELECT id, tool, started_at FROM jobs WHERE session_id = ? AND status = 'running'").all(sessionId); },
     stopAll() {
       for (const [id, entry] of live) {

@@ -24,6 +24,9 @@ export function agentLimits(env = process.env) {
   return { concurrent: n('TOPHAT_RUNNER_AGENT_MAX_CONCURRENT', 6), perConversation: n('TOPHAT_RUNNER_AGENT_MAX_PER_CONVERSATION', 40), waitMs: n('TOPHAT_RUNNER_AGENT_WAIT_MS', 30 * 60_000),
     depth: n('TOPHAT_RUNNER_AGENT_DEPTH', 1), resultChars: n('TOPHAT_RUNNER_AGENT_RESULT_CHARS', 12_000), maxTokens: n('TOPHAT_RUNNER_AGENT_MAX_TOKENS', 32_000), checkInMs: checkInInterval(env) };
 }
+// A report is owed when it was never delivered, or when the run ended after the last delivery (a stale stamp from an earlier run of a
+// resumed child); belt and braces beside the stamp cleared at launch.
+export const UNDELIVERED = '(delivered_at IS NULL OR (ended_at IS NOT NULL AND delivered_at < ended_at))';
 export const saidDuration = (ms) => { const s = Math.max(0, Math.round(Number(ms) / 1000)); return s < 90 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; };
 export function checkInDue(row, atMs, defaultMs = 180_000) {
   if (!row || row.status !== 'running') return null;
@@ -153,7 +156,10 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
   function start(id) {
     const entry = live.get(id);
     entry.running = true;
-    q("UPDATE agents SET status = 'running', ended_at = NULL, owner_pid = ? WHERE id = ?").run(process.pid, id);
+    // A run's end is delivered once per run: a resumed child (agent_send on a finished one, a restart relaunch) must report again, so the
+    // previous run's delivery stamp goes with its ended_at. Kept stamped, the second report was "already delivered" and never woke the
+    // parent (agent_887d19e8, 2026-11-15: finished 08:45Z, parent not woken until 19:49Z).
+    q("UPDATE agents SET status = 'running', ended_at = NULL, delivered_at = NULL, owner_pid = ? WHERE id = ?").run(process.pid, id);
     entry.promise = run(id).catch((error) => { finish.run('failed', `[runner error: ${error.message}]`, null, null, 0, now(), null, id); live.delete(id); for (const w of entry.waiters) w(); settledNow(id); });
   }
   const launch = (id) => { live.set(id, { controller: new AbortController(), waiters: [], queue: [], running: false }); start(id); };
@@ -275,13 +281,15 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
         .finally(() => { entry.running = false; live.delete(id); for (const w of entry.waiters) w(); settledNow(id); });
       return { agent_id: id, signal: entry.controller.signal, queue: entry.queue };
     },
-    pendingReports() { return q("SELECT COUNT(*) AS n FROM agents WHERE parent_session = ? AND status != 'running' AND delivered_at IS NULL").get(parentSessionId).n; },
+    pendingReports() { return q(`SELECT COUNT(*) AS n FROM agents WHERE parent_session = ? AND status != 'running' AND ${UNDELIVERED}`).get(parentSessionId).n; },
     undelivered() {
-      const rows = q("SELECT * FROM agents WHERE parent_session = ? AND status != 'running' AND delivered_at IS NULL ORDER BY ended_at").all(parentSessionId);
+      const rows = q(`SELECT * FROM agents WHERE parent_session = ? AND status != 'running' AND ${UNDELIVERED} ORDER BY ended_at`).all(parentSessionId);
       const stamp = q('UPDATE agents SET delivered_at = ? WHERE id = ?');
       for (const row of rows) stamp.run(now(), row.id);
       return rows.map(describe);
     },
+    /** Hand reports back that were taken for a wake which then failed to start, so the next wake carries them. */
+    redeliver(ids) { const un = q('UPDATE agents SET delivered_at = NULL WHERE id = ? AND parent_session = ?'); for (const id of ids || []) un.run(id, parentSessionId); },
     running() { return q("SELECT id, description, created_at FROM agents WHERE parent_session = ? AND status = 'running'").all(parentSessionId); },
     checkIns() {
       const at = now(), atMs = Date.parse(at), due = [];

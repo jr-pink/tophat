@@ -54,6 +54,11 @@ export function reflowTitle(existing, proposed, { max = MAX_SEGMENTS } = {}) {
   return title === existing ? null : title;
 }
 
+// What the titler names chats by: 'subjects', what each chat is about, for searching the sidebar later, or 'actions',
+// what each chat is doing now, refreshed while it works (server/autotitle.js). Set from the menu (core/title-style.js).
+export const TITLE_STYLES = Object.freeze(['subjects', 'actions']);
+export const DEFAULT_TITLE_STYLE = 'subjects';
+
 export const RETITLE_INTERVAL_MS = 60 * 60 * 1000;
 
 export function shouldTitle({ turns, titledAtTurn = 0, titledAt = 0, now = Date.now(), interval = RETITLE_INTERVAL_MS }) {
