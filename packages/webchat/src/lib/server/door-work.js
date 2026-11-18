@@ -4,7 +4,9 @@
 //   turn    the chat's runner is busy and his latest message in it carries this grant (the turn itself, or a wake of it by a report)
 //   agents  subagents and background turns tagged with the grant and still running
 //   jobs    background jobs tagged with it and still running
-// A row from before the tag existed (door NULL) in this chat's session tree counts for every grant of the chat: kept open, never cut.
+// Any running row in this chat's session tree counts for every grant of the chat, tagged or not: a subagent is handed each newer door but is tagged
+// only with the grant of the turn that spawned it, so when that grant closed every later grant read "not live" and cut the agent off mid-work.
+// The tag still matches a row of this grant outside the tree.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
 import { DOOR_TOOL_PATTERN, doorOf } from '../../../../runner/rev6/base/door-tag.mjs';
@@ -26,10 +28,10 @@ export function doorWork({ ledgerPath, sessionId, grant, busy = false, open = (p
     }
     const tree = sessionId ? `${sessionId}/agent/%` : '\u0000';
     const tagged = hasColumn(db, 'agents', 'door');
-    out.agents = db.prepare(`SELECT id FROM agents WHERE status = 'running' AND (${tagged ? 'door = ? OR ' : ''}(${tagged ? 'door IS NULL AND ' : ''}(parent_session = ? OR parent_session LIKE ?)))`)
+    out.agents = db.prepare(`SELECT id FROM agents WHERE status = 'running' AND (${tagged ? 'door = ? OR ' : ''}(parent_session = ? OR parent_session LIKE ?))`)
       .all(...(tagged ? [grant] : []), sessionId || '\u0000', tree).map((r) => r.id);
     const jobsTagged = hasColumn(db, 'jobs', 'door');
-    out.jobs = db.prepare(`SELECT id FROM jobs WHERE status = 'running' AND (${jobsTagged ? 'door = ? OR ' : ''}(${jobsTagged ? 'door IS NULL AND ' : ''}(session_id = ? OR session_id LIKE ?)))`)
+    out.jobs = db.prepare(`SELECT id FROM jobs WHERE status = 'running' AND (${jobsTagged ? 'door = ? OR ' : ''}(session_id = ? OR session_id LIKE ?))`)
       .all(...(jobsTagged ? [grant] : []), sessionId || '\u0000', tree).map((r) => r.id);
   } catch (cause) {
     // Unreadable: say live, so the home host keeps the door rather than cutting work off (its 2 h cap still ends it).

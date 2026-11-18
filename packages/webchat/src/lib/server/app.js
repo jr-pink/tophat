@@ -362,8 +362,6 @@ function build() {
     store,
     rename: (id, title) => store.append(id, 'conversation.renamed', { title, auto: true }, { at: new Date().toISOString() })
   });
-  // Action titles follow a chat's activity as it is written, not only the end of its turn (autotitle.js).
-  store.subscribe((event) => titler.observe(event));
   // Files an unfiled chat into one of his existing folders, or leaves it in Inbox (autoroute.js).
   if (!process.env.VITEST && !bootIsBuild()) startFolderDescriptions(() => store.conversations());
   const folderRouter = createRouter({

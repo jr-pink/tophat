@@ -268,15 +268,36 @@ export function createRemoteRuntimes({
   // ---- which host answers a send ------------------------------------------------------------------------------------
 
   const twinOf = (id) => twins[id] || null;
+  /** A twin whose chat moved to another host while its turn ran: kept under this key until that turn ends. */
+  const retiredKey = (id, twin) => `${id}@${twin.runtime}`;
+  const retiredOf = (id) => Object.keys(twins).filter((k) => k.startsWith(`${id}@`));
   const isRemoteBusy = (id) => Boolean(twins[id]?.busy || twins[id]?.pending?.length);
 
-  /** { runtime, reason } for a send now: null runtime = this host. Never by content: only the chat's host, or a twin mid-run. */
+  /**
+   * { runtime, reason } for a send now: null runtime = this host. Never by content: the chat's host decides, also mid-turn. A send after he
+   * switched host goes to the new host; the turn already running on the old one runs on in the background and its output still lands here
+   * (a remote twin keeps its stream; a local run keeps writing). The one exception: a chat has one remote twin, so while a turn runs on one
+   * peer a send for a different peer stays with the running one (its stream would otherwise be cut and its output lost).
+   */
   function route(id, { localBusy = false } = {}) {
     const conversation = store.conversation(id);
     if (!conversation) return { runtime: null, reason: 'unknown conversation' };
     const twin = twinOf(id);
-    if (twin && isRemoteBusy(id)) return { runtime: twin.runtime, reason: 'a remote turn is in progress; it is not moved mid-turn' };
-    if (localBusy) return { runtime: null, reason: 'a local turn is in progress; it is not moved mid-turn' };
+    const chosen = chosenRoute(id, conversation, twin);
+    if (twin && isRemoteBusy(id)) {
+      if (chosen.runtime === twin.runtime) return { runtime: twin.runtime, reason: 'a turn is in progress on the chat\'s host; the message joins it' };
+      if (chosen.runtime) return { runtime: chosen.runtime, reason: `switched to ${labelOf(chosen.runtime)} mid-turn; the turn on ${labelOf(twin.runtime)} runs on in the background` };
+      return { runtime: null, reason: `switched to this host mid-turn; the turn on ${labelOf(twin.runtime)} runs on in the background` };
+    }
+    if (localBusy) {
+      if (!chosen.runtime) return { runtime: null, reason: 'a local turn is in progress; the message joins it' };
+      return { ...chosen, reason: `switched to ${labelOf(chosen.runtime)} mid-turn; the local turn runs on in the background` };
+    }
+    return chosen;
+  }
+
+  /** Where the chat runs when nothing is in flight: its host, a side thread's parent host, or here. */
+  function chosenRoute(id, conversation, twin) {
     const host = conversation.host || null;
     // A side thread runs where its parent runs: the parent's session (the transcript the model saw and the prompt cache over it)
     // lives in that host's ledger, so a fork anywhere else starts with an empty context.
@@ -391,7 +412,13 @@ export function createRemoteRuntimes({
 
   function sendRemote(id, wire, { itemId, display = wire, runtimeId, reason }) {
     let twin = twins[id];
-    if (twin && twin.runtime !== runtimeId) { detach(id); twin = null; } // the chat moved to another host: a new twin there, the old chat stays where it is
+    if (twin && twin.runtime !== runtimeId) {
+      // The chat moved to another host: a new twin there. A turn still running on the old host runs on in the background: its twin is kept
+      // under its own key with its own stream, so its output keeps landing here (the same as a local turn left running).
+      detach(id);
+      if (twin.busy && twin.remoteId && !twin.pending.length) { twins[retiredKey(id, twin)] = twin; delete twins[id]; attach(retiredKey(id, twin)); }
+      twin = null;
+    }
     if (!twin) twin = twins[id] = newTwin(runtimeId, id);
     if (twin.sentIds.includes(itemId) || twin.pending.some((p) => p.itemId === itemId)) return { queued: false, injected: false, duplicate: true };
     if (twin.localSeen == null) twin.localSeen = store.cursor();
@@ -548,6 +575,11 @@ export function createRemoteRuntimes({
     if (twin.pending.length) return; // a message still waiting to be forwarded keeps the chat busy
     twin.busy = false; twin.running = false;
     twin.remoteSeen = store.cursor();
+    if (twins[id] !== twin) { // a turn that ran on in the background after the chat moved host: its stream and twin are done
+      const key = retiredKey(id, twin);
+      if (twins[key] === twin) { detach(key); delete twins[key]; save(); decide({ event: 'twin-released', chat: id, runtime: twin.runtime, background: true }); }
+      return;
+    }
     // The door back into this host stays open while this turn's work runs on the host (subagents, background turns, jobs it started)
     // and closes after a grace once none is left (host-door.js): the host is asked per grant, not about the chat as a whole.
     door?.turnEnded?.(id, { probe: (grant) => doorProbe(twin, grant) });
@@ -719,14 +751,15 @@ export function createRemoteRuntimes({
   }
 
   /** Keeps one stream per chat that has a chat on a host; reconnects with backoff, resuming from the stored cursor. Idempotent. */
-  function attach(id) {
-    const twin = twins[id];
-    if (!twin?.remoteId || streams.has(id)) return;
+  function attach(key) {
+    const twin = twins[key];
+    if (!twin?.remoteId || streams.has(key)) return;
+    const id = key.includes('@') && twin.conversationId ? twin.conversationId : key; // a retired twin is keyed chat@host
     const s = { stop: false, ctl: null, twin };
-    streams.set(id, s);
+    streams.set(key, s);
     (async () => {
       let delay = RECONNECT_MIN_MS;
-      while (!s.stop && twins[id] === twin) {
+      while (!s.stop && twins[key] === twin) {
         s.ctl = new AbortController();
         try { await consume(id, twin, s); delay = RECONNECT_MIN_MS; }
         catch (cause) {
@@ -748,7 +781,7 @@ export function createRemoteRuntimes({
         await sleep(delay);
         delay = Math.min(delay * 2, RECONNECT_MAX_MS);
       }
-      if (streams.get(id) === s) streams.delete(id);
+      if (streams.get(key) === s) streams.delete(key);
     })();
   }
 
@@ -768,8 +801,13 @@ export function createRemoteRuntimes({
     }
   }
 
+  /** Stop is total: the chat's own twin and any turn left running in the background on another host. */
   function interrupt(id) {
-    const twin = twins[id];
+    let any = false;
+    for (const key of [id, ...retiredOf(id)]) { if (interruptTwin(id, twins[key])) any = true; }
+    return any;
+  }
+  function interruptTwin(id, twin) {
     if (!twin || !(twin.busy || twin.pending.length)) return false;
     const label = labelOf(twin.runtime);
     const dropped = twin.pending.length;

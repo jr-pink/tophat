@@ -60,7 +60,7 @@ test('a new turn gets its own grant and never kills a command the earlier turn s
   assert.equal(s.doors.active()[0].turnLive, true);
 });
 
-test('the team host answers per grant from the runner ledger: the turn, tagged subagents and jobs; another grant does not count', (t) => {
+test('the team host answers per grant from the runner ledger: the turn, tagged subagents and jobs; a running one of the chat keeps every grant of the chat live', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'door-work-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const path = join(dir, 'runner.sqlite');
@@ -73,7 +73,11 @@ test('the team host answers per grant from the runner ledger: the turn, tagged s
   ledger.db.prepare("INSERT INTO agents (id, parent_session, session_id, status, created_at, door) VALUES ('agent_1', 's', 's/agent/agent_1', 'running', ?, 'ga')").run(at);
   ledger.db.prepare("INSERT INTO jobs (id, session_id, tool, input, status, started_at, door) VALUES ('job_1', 's', 'shell', '{}', 'running', ?, 'gc')").run(at);
   assert.deepEqual(doorWork({ ledgerPath: path, sessionId: 's', grant: 'gb', busy: true }).turn, true);
-  assert.deepEqual(doorWork({ ledgerPath: path, sessionId: 's', grant: 'ga', busy: true }), { grant: 'ga', live: true, turn: false, agents: ['agent_1'], jobs: [], why: '1 subagent(s)' });
+  assert.deepEqual(doorWork({ ledgerPath: path, sessionId: 's', grant: 'ga', busy: true }), { grant: 'ga', live: true, turn: false, agents: ['agent_1'], jobs: ['job_1'], why: '1 subagent(s), 1 job(s)' });
   assert.equal(doorWork({ ledgerPath: path, sessionId: 's', grant: 'gc' }).live, true);
+  assert.equal(doorWork({ ledgerPath: path, sessionId: 's', grant: 'gd' }).live, true); // a running row of the chat keeps every grant of it
+  ledger.db.prepare("UPDATE agents SET status = 'done'").run();
+  ledger.db.prepare("UPDATE jobs SET status = 'done'").run();
   assert.equal(doorWork({ ledgerPath: path, sessionId: 's', grant: 'gd' }).live, false);
+  assert.equal(doorWork({ ledgerPath: path, sessionId: 'other', grant: 'ga' }).live, false);
 });

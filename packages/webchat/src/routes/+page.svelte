@@ -18,7 +18,6 @@
   import { scopeForNewChat } from '$lib/core/scopes.svelte.js';
   import { pruneFolds } from '$lib/client/fold-store.js';
   import { documentTitle, automatedTitle } from '$lib/core/title.js';
-  import { queueStyle as queueTitleStyle, readStyle as readTitleStyle, sync as syncTitleStyle } from '$lib/core/title-style.js';
   import TabStrip from '$lib/ui/TabStrip.svelte';
   import { dropTarget, landingIndex } from '$lib/core/tab-drag.js';
   import { languageOf, warmTokens } from '$lib/core/highlight.js';
@@ -161,16 +160,12 @@
 
   const sidebarShown = $derived(wide ? !sidebarHidden : sidebarOpen);
   const navInSidebar = $derived(wide && sidebarShown);
-  let titleStyle = $state(readTitleStyle());
-  const refreshTitleStyle = () => syncTitleStyle().then((style) => { titleStyle = style; });
   const navItems = $derived([
     { id: 'chatlist', label: sidebarShown ? 'Hide chat list' : 'Show chat list' },
     { id: 'search', label: 'Search everything' },
     { id: 'incognito', label: 'Incognito chat' },
     
     { id: 'voice', label: 'Voice mode' },
-    // How the titler names chats (core/title-style.js): what each is about, or what each is doing now.
-    { id: 'titles', label: titleStyle === 'actions' ? 'Title chats by subject' : 'Title chats by current action' },
     { id: 'onboarding', label: 'Replay tour' }
   ]);
   let replayRequest = $state(0);
@@ -230,10 +225,6 @@
     if (id === 'incognito') newIncognitoChat();
     if (id === 'voice') paneRefs[layout.focused]?.openVoice?.();
     if (id === 'onboarding') replayRequest += 1;
-    if (id === 'titles') {
-      titleStyle = queueTitleStyle(titleStyle === 'actions' ? 'subjects' : 'actions');
-      refreshTitleStyle();
-    }
   }
 
   onMount(() => {
@@ -249,7 +240,6 @@
         chatInUrl: new URLSearchParams(location.search).get('chat'), opener: window.opener, seen
       }));
     } catch { /* storage refused: the list stays where it was */ }
-    refreshTitleStyle();
     const unsubscribeIncognito = incognito.session.subscribe((next, nextStatus) => {
       incognitoState = next;
       incognitoStatus = nextStatus;

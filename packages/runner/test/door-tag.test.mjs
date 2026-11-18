@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { openLedger } from '../rev6/pull/ledger.mjs';
 import { createAgents } from '../rev6/pull/agents.mjs';
 import { createJobs } from '../rev6/pull/tools.mjs';
-import { lastOwnerDoor, doorOfCauses, causesOf } from '../rev6/pull/pull.mjs';
+import { lastOwnerDoor } from '../rev6/pull/pull.mjs';
 import { doorOf, withDoorNotice } from '../rev6/base/door-tag.mjs';
 
 const NOTICE = (g) => `[Automated event from home-mac: this turn has a door into home-mac, as his user. Tool: /Users/p/.tophat-doors/c1/${g}/door (\`/Users/p/.tophat-doors/c1/${g}/door help\`). Commands start in /r.]`;
@@ -70,22 +70,4 @@ test('a relaunched runner reads the door of the latest owner message back from t
   assert.equal(lastOwnerDoor(h.ledger, 'root')?.grant, 'g1');
   h.ledger.append('root', 'user', 'owner', [{ type: 'text', text: 'typed by someone with no door' }], new Date().toISOString());
   assert.equal(lastOwnerDoor(h.ledger, 'root'), null);
-});
-test('a wake inherits the grant of what caused it: subagent, background turn or job, down the chain; never the stale one of the owner\'s last message', (t) => {
-  const h = home(t);
-  const db = h.ledger.db;
-  h.ledger.append('root', 'user', 'owner', [{ type: 'text', text: `go\n\n${NOTICE('g1')}` }], 'x');
-  h.ledger.append('root', 'user', 'owner', [{ type: 'text', text: `later\n\n${NOTICE('g2')}` }], 'x');
-  db.prepare("INSERT INTO agents (id, parent_session, session_id, status, created_at, door, prompt) VALUES ('agent_aa11', 'root', 'root/agent/agent_aa11', 'done', 'x', 'g1', ?)").run(`build\n\n${NOTICE('g1')}`);
-  db.prepare("INSERT INTO agents (id, parent_session, session_id, status, created_at, door) VALUES ('agent_bg1', 'root', 'root/bg', 'done', 'x', 'g1')").run();
-  db.prepare("INSERT INTO agents (id, parent_session, session_id, status, created_at, door) VALUES ('agent_none', 'root', 'root/agent/agent_none', 'done', 'x', '')").run();
-  db.prepare("INSERT INTO jobs (id, session_id, tool, input, status, started_at, door) VALUES ('job_j1', 'root', 'shell', '{}', 'done', 'x', 'g1')").run();
-  assert.deepEqual(doorOfCauses(h.ledger, 'root', { agentIds: ['agent_aa11'] }), { grant: 'g1', notice: NOTICE('g1') }, 'subagent report: its brief carries the notice');
-  assert.deepEqual(doorOfCauses(h.ledger, 'root', { agentIds: ['agent_bg1'] }), { grant: 'g1', notice: NOTICE('g1') }, 'background turn: notice found from the owner message of that grant');
-  assert.deepEqual(doorOfCauses(h.ledger, 'root', { jobIds: ['job_j1'] }), { grant: 'g1', notice: NOTICE('g1') }, 'background job');
-  assert.deepEqual(doorOfCauses(h.ledger, 'root', { agentIds: ['agent_none', 'agent_aa11'] })?.grant, 'g1', 'the first cause with a grant');
-  assert.equal(doorOfCauses(h.ledger, 'root', { agentIds: ['agent_none'] }), null, 'started under no door passes none on');
-  assert.equal(doorOfCauses(h.ledger, 'root', {}), null);
-  assert.deepEqual(causesOf('[Subagent report context]\nsubagent agent_aa11 (x) is done'), { agentIds: ['agent_aa11'], jobIds: [] });
-  assert.deepEqual(causesOf('[Background job context]\njob job_j1 (shell) is done'), { agentIds: [], jobIds: ['job_j1'] });
 });

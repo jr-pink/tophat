@@ -1023,8 +1023,7 @@ class Apply {
     for (const id of parents.keys()) {
       const seen = new Set(); let at = id;
       while (at !== null && at !== undefined) {
-        // A parent outside this replica's groups is unknown, not an error: partial replicas hold children whose parents live elsewhere.
-        if (!parents.has(at)) break;
+        if (!parents.has(at)) throw new StoreError(`dangling task parent ${at}`);
         if (seen.has(at)) throw new StoreError(`task parent cycle at ${at}`);
         seen.add(at); at = parents.get(at);
       }
