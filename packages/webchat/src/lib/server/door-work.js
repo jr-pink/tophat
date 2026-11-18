@@ -27,7 +27,7 @@ function inheritedGrant(db, sessionId, at) {
 }
 
 /** { live, turn, agents, jobs, why } for `grant` in the chat whose runner session is `sessionId`; `busy` is the runner's own answer. */
-export function doorWork({ ledgerPath, sessionId, grant, busy = false, open = (path) => new DatabaseSync(path, { readOnly: true }) }) {
+export function doorWork({ ledgerPath, sessionId, grant, busy = false, openGrants = null, holder = false, open = (path) => new DatabaseSync(path, { readOnly: true }) }) {
   const out = { grant, live: false, turn: false, agents: [], jobs: [], why: '' };
   if (!grant || !ledgerPath || !existsSync(ledgerPath)) return out;
   let db;
@@ -49,6 +49,18 @@ export function doorWork({ ledgerPath, sessionId, grant, busy = false, open = (p
       .all(...(jobsTagged ? [grant] : []), sessionId || '\u0000', tree).map((r) => r.id);
     if (jobsTagged) for (const r of db.prepare("SELECT id, started_at FROM jobs WHERE status = 'running' AND door = '' AND (session_id = ? OR session_id LIKE ?)").all(sessionId || '\u0000', tree)) {
       if (inheritedGrant(db, sessionId, r.started_at) === grant) out.jobs.push(r.id);
+    }
+    // The holder (the chat's newest open grant at the home host) also keeps what runs under a grant the home host no longer has open (its door
+    // closed by a restart of an older build, a cap, a failure): a running subagent or job is never left without a door while any grant of its chat is open.
+    if (holder && Array.isArray(openGrants)) {
+      const live = new Set(openGrants);
+      const orphan = (door, at) => { const g = door || inheritedGrant(db, sessionId, at); return Boolean(g) && !live.has(g); };
+      if (tagged) for (const r of db.prepare("SELECT id, created_at, door FROM agents WHERE status = 'running' AND (parent_session = ? OR parent_session LIKE ?)").all(sessionId || '\u0000', tree)) {
+        if (!out.agents.includes(r.id) && orphan(r.door, r.created_at)) out.agents.push(r.id);
+      }
+      if (jobsTagged) for (const r of db.prepare("SELECT id, started_at, door FROM jobs WHERE status = 'running' AND (session_id = ? OR session_id LIKE ?)").all(sessionId || '\u0000', tree)) {
+        if (!out.jobs.includes(r.id) && orphan(r.door, r.started_at)) out.jobs.push(r.id);
+      }
     }
   } catch (cause) {
     // Unreadable: say live, so the home host keeps the door rather than cutting work off (its 2 h cap still ends it).

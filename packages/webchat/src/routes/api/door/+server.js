@@ -20,6 +20,7 @@ export async function GET(event) {
     catch (cause) { return json({ error: `ledger unreadable (${cause.message})` }, { status: 503 }); }
   }
   if (!/^[A-Za-z0-9]{1,64}$/u.test(grant)) return json({ error: 'a grant id is required' }, { status: 400 });
-  const out = doorWork({ ledgerPath: runnerLedgerPath(), sessionId: conversation.sessionId || null, grant, busy: app.runner.isBusy(id) });
+  const out = doorWork({ ledgerPath: runnerLedgerPath(), sessionId: conversation.sessionId || null, grant, busy: app.runner.isBusy(id),
+    openGrants: event.url.searchParams.has('open') ? String(event.url.searchParams.get('open')).split(',').filter((g) => /^[A-Za-z0-9]{1,64}$/u.test(g)) : null, holder: event.url.searchParams.get('holder') === '1' });
   return json(out, { headers: { 'cache-control': 'no-store' } });
 }
