@@ -222,7 +222,7 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
       const turnDoor = door();
       const brief = withDoorNotice(prompt, turnDoor); // the turn's door line goes along, so the subagent can reach his host too
       q('INSERT INTO agents (id, parent_session, session_id, spawn_call, description, prompt, model, status, created_at, checkin_ms, owner_pid, caller, expected_minutes, door) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, parentSessionId, session, callId || null, String(description).slice(0, 200), brief, wanted || model, 'running', now(), checkinMs, process.pid, kind === 'search' ? 'subagent-search' : 'subagent-build', expectedMinutes, turnDoor?.grant || '');
+        .run(id, parentSessionId, session, callId || null, String(description).slice(0, 200), brief, wanted || model, 'running', now(), checkinMs, process.pid, kind === 'search' ? 'subagent-search' : 'subagent-build', expectedMinutes, turnDoor?.grant || doorOf(prompt)?.grant || '');
       ledger.ensureSession(session, { model: wanted || model, cwd, forkedFrom: parentSessionId, at: now() });
       ledger.append(session, 'user', 'owner', [{ type: 'text', text: brief }], now());
       launch(id);
@@ -239,6 +239,10 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
       if (entry?.running) { entry.queue.push(String(text)); return { agent_id: id, status: 'running', queued: true }; }
       if (['uncertain', 'cancelled', 'failed', 'done'].includes(row.status)) {
         if (runningCount() >= limits.concurrent) return { error: `${runningCount()} subagents are already running (limit ${limits.concurrent})` };
+        // A resumed subagent runs under the door of the turn resuming it (its first grant has most likely closed by now); the home host keeps
+        // that grant open while it runs.
+        const resumedDoor = door()?.grant || doorOf(text)?.grant;
+        if (resumedDoor && resumedDoor !== row.door) q('UPDATE agents SET door = ? WHERE id = ?').run(resumedDoor, id);
         ledger.append(row.session_id, 'user', 'owner', [{ type: 'text', text: String(text) }], now());
         launch(id);
         return { agent_id: id, status: 'running', resumed: true };

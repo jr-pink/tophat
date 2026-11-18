@@ -11,7 +11,8 @@ import { createJobs } from '../rev6/pull/tools.mjs';
 import { lastOwnerDoor, doorOfCauses, causesOf } from '../rev6/pull/pull.mjs';
 import { doorOf, withDoorNotice } from '../rev6/base/door-tag.mjs';
 
-const NOTICE = (g) => `[Automated event from home-mac: this turn has a door into home-mac, as his user. Tool: /Users/p/.tophat-doors/c1/${g}/door (\`/Users/p/.tophat-doors/c1/${g}/door help\`). Commands start in /r.]`;
+const NOTICE = (g) => `[Automated event from home-mac: this turn has a door into home-mac, as his user. Tool: /Users/p/.tophat-doors/c1/door (\`/Users/p/.tophat-doors/c1/door help\`). Commands start in /r. (door grant ${g}).]`;
+const LEGACY_NOTICE = (g) => `[Automated event from home-mac: this turn has a door into home-mac, as his user. Tool: /Users/p/.tophat-doors/c1/${g}/door (\`/Users/p/.tophat-doors/c1/${g}/door help\`). Commands start in /r.]`;
 
 function home(t) {
   const dir = mkdtempSync(join(tmpdir(), 'rev6-door-tag-'));
@@ -31,6 +32,36 @@ test('doorOf reads the grant and the whole notice line; a brief gets the line on
   assert.equal(withDoorNotice('build it', null), 'build it');
 });
 
+test('doorOf reads the one-path notice (grant in the notice) and the older per-grant path; words outside a notice name no grant', () => {
+  assert.equal(doorOf(NOTICE('abc123')).grant, 'abc123');
+  assert.equal(doorOf(`x ${LEGACY_NOTICE('old9')}`).grant, 'old9');
+  assert.equal(doorOf(LEGACY_NOTICE('old9')).notice, LEGACY_NOTICE('old9'));
+  assert.equal(doorOf('please use door grant zzz for this'), null, 'plain words are not a notice');
+  assert.equal(doorOf('[Automated event from x: nothing about a door]'), null);
+});
+
+test('a subagent resumed by agent_send runs under the grant of the turn resuming it, or of the notice in the message; one started with a brief that names a door is tagged by it', async (t) => {
+  const h = home(t);
+  let door = doorOf(`go\n\n${NOTICE('g1')}`);
+  const agents = createAgents({ ledger: h.ledger, parentSessionId: 'root', cwd: h.dir, env: {}, model: 'fake-model', now: () => new Date().toISOString(), door: () => door,
+    stream: () => { throw new Error('no model in this test'); } });
+  const r = await agents.spawn({ description: 'work', prompt: 'do it' }, 'call-1');
+  agents.cancel({ agent_id: r.agent_id }); await agents.wait({ agent_id: r.agent_id, timeout_ms: 5000 });
+  const tag = () => h.ledger.db.prepare('SELECT door FROM agents WHERE id = ?').get(r.agent_id).door;
+  assert.equal(tag(), 'g1');
+  door = doorOf(`next\n\n${NOTICE('g2')}`); // a later turn resumes it
+  await agents.send({ agent_id: r.agent_id, text: 'carry on' });
+  assert.equal(tag(), 'g2', 'the resumed subagent is tagged with the resuming turn\'s grant');
+  agents.cancel({ agent_id: r.agent_id }); await agents.wait({ agent_id: r.agent_id, timeout_ms: 5000 });
+  door = null; // a turn under no door passes a notice along in the message
+  await agents.send({ agent_id: r.agent_id, text: `carry on ${NOTICE('g3')}` });
+  assert.equal(tag(), 'g3');
+  agents.cancel({ agent_id: r.agent_id }); await agents.wait({ agent_id: r.agent_id, timeout_ms: 5000 });
+  const b = await agents.spawn({ description: 'briefed', prompt: `use the door ${NOTICE('g4')}` }, 'call-2');
+  assert.equal(h.ledger.db.prepare('SELECT door FROM agents WHERE id = ?').get(b.agent_id).door, 'g4', 'a brief that carries a door line tags the row even when the turn had none');
+  agents.cancel({ agent_id: b.agent_id }); await agents.wait({ agent_id: b.agent_id, timeout_ms: 5000 });
+});
+
 test('a subagent and a background turn started under a door are tagged with its grant, and the subagent brief carries the door line', async (t) => {
   const h = home(t);
   let door = doorOf(`go\n\n${NOTICE('g1')}`);
@@ -39,9 +70,9 @@ test('a subagent and a background turn started under a door are tagged with its 
   const r = await agents.spawn({ description: 'deploy', prompt: 'run the deploy' }, 'call-1');
   const row = h.ledger.db.prepare('SELECT door, prompt, session_id FROM agents WHERE id = ?').get(r.agent_id);
   assert.equal(row.door, 'g1');
-  assert.ok(row.prompt.includes('/.tophat-doors/c1/g1/door'));
+  assert.ok(row.prompt.includes('/.tophat-doors/c1/door') && row.prompt.includes('door grant g1'));
   const first = h.ledger.db.prepare("SELECT content FROM messages WHERE session_id = ? AND kind = 'owner' ORDER BY seq LIMIT 1").get(row.session_id);
-  assert.ok(first.content.includes('/.tophat-doors/c1/g1/door'), 'the subagent reads the door line in its first message');
+  assert.ok(first.content.includes('/.tophat-doors/c1/door'), 'the subagent reads the door line in its first message');
   agents.cancel({ agent_id: r.agent_id }); // no model here: end its run before the ledger closes
   await agents.wait({ agent_id: r.agent_id, timeout_ms: 5000 });
   door = null; // a turn under no door

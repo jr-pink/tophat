@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { app } from '$lib/server/app.js';
 import { peerCaller } from '$lib/server/peer-actions.js';
-import { doorWork } from '$lib/server/door-work.js';
+import { doorAgent, doorWork } from '$lib/server/door-work.js';
 import { runnerLedgerPath } from '$lib/server/translate.js';
 
 // A member's home host asking whether work of one door grant still runs in a chat here (door-work.js; docs/HOST-DESIGN.md item 5). Peers
@@ -11,8 +11,14 @@ export async function GET(event) {
   if (!peer || refused) return json({ error: 'not found' }, { status: 404 });
   const id = String(event.url.searchParams.get('conversation') || '');
   const grant = String(event.url.searchParams.get('grant') || '');
+  const agent = String(event.url.searchParams.get('agent') || '');
   const conversation = app.store.conversation(id);
   if (!conversation) return json({ error: `no conversation ${id}` }, { status: 404 });
+  if (agent) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/u.test(agent)) return json({ error: 'bad agent id' }, { status: 400 });
+    try { return json(doorAgent({ ledgerPath: runnerLedgerPath(), sessionId: conversation.sessionId || null, agent }), { headers: { 'cache-control': 'no-store' } }); }
+    catch (cause) { return json({ error: `ledger unreadable (${cause.message})` }, { status: 503 }); }
+  }
   if (!/^[A-Za-z0-9]{1,64}$/u.test(grant)) return json({ error: 'a grant id is required' }, { status: 400 });
   const out = doorWork({ ledgerPath: runnerLedgerPath(), sessionId: conversation.sessionId || null, grant, busy: app.runner.isBusy(id) });
   return json(out, { headers: { 'cache-control': 'no-store' } });

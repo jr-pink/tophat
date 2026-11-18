@@ -4,6 +4,8 @@
 //   turn    the chat's runner is busy and his latest message in it carries this grant (the turn itself, or a wake of it by a report)
 //   agents  subagents and background turns tagged with the grant and still running
 //   jobs    background jobs tagged with it and still running
+// The same route also answers who a door caller is: `agent` (doorAgent) maps a subagent id the door tool presents (TOPHAT_AGENT_ID) to whether that
+// subagent of this chat runs now and the grant it was started under; the home host decides on that, never the caller.
 // A row from before the tag existed (door NULL) in this chat's session tree counts for every grant of the chat: kept open, never cut.
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync } from 'node:fs';
@@ -40,4 +42,23 @@ export function doorWork({ ledgerPath, sessionId, grant, busy = false, open = (p
   out.live = out.turn || out.agents.length > 0 || out.jobs.length > 0;
   out.why = out.live ? [out.turn && 'turn', out.agents.length && `${out.agents.length} subagent(s)`, out.jobs.length && `${out.jobs.length} job(s)`].filter(Boolean).join(', ') : '';
   return out;
+}
+
+/**
+ * { agent, known, live, grant } for subagent (or background turn) `agent` of the chat whose runner session is `sessionId`: `known` when the
+ * ledger has it in this chat's tree, `live` while it runs, `grant` the door grant it was started under ('' none). Throws when the ledger is
+ * unreadable (the home host then answers the caller "retry", never "allowed").
+ */
+export function doorAgent({ ledgerPath, sessionId, agent, open = (path) => new DatabaseSync(path, { readOnly: true }) }) {
+  const out = { agent, known: false, live: false, grant: '' };
+  if (!agent || !sessionId || !ledgerPath || !existsSync(ledgerPath)) return out;
+  const db = open(ledgerPath);
+  try {
+    const tagged = hasColumn(db, 'agents', 'door');
+    const row = db.prepare(`SELECT status${tagged ? ', door' : ''} FROM agents WHERE id = ? AND (parent_session = ? OR parent_session LIKE ?)`).get(agent, sessionId, `${sessionId}/agent/%`);
+    if (!row) return out;
+    return { agent, known: true, live: row.status === 'running', grant: row.door || '' };
+  } finally {
+    try { db.close(); } catch { /* already closed */ }
+  }
 }

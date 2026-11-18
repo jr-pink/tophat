@@ -55,7 +55,7 @@ export function doorOfCauses(ledger, sessionId, { agentIds = [], jobIds = [] } =
     }
     if (!grant) return null;
     if (!notice && sessionId) {
-      const msg = db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' AND content LIKE ? ORDER BY seq DESC LIMIT 1").get(sessionId, `%/${grant}/door%`);
+      const msg = db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' AND (content LIKE ? OR content LIKE ?) ORDER BY seq DESC LIMIT 1").get(sessionId, `%door grant ${grant}%`, `%/${grant}/door%`);
       notice = doorOf(msg?.content)?.notice || null;
     }
     return { grant, notice };

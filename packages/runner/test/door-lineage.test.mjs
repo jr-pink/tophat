@@ -13,7 +13,7 @@ import { createJobs } from '../rev6/pull/tools.mjs';
 import { createRunner } from '../rev6/pull/pull.mjs';
 import { INBOX_RULE } from '../rev6/base/inbox-rule.mjs';
 
-const NOTICE = (g) => `[Automated event from home-mac: this turn has a door into home-mac, as his user. Tool: /Users/p/.tophat-doors/c1/${g}/door (\`/Users/p/.tophat-doors/c1/${g}/door help\`). Commands start in /r.]`;
+const NOTICE = (g) => `[Automated event from home-mac: this turn has a door into home-mac, as his user. Tool: /Users/p/.tophat-doors/c1/door (\`/Users/p/.tophat-doors/c1/door help\`). Commands start in /r. (door grant ${g}).]`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const gate = () => { let open; const p = new Promise((r) => { open = r; }); return { p, open }; };
 const reply = (text) => ({ content: [{ type: 'text', text }], stop_reason: 'end_turn' });
