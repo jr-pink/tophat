@@ -15,6 +15,17 @@ export { DOOR_TOOL_PATTERN, doorOf };
 
 const hasColumn = (db, table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column);
 
+/**
+ * The grant a row counts for. A row the runner tagged is that grant's. A row tagged '' (started under no door, or by a runner older than the
+ * notice that names the grant in words, which could not read it) counts for the grant of the latest owner message that carried a door notice
+ * before the row began: the door stays open a little longer for it, never shorter. Null when there is none.
+ */
+function inheritedGrant(db, sessionId, at) {
+  if (!sessionId || !at) return null;
+  const row = db.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' AND kind = 'owner' AND created_at <= ? AND content LIKE '%tophat-doors%' ORDER BY seq DESC LIMIT 1").get(sessionId, at);
+  return doorOf(row?.content)?.grant || null;
+}
+
 /** { live, turn, agents, jobs, why } for `grant` in the chat whose runner session is `sessionId`; `busy` is the runner's own answer. */
 export function doorWork({ ledgerPath, sessionId, grant, busy = false, open = (path) => new DatabaseSync(path, { readOnly: true }) }) {
   const out = { grant, live: false, turn: false, agents: [], jobs: [], why: '' };
@@ -30,9 +41,15 @@ export function doorWork({ ledgerPath, sessionId, grant, busy = false, open = (p
     const tagged = hasColumn(db, 'agents', 'door');
     out.agents = db.prepare(`SELECT id FROM agents WHERE status = 'running' AND (${tagged ? 'door = ? OR ' : ''}(${tagged ? 'door IS NULL AND ' : ''}(parent_session = ? OR parent_session LIKE ?)))`)
       .all(...(tagged ? [grant] : []), sessionId || '\u0000', tree).map((r) => r.id);
+    if (tagged) for (const r of db.prepare("SELECT id, created_at FROM agents WHERE status = 'running' AND door = '' AND (parent_session = ? OR parent_session LIKE ?)").all(sessionId || '\u0000', tree)) {
+      if (inheritedGrant(db, sessionId, r.created_at) === grant) out.agents.push(r.id);
+    }
     const jobsTagged = hasColumn(db, 'jobs', 'door');
     out.jobs = db.prepare(`SELECT id FROM jobs WHERE status = 'running' AND (${jobsTagged ? 'door = ? OR ' : ''}(${jobsTagged ? 'door IS NULL AND ' : ''}(session_id = ? OR session_id LIKE ?)))`)
       .all(...(jobsTagged ? [grant] : []), sessionId || '\u0000', tree).map((r) => r.id);
+    if (jobsTagged) for (const r of db.prepare("SELECT id, started_at FROM jobs WHERE status = 'running' AND door = '' AND (session_id = ? OR session_id LIKE ?)").all(sessionId || '\u0000', tree)) {
+      if (inheritedGrant(db, sessionId, r.started_at) === grant) out.jobs.push(r.id);
+    }
   } catch (cause) {
     // Unreadable: say live, so the home host keeps the door rather than cutting work off (its 2 h cap still ends it).
     return { ...out, live: true, why: `ledger unreadable (${cause.message})` };
@@ -55,9 +72,9 @@ export function doorAgent({ ledgerPath, sessionId, agent, open = (path) => new D
   const db = open(ledgerPath);
   try {
     const tagged = hasColumn(db, 'agents', 'door');
-    const row = db.prepare(`SELECT status${tagged ? ', door' : ''} FROM agents WHERE id = ? AND (parent_session = ? OR parent_session LIKE ?)`).get(agent, sessionId, `${sessionId}/agent/%`);
+    const row = db.prepare(`SELECT status, created_at${tagged ? ', door' : ''} FROM agents WHERE id = ? AND (parent_session = ? OR parent_session LIKE ?)`).get(agent, sessionId, `${sessionId}/agent/%`);
     if (!row) return out;
-    return { agent, known: true, live: row.status === 'running', grant: row.door || '' };
+    return { agent, known: true, live: row.status === 'running', grant: row.door || inheritedGrant(db, sessionId, row.created_at) || '' };
   } finally {
     try { db.close(); } catch { /* already closed */ }
   }
