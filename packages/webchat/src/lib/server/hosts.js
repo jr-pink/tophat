@@ -8,11 +8,10 @@
 //
 // One file in the webchat state dir, hosts.json, one entry per hub device id:
 //   { "<device id>": { "label"?, "url", "tokenFile", "group"?, "ssh"?, "description"?, "auto"?, "at"? } }
-// `url` (the peer's webchat machine surface, normally a supervised port-forward on loopback) and `tokenFile` (that peer's
-// service token) are written by hand once per peer; `group` names the memory group that host's team shares (what a chat of his
-// there is shared to by default, hosted-memory.js). `ssh` is this host's own ssh name for that peer: a chat there gets a per-turn door
-// back into its folder here over a reverse tunnel on that name (host-door.js); without it no door opens. `description` and `auto` (the router may choose this host) are edited from
-// the host menu; the newest edit per host wins on an offline replay, and the server is their only writer (temp + rename).
+// `url` (the peer's webchat machine surface, normally a supervised port-forward on loopback) and `tokenFile` (that peer's service token) are written by hand once per peer;
+// `group` names the memory group that host's team shares (what a chat of his there is shared to by default, hosted-memory.js). `ssh` is this host's own ssh name for that peer: a
+// chat there gets a per-turn door back into its folder here over a reverse tunnel on that name (host-door.js); without it no door opens. `description` and `auto` (the router may
+// choose this host) are edited from the host menu; the newest edit per host wins on an offline replay, and the server is their only writer (temp + rename).
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';

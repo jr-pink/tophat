@@ -123,9 +123,8 @@ function prepareSendCarrying(store, conversationId, text, { staged = [] } = {}) 
       if (hasUserTurn(store, conversationId)) return bare(text);
       const quote = String(conversation.sidechat.quote || '').trim();
       if (!quote) return bare(text);
-      // The side thread runs on a fork of the parent's session (runner resumptionFor: --resume parent --fork-session, on the host the
-      // parent runs on), so the conversation above is already in its context, prompt cache included. The wire only frames it.
-      // Requirement (2026-11-13): the side thread has the same context, cached, and is ready to answer the question in it.
+      // The side thread runs on a fork of the parent's session (runner resumptionFor: --resume parent --fork-session, on the host the parent
+      // runs on), so the conversation above is already in its context, prompt cache included. The wire only frames it.
       const preamble = [
         '[This is a side thread forked from the conversation above, which is in your context as it stood when he opened it.',
         'He selected this passage of your last message and has a question about it; he is still reading. Answer from the',

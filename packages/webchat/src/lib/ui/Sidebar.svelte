@@ -323,8 +323,33 @@
   let deferredOpen = $state(false);
   // Recents: a transcluded view of the newest live chats from every folder. It moves nothing: each chat
   // keeps its folder and also shows here, above Set aside.
-  const RECENTS_LIMIT = 8;
+  // Ten rows to start (the owner, 2026-11-18: "load in 10 by default but as you scroll it background
+  // preloads more"); scrolling within a screen of the end adds the next ten in an idle callback, so
+  // rows are already there before he reaches them. Closing the tray goes back to ten.
+  const RECENTS_PAGE = 10;
   let recentsOpen = $state(false);
+  let recentsLimit = $state(RECENTS_PAGE);
+  // Age lines: a rule above the first row older than each threshold.
+  const AGE_LINES = [[3600e3, '1 hr'], [4 * 3600e3, '4 hr'], [12 * 3600e3, '12 hr'], [86400e3, '1 day'], [2 * 86400e3, '2 days'],
+    [3 * 86400e3, '3 days'], [7 * 86400e3, '1 week'], [14 * 86400e3, '2 weeks'], [30 * 86400e3, '1 month']];
+  const ageBucket = (row) => {
+    const t = Date.parse(row.activeAt || row.updatedAt);
+    const age = Number.isFinite(t) ? now - t : 0;
+    let b = 0;
+    for (let i = 0; i < AGE_LINES.length; i++) if (age >= AGE_LINES[i][0]) b = i + 1;
+    return b;
+  };
+  const ageLabel = (row, prev) => {
+    const b = ageBucket(row);
+    return b > (prev ? ageBucket(prev) : 0) ? AGE_LINES[b - 1][1] : null;
+  };
+  let recentsGrowing = false;
+  const growRecents = () => {
+    if (recentsGrowing || recentsLimit >= recentsTotal) return;
+    recentsGrowing = true;
+    const run = () => { recentsGrowing = false; recentsLimit += RECENTS_PAGE; };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 200 }); else setTimeout(run, 0);
+  };
   // The defer sheet: which row he is parking, and the words in the field. A time or a condition,
   // the same as an await todo; the clock half is decided in core/defer.js and waits on nobody.
   let deferFor = $state(null);
@@ -379,12 +404,13 @@
   const archivedRows = $derived(archivedOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyArchived: true }), hits) : []);
   const asideRows = $derived(asideOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyAside: true }), hits) : []);
   const deferredRows = $derived(deferredOpen || searchingTrays ? rankByHits(rankConversations(listed, { now, match, onlyDeferred: true }), hits) : []);
-  const recentsAll = $derived(recentsOpen
+  const recentsRanked = $derived(recentsOpen
     ? rankConversations(listed, { now, match, sorted: false, includeArchived: true })
         .sort((a, b) => String(b.activeAt || b.updatedAt).localeCompare(String(a.activeAt || a.updatedAt)) || a.id.localeCompare(b.id))
-        .slice(0, RECENTS_LIMIT)
     : []);
-  const recentsCount = $derived(recentsOpen ? recentsAll.length : Math.min(RECENTS_LIMIT, Object.values(listed).filter((c) => !c.sidechat && !c.aside).length));
+  const recentsTotal = $derived(recentsRanked.length);
+  const recentsAll = $derived(recentsRanked.slice(0, recentsLimit));
+  const recentsCount = $derived(recentsOpen ? recentsAll.length : Object.values(listed).filter((c) => !c.sidechat && !c.aside).length);
   let rows = $state([]);
   $effect(() => {
     const next = ordering;
@@ -885,13 +911,17 @@
     label="Recents"
     icon="clock"
     count={recentsCount}
+    badge={false}
+    onnearend={growRecents}
     open={recentsOpen}
-    onopen={(next) => (recentsOpen = next)}
+    onopen={(next) => { recentsOpen = next; if (!next) recentsLimit = RECENTS_PAGE; }}
     testid="recents-section"
     toggletestid="toggle-recents"
     listtestid="recents-list"
   >
-    {#each recentsAll as row (row.id)}
+    {#each recentsAll as row, i (row.id)}
+      {@const line = ageLabel(row, recentsAll[i - 1])}
+      {#if line}<div class="age-line" data-testid="recents-age-line"><span>{line}</span></div>{/if}
       <div class:dim={row.archived}>{@render chatRow(row, false, true)}</div>
     {/each}
   </Tray>
@@ -1155,6 +1185,9 @@
 </aside>
 
 <style>
+  .age-line { display: flex; align-items: center; gap: 6px; margin: 6px 8px 2px; color: var(--ink-faint); font-size: 10px; }
+  .age-line::before, .age-line::after { content: ''; flex: 1; height: 1px; background: var(--line-soft); }
+  .age-line span { flex: none; }
   .sidebar {
     width: 280px;
     flex: none;

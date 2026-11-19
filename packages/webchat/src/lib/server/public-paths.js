@@ -109,6 +109,8 @@ export function isPublicPath({ path, method = 'GET', bearer = false, shareToken 
 
   // The Apple Watch capture: POST (capture) and GET ?key= (the reply's follow-up), bearer only; the handler checks the token.
   if (path === '/api/watch-capture' && (method === 'POST' || method === 'GET') && bearer) return true;
+  // Its streamed parts (watch-capture-parts.js): POST only, bearer only; the handler checks the token.
+  if (path === '/api/watch-capture/part' && method === 'POST' && bearer) return true;
 
   // The one-time onboarding channel: a minted single-use URL a new device or agent can POST to
   // with curl and nothing else. The handler checks the token's hash, expiry, cap and revocation and

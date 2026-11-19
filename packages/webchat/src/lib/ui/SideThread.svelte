@@ -13,11 +13,10 @@
     session,
     chatState,
     thread,
+    // Whether this card holds focus: the parent reads it from the kit intent record (threadFocus), never from a flag of its own.
     focused = false,
-    onfocus = () => {},
     oncollapse = () => {},
     onnewchat = () => {},
-    autofocus = false,
     // Comment mode, for the public documents (src/lib/ui/DocComments.svelte): the same card over
     // people's comments instead of a side chat. Each entry carries its author and time, the header
     // carries resolve, and nothing here runs an agent. Off, the card is the chat's, unchanged.
@@ -114,18 +113,6 @@
     });
   });
 
-  let claimedFocus = $state(null);
-  $effect(() => {
-    if (!autofocus || !field || claimedFocus === thread.id) return;
-    claimedFocus = thread.id;
-    tick().then(() => {
-      if (!autofocus || !field) return;
-      field.focus({ preventScroll: true });
-      const at = field.value.length;
-      field.setSelectionRange(at, at);
-    });
-  });
-
   function submit() {
     const value = text.trim();
     if (!value) return;
@@ -169,10 +156,6 @@
     submit();
   }
 
-  // Focusing a card's composer must never move the page: the rail sits in the same scroller as the
-  // text it annotates, and a plain focus() scrolled the document to the card. Shared by the chat
-  // pane and public documents.
-  export function focusComposer() { field?.focus({ preventScroll: true }); }
 </script>
 
 
@@ -184,8 +167,7 @@
   data-sidechat={thread.id}
   data-thread={thread.id}
   data-focused={focused ? 'true' : 'false'}
-  onpointerdowncapture={onfocus}
-  onfocusincapture={onfocus}
+  data-focus-at={`thread:${thread.id}`}
 >
   <header>
     <p class="quote" data-testid="sidechat-quote" title={quote}>{quote}</p>
@@ -243,6 +225,7 @@
       rows="1"
       placeholder={comments ? (turns.length ? 'Reply…' : 'Comment…') : turns.length ? 'Follow up…' : 'Ask about this…'}
       data-testid="sidechat-composer"
+      data-focus-field
       aria-label={comments ? 'Comment on this line' : 'Ask about the highlighted passage'}
     ></textarea>
     <button class="send press focus-ring" onclick={submit} disabled={!text.trim()} data-testid="sidechat-send" aria-label="Send">↑</button>
@@ -307,7 +290,7 @@
 
   .body {
     padding: 0 11px;
-    max-height: min(46vh, 380px);
+    max-height: min(60vh, 494px); /* 30% taller than min(46vh, 380px) */
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;

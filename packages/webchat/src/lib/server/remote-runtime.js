@@ -79,7 +79,7 @@ export function seedTranscript(events, { after = 0, exclude = null, cap = SEED_C
   for (const e of events) {
     if (e.cursor <= after) continue;
     const c = e.content || {};
-    if (exclude && c.itemId === exclude) continue;
+    if (exclude && (Array.isArray(exclude) ? exclude.includes(c.itemId) : c.itemId === exclude)) continue;
     if (e.kind === 'message.user' && c.text) {
       const own = unseeded(c.text);
       if (own && !(lastOwner === own && !spoke && String(c.itemId || '').startsWith('rt:'))) { lines.push(`Owner: ${own}`); lastOwner = own; spoke = false; }
@@ -268,15 +268,36 @@ export function createRemoteRuntimes({
   // ---- which host answers a send ------------------------------------------------------------------------------------
 
   const twinOf = (id) => twins[id] || null;
+  /** A twin whose chat moved to another host while its turn ran: kept under this key until that turn ends. */
+  const retiredKey = (id, twin) => `${id}@${twin.runtime}`;
+  const retiredOf = (id) => Object.keys(twins).filter((k) => k.startsWith(`${id}@`));
   const isRemoteBusy = (id) => Boolean(twins[id]?.busy || twins[id]?.pending?.length);
 
-  /** { runtime, reason } for a send now: null runtime = this host. Never by content: only the chat's host, or a twin mid-run. */
+  /**
+   * { runtime, reason } for a send now: null runtime = this host. Never by content: the chat's host decides, also mid-turn. A send after he
+   * switched host goes to the new host; the turn already running on the old one runs on in the background and its output still lands here
+   * (a remote twin keeps its stream; a local run keeps writing). The one exception: a chat has one remote twin, so while a turn runs on one
+   * peer a send for a different peer stays with the running one (its stream would otherwise be cut and its output lost).
+   */
   function route(id, { localBusy = false } = {}) {
     const conversation = store.conversation(id);
     if (!conversation) return { runtime: null, reason: 'unknown conversation' };
     const twin = twinOf(id);
-    if (twin && isRemoteBusy(id)) return { runtime: twin.runtime, reason: 'a remote turn is in progress; it is not moved mid-turn' };
-    if (localBusy) return { runtime: null, reason: 'a local turn is in progress; it is not moved mid-turn' };
+    const chosen = chosenRoute(id, conversation, twin);
+    if (twin && isRemoteBusy(id)) {
+      if (chosen.runtime === twin.runtime) return { runtime: twin.runtime, reason: 'a turn is in progress on the chat\'s host; the message joins it' };
+      if (chosen.runtime) return { runtime: chosen.runtime, reason: `switched to ${labelOf(chosen.runtime)} mid-turn; the turn on ${labelOf(twin.runtime)} runs on in the background` };
+      return { runtime: null, reason: `switched to this host mid-turn; the turn on ${labelOf(twin.runtime)} runs on in the background` };
+    }
+    if (localBusy) {
+      if (!chosen.runtime) return { runtime: null, reason: 'a local turn is in progress; the message joins it' };
+      return { ...chosen, reason: `switched to ${labelOf(chosen.runtime)} mid-turn; the local turn runs on in the background` };
+    }
+    return chosen;
+  }
+
+  /** Where the chat runs when nothing is in flight: its host, a side thread's parent host, or here. */
+  function chosenRoute(id, conversation, twin) {
     const host = conversation.host || null;
     // A side thread runs where its parent runs: the parent's session (the transcript the model saw and the prompt cache over it)
     // lives in that host's ledger, so a fork anywhere else starts with an empty context.
@@ -391,14 +412,26 @@ export function createRemoteRuntimes({
 
   function sendRemote(id, wire, { itemId, display = wire, runtimeId, reason }) {
     let twin = twins[id];
-    if (twin && twin.runtime !== runtimeId) { detach(id); twin = null; } // the chat moved to another host: a new twin there, the old chat stays where it is
+    let carried = [];
+    if (twin && twin.runtime !== runtimeId) {
+      // The chat moved to another host: a new twin there. A turn still running on the old host runs on in the background: its twin is kept
+      // under its own key with its own stream, so its output keeps landing here (the same as a local turn left running).
+      detach(id);
+      // Messages of his the old host has not been given yet follow him to the new one, in order and before this one (a twin is flushed
+      // under the chat's id only, so they cannot be left behind on a retired twin, and dropping them lost them silently).
+      carried = twin.pending.splice(0).map((p) => ({ ...p, text: unseeded(p.text) }));
+      if (twin.busy && twin.remoteId) { twin.pending = []; twins[retiredKey(id, twin)] = twin; delete twins[id]; attach(retiredKey(id, twin)); }
+      twin = null;
+    }
     if (!twin) twin = twins[id] = newTwin(runtimeId, id);
     if (twin.sentIds.includes(itemId) || twin.pending.some((p) => p.itemId === itemId)) return { queued: false, injected: false, duplicate: true };
     if (twin.localSeen == null) twin.localSeen = store.cursor();
     // What the host has not seen: everything after the last turn it ran (the whole chat on the first send).
-    const seed = seedTranscript(store.allConversationEvents(id), { after: twin.remoteSeen, exclude: itemId });
-    const text = withSeed(seed, wire, twin.remoteId ? 'elsewhere' : 'on another host');
+    const seed = seedTranscript(store.allConversationEvents(id), { after: twin.remoteSeen, exclude: [itemId, ...carried.map((p) => p.itemId)] });
+    // The seed rides on the first message the host will read; carried messages (already unseeded) go first.
+    const text = carried.length ? wire : withSeed(seed, wire, twin.remoteId ? 'elsewhere' : 'on another host');
     const wasBusy = twin.busy;
+    carried.forEach((p, i) => twin.pending.push({ ...p, text: i === 0 ? withSeed(seed, p.text, 'on another host') : p.text }));
     twin.pending.push({ itemId, text, display, at: now() });
     twin.busy = true;
     twin.sentAt = now();
@@ -451,7 +484,7 @@ export function createRemoteRuntimes({
           const hostChat = twin.remoteId || id;
           // The door back into this host's folder for the turn (host-door.js): its address rides in what the host's model reads.
           let doorText = '';
-          if (door) { try { doorText = await door.open(id, twin.runtime, config()[twin.runtime]); } catch (cause) { log(`[remote-runtime] door for ${id}: ${cause?.message || cause}`); } }
+          if (door) { try { doorText = await door.open(id, twin.runtime, config()[twin.runtime], doorHooks(id)); } catch (cause) { log(`[remote-runtime] door for ${id}: ${cause?.message || cause}`); } }
           const payload = { text: wire.display, wire: doorText ? `${wire.text}\n\n${doorText}` : wire.text, writer: writerOf(), title };
           if (forkOf) await postAction(twin.runtime, { op: ACTIONS.FORK, conversationId: hostChat, actionId: item.itemId, payload: { ...payload, parentId: forkOf.parentId, settings: sideSettings(conversation), sidechat: conversation.sidechat || {} } });
           else await postAction(twin.runtime, { op: ACTIONS.SEND, conversationId: hostChat, actionId: item.itemId, payload });
@@ -548,9 +581,14 @@ export function createRemoteRuntimes({
     if (twin.pending.length) return; // a message still waiting to be forwarded keeps the chat busy
     twin.busy = false; twin.running = false;
     twin.remoteSeen = store.cursor();
+    if (twins[id] !== twin) { // a turn that ran on in the background after the chat moved host: its stream and twin are done
+      const key = retiredKey(id, twin);
+      if (twins[key] === twin) { detach(key); delete twins[key]; save(); decide({ event: 'twin-released', chat: id, runtime: twin.runtime, background: true }); }
+      return;
+    }
     // The door back into this host stays open while this turn's work runs on the host (subagents, background turns, jobs it started)
     // and closes after a grace once none is left (host-door.js): the host is asked per grant, not about the chat as a whole.
-    door?.turnEnded?.(id, { probe: (grant) => doorProbe(twin, grant) });
+    door?.turnEnded?.(id, { probe: (grant, opts) => doorProbe(twin, grant, opts) });
     hostedMemory?.flush(id, twin, { hostLabel: labelOf(twin.runtime), group: config()[twin.runtime]?.group || null }).then(save).catch(() => {});
     if (onTurnEnd) { try { onTurnEnd(id); } catch { /* a hook never blocks */ } }
   }
@@ -559,9 +597,26 @@ export function createRemoteRuntimes({
    * What of one door grant still runs on the host ({ live, why }; the host's /api/door, door-work.js). A host on a build without that route
    * answers by the chat's busy flag (/api/sync). Throws when the host is unreachable (the door then stays: host-door.js).
    */
-  async function doorProbe(twin, grant) {
+  /**
+   * Who a door caller is, asked of the host's ledger (the same /api/door route, `agent`): { known, live, grant } for a subagent id of this chat. The
+   * door (host-door.js) decides on it; an unreachable host throws, which the door answers "retry", never "allowed".
+   */
+  async function doorAgent(twin, agent) {
+    if (!twin) throw new RemoteError('this chat is not attached to a team host yet', { offline: true });
     const chat = encodeURIComponent(twin.remoteId || '');
-    const asked = await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&grant=${encodeURIComponent(grant)}`, { method: 'GET' });
+    return readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&agent=${encodeURIComponent(agent)}`, { method: 'GET' }));
+  }
+
+  /** The two questions the home host's door asks of a chat's team host, resolved at call time (a restored door asks before the chat is attached: the probe then counts as live). */
+  const doorHooks = (id) => ({
+    probe: (grant, opts) => { const twin = twinOf(id); if (!twin) throw new RemoteError('this chat is not attached to a team host yet', { offline: true }); return doorProbe(twin, grant, opts); },
+    agent: (agent) => doorAgent(twinOf(id), agent)
+  });
+
+  async function doorProbe(twin, grant, { open = null, holder = false } = {}) {
+    const chat = encodeURIComponent(twin.remoteId || '');
+    const extra = open ? `&open=${encodeURIComponent(open.join(','))}${holder ? '&holder=1' : ''}` : '';
+    const asked = await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&grant=${encodeURIComponent(grant)}${extra}`, { method: 'GET' });
     if (asked.response.ok) return readJson(twin.runtime, asked);
     if (asked.response.status !== 401 && asked.response.status !== 404) return readJson(twin.runtime, asked);
     const sync = await readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/sync?conversation=${chat}&after=${Number.MAX_SAFE_INTEGER}`, { method: 'GET' }));
@@ -719,14 +774,15 @@ export function createRemoteRuntimes({
   }
 
   /** Keeps one stream per chat that has a chat on a host; reconnects with backoff, resuming from the stored cursor. Idempotent. */
-  function attach(id) {
-    const twin = twins[id];
-    if (!twin?.remoteId || streams.has(id)) return;
+  function attach(key) {
+    const twin = twins[key];
+    if (!twin?.remoteId || streams.has(key)) return;
+    const id = key.includes('@') && twin.conversationId ? twin.conversationId : key; // a retired twin is keyed chat@host
     const s = { stop: false, ctl: null, twin };
-    streams.set(id, s);
+    streams.set(key, s);
     (async () => {
       let delay = RECONNECT_MIN_MS;
-      while (!s.stop && twins[id] === twin) {
+      while (!s.stop && twins[key] === twin) {
         s.ctl = new AbortController();
         try { await consume(id, twin, s); delay = RECONNECT_MIN_MS; }
         catch (cause) {
@@ -748,7 +804,7 @@ export function createRemoteRuntimes({
         await sleep(delay);
         delay = Math.min(delay * 2, RECONNECT_MAX_MS);
       }
-      if (streams.get(id) === s) streams.delete(id);
+      if (streams.get(key) === s) streams.delete(key);
     })();
   }
 
@@ -768,8 +824,13 @@ export function createRemoteRuntimes({
     }
   }
 
+  /** Stop is total: the chat's own twin and any turn left running in the background on another host. */
   function interrupt(id) {
-    const twin = twins[id];
+    let any = false;
+    for (const key of [id, ...retiredOf(id)]) { if (interruptTwin(id, twins[key])) any = true; }
+    return any;
+  }
+  function interruptTwin(id, twin) {
     if (!twin || !(twin.busy || twin.pending.length)) return false;
     const label = labelOf(twin.runtime);
     const dropped = twin.pending.length;
@@ -872,5 +933,5 @@ export function createRemoteRuntimes({
   }
   function stop() { running = false; if (timer) clearTimeout(timer); timer = null; for (const id of [...streams.keys()]) detach(id); }
 
-  return { wrap, route, tick, flush, start, stop, status, probe, call, inject, attach, detach, twins: () => twins, twin: twinOf, isRemoteBusy, runtimes: config, decide };
+  return { wrap, route, tick, flush, start, stop, status, probe, call, inject, attach, detach, doorHooks, twins: () => twins, twin: twinOf, isRemoteBusy, runtimes: config, decide };
 }

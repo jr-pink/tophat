@@ -163,8 +163,22 @@ function rowOf(conversation, kind) {
   };
 }
 
+// What an empty query shows: the chats he was last in, newest activity first. Three rules, each from the data.
+//  - Pins do not lead. The sidebar already shows them; the shared sidebar order (pinned, then recency) let a handful of pins
+//    take slots 1..n of nine.
+//  - Archived chats are IN, and the row says "archived". He archives a chat the moment it is done, including the ones he was
+//    just working in: on 2026-11-18 2,308 of 2,368 chats were archived and 15 of the 22 most recently active were, so leaving
+//    them out kept the unarchived automated-event chats and dropped everything he had actually been in.
+//  - Set aside, deferred and side threads stay out: those are chats he put down or that are not rows of the list.
+// A running chat counts as active now: its last user message can be an hour old while it is working for him.
 export function recentChats(conversations, { now = Date.now(), limit = 9, rank } = {}) {
-  return rank(conversations, { now })
+  const at = (c) => {
+    const user = Date.parse(c.activeAt || c.updatedAt || '') || 0;
+    return c.live ? Math.max(user, Date.parse(c.updatedAt || '') || 0) : user;
+  };
+  return rank(conversations, { now, includeArchived: true })
+    .filter((conversation) => !conversation.aside && !conversation.sidechat)
+    .sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id))
     .slice(0, limit)
     .map((conversation) => rowOf(conversation, 'recent'));
 }

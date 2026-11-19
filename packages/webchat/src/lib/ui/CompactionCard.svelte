@@ -6,18 +6,23 @@
 
   let { item, open = false, ontoggle = () => {}, onpath = () => {} } = $props();
 
-  function tokenLabel(tokens) {
-    if (!Number.isFinite(tokens) || tokens <= 0) return '';
-    if (tokens < 1000) return `${tokens} tokens`;
-    if (tokens < 10_000) return `${(tokens / 1000).toFixed(1)}k tokens`;
-    return `${Math.round(tokens / 1000)}k tokens`;
+  function short(tokens) {
+    if (tokens < 1000) return `${tokens}`;
+    if (tokens < 10_000) return `${(tokens / 1000).toFixed(1)}k`;
+    return `${Math.round(tokens / 1000)}k`;
+  }
+  // "182k → 31k tokens" (after is an estimate); just "182k tokens before" when no after was measured.
+  function tokenLabel(pre, post) {
+    if (!Number.isFinite(pre) || pre <= 0) return '';
+    if (!Number.isFinite(post) || post <= 0) return `${short(pre)} tokens before`;
+    return `${short(pre)} → ~${short(post)} tokens`;
   }
 
   const dropped = $derived(Number.isFinite(item.messages) && item.messages > 0 ? item.messages : null);
-  const tokens = $derived(tokenLabel(item.preTokens));
+  const tokens = $derived(tokenLabel(item.preTokens, item.postTokens));
   const gist = $derived([
     dropped === null ? 'earlier messages summarized' : `${dropped} message${dropped === 1 ? '' : 's'} summarized`,
-    tokens ? `${tokens} before` : ''
+    tokens
   ].filter(Boolean).join(' · '));
   const manual = $derived(item.trigger === 'manual');
 </script>

@@ -89,7 +89,7 @@ The one service shipped is the hub (`tophat-linknotes hub serve`, service name `
 |---|---|---|
 | memory tools (search, entity, page, read, apply, share, scopes) | ships | a tool registry over any MemoryStore + an MCP stdio server (`tophat-mcp`) |
 | `tophat-cdp` (Chrome over the DevTools Protocol: jobs that own one tab each, secret-safe fill, frames, shadow roots, protected targets, passkeys) | ships | Node tool + Python reference twin (`packages/tools/cdp`), README, differential tests; endpoint, state and chat-host lists are config/env (`TOPHAT_CDP_*`), the older prefix is read through `TOPHAT_LEGACY_ENV_PREFIX` |
-| `tophat-pass` (read verbs over a tophat credential vault: list, find, lookup, fields, get, totp, history) | ships | writes nothing; a vault sealed under an older record-binding prefix reads through `TOPHAT_VAULT_LEGACY_AAD_PREFIX` (read fallback only) |
+| `tophat-pass` (read verbs over a tophat credential vault: list, find, lookup, fields, get, totp, history) | ships | writes nothing; a vault sealed under an older record-binding prefix reads when `vault.json` beside config.json lists that prefix in `aadPrefixes` (read fallback only) |
 | `tophat-fanout` (one brief to many models in parallel, web search on, replies side by side) | ships | `packages/tools/fanout`; key from `TOPHAT_FANOUT_SECRETS_DIR` or `<config dir>/secrets`; offline tests |
 | `tophat-timer` (goal_wait retry timers seen from outside the server: list, check, fire, log, prune) | ships | `packages/tools/timer`, over the runner's waits |
 | `tophat-onboard` (mint, list, revoke one-time onboarding channel URLs) | ships | `packages/tools/onboard`, over the webchat's onboard store |

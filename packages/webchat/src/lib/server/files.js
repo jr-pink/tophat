@@ -44,7 +44,8 @@ const MIME = {
   csv: 'text/csv', yml: 'text/yaml', yaml: 'text/yaml', toml: 'text/plain', sql: 'text/plain',
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', svg: 'image/svg+xml',
   mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', m4v: 'video/mp4', ogv: 'video/ogg',
-  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', avif: 'image/avif',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', m4a: 'audio/mp4',
+  aac: 'audio/aac', flac: 'audio/flac', avif: 'image/avif',
   webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf', heic: 'image/heic',
   // An epub served as octet-stream gives iOS Safari nothing to hand to Books, only Save to Files.
   epub: 'application/epub+zip', zip: 'application/zip'
@@ -283,7 +284,7 @@ export async function locateAny(path, cwd, { ownerNamed = false, context = [], d
     const hit = ELIDED_PART.test(form.text) && !form.elided
       ? await resolveElided(form.text, cwd, context, ownerNamed, deadline)
       : isAbsolute(form.text)
-        ? await resolveMoved(form.text, cwd, deadline)
+        ? await resolveMoved(form.text, cwd, deadline) || await resolveSiblingHome(form.text, cwd) || await resolveMovedIndexed(form.text, cwd)
         : await resolveShorthand(form.text, cwd, context, 'tracked', deadline) || await resolveIndexed(form.text, cwd, context) || await resolveShorthand(form.text, cwd, context, 'walks', deadline);
     if (hit) return hit;
   }
@@ -365,6 +366,43 @@ async function resolveMoved(absolute, cwd, hardDeadline = Infinity) {
       if (await credentialTarget(found)) return null;
       return hitAt(found, { moved: absolute });
     }
+    if (matches.length > 1) return null;
+  }
+  return null;
+}
+
+// An absolute path that names no file, written under ~/.local/state when the file is under ~/.local/share
+// (or the reverse): an app keeps its state in one and its workspace in the other under the same name
+// (the instance), and a reply that wrote the wrong half pointed at nothing. The same path under the
+// other half is tried; it still has to be openable and not a credential.
+async function resolveSiblingHome(absolute, cwd) {
+  const target = resolve(absolute);
+  const state = join(currentHome(), '.local', 'state') + sep;
+  const share = join(currentHome(), '.local', 'share') + sep;
+  const swap = target.startsWith(state) ? share + target.slice(state.length)
+    : target.startsWith(share) ? state + target.slice(share.length) : null;
+  if (!swap || !openablePath(swap, cwd) || await credentialTarget(swap)) return null;
+  return hitAt(swap, { moved: absolute });
+}
+
+// An absolute path that no longer exists outside any repository (generated files: audio, renders,
+// exports): the file whose path ends with the longest tail of the missing one, at least a folder and a
+// name, found in the background file-name index. Only a single match counts; two files that share
+// the tail are ambiguous and stay a miss.
+async function resolveMovedIndexed(absolute, cwd) {
+  const target = resolve(absolute);
+  if (!HAS_EXT.test(target)) return null;
+  refreshIndex();
+  const parts = target.split(sep).filter(Boolean);
+  for (let from = 0; from <= parts.length - 2; from += 1) {
+    const tail = parts.slice(from).join('/');
+    const matches = [];
+    for (const candidate of await searchIndex(tail)) {
+      if (candidate === target || COPY_FOLDERS.test(candidate) || !openablePath(candidate, cwd)) continue;
+      if (await credentialTarget(candidate)) continue;
+      matches.push(candidate);
+    }
+    if (matches.length === 1) return hitAt(matches[0], { moved: absolute });
     if (matches.length > 1) return null;
   }
   return null;
@@ -700,7 +738,7 @@ export function mimeFor(path) {
 }
 
 export function isText(path) {
-  return !['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'pdf', 'mp4', 'webm', 'mov', 'm4v', 'ogv', 'mp3', 'wav', 'ogg', 'm4a', 'epub', 'zip'].includes(String(path).split('.').pop().toLowerCase());
+  return !['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'pdf', 'mp4', 'webm', 'mov', 'm4v', 'ogv', 'mp3', 'wav', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'flac', 'epub', 'zip'].includes(String(path).split('.').pop().toLowerCase());
 }
 
 export async function readForPreview(found) {

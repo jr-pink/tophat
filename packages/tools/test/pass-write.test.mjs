@@ -191,10 +191,12 @@ test('init creates an owner-only vault; generate prints a fresh password and sto
   assert.equal(fs.statSync(directory).mode & 0o077, 0);
   assert.equal(fs.statSync(path.join(home, 'vault-master-key')).mode & 0o077, 0);
   const a = ok(['generate']).stdout.trim(), b = ok(['generate']).stdout.trim();
-  assert.match(a, /^[a-zA-Z2-9]{6}-[a-zA-Z2-9]{6}-[a-zA-Z2-9]{6}$/);
+  for (const p of [a, b]) assert.match(p, /^[A-Za-z0-9]{6}-[A-Za-z0-9]{6}-[A-Za-z0-9]{6}$/);
   assert.notEqual(a, b);
-  assert.equal(ok(['generate', '--length', '32']).stdout.trim().length, 32);
-  assert.equal(run(['generate', '--length', '4']).status, 1);
+  // --length no longer silently switches shape (2026-11-17); the dense form is the named --dense opt-in
+  assert.notEqual(run(['generate', '--length', '24']).status, 0);
+  assert.equal(ok(['generate', '--dense', '32']).stdout.trim().length, 32);
+  assert.equal(run(['generate', '--dense', '4']).status, 1);
   assert.equal(run(['list']).stdout.trim(), '');
 });
 

@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { app } from '$lib/server/app.js';
 import { resolveConversation, settle, settleSafely } from '$lib/server/ff.js';
 import { localRefusalAsync } from '$lib/server/local-gate.js';
+import { acceptCards } from '$lib/core/event-cards.js';
 
 // The machine door for an arrival that needs a turn: loopback, not through the tunnel (cloudflared
 // delivers a remote request as a local socket, so a forwarding header is the tell), and the service
@@ -48,7 +49,7 @@ export async function POST(event) {
   }
   // `title` is the push plane's "Who: what" for the chat a wake opens (rev6/push/wake.mjs); ff.js
   // derives one from the text when it is absent, and ignores it when the chat already exists.
-  const options = { text, wire: String(body.wire || '') || text, context: body.context || null, conversationId, title: typeof body.title === 'string' ? body.title : null };
+  const options = { text, wire: String(body.wire || '') || text, context: body.context || null, cards: acceptCards(body.cards), conversationId, title: typeof body.title === 'string' ? body.title : null };
   if (conversationId) {
     // Nothing to route, so the delivery is synchronous and the caller learns where it went and
     // whether it steered a running turn.

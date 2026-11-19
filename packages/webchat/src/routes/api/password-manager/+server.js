@@ -84,7 +84,8 @@ export async function POST({ request }) {
           return json({ id: entry.id, kind: entry.kind,
             value: { code: code.code, expiresAt: new Date(code.expiresAt).toISOString() } }, options);
         }
-        return json({ id: entry.id, kind: entry.kind, value }, options);
+        // notes ride with the value: they are free text he may have put a secret in, so they come back only here, behind the click
+        return json({ id: entry.id, kind: entry.kind, value, notes: entry.notes || '' }, options);
       }
       case 'import': {
         if (!IMPORTS.has(body.format) || body.format === '1pux' || typeof body.text !== 'string') return json({ error: 'Unsupported import format' }, { ...options, status: 400 });

@@ -233,6 +233,12 @@ function treeSpan(candidates, node) {
 function blockTreeSpan(candidates, node) {
   let span = treeSpan(candidates, node);
   const gap = candidates.findIndex(line => line.gapAfter);
+  // A heading takes everything directly under it in its block, bullets or not.
+  if (/^#{1,6}\s/u.test(String(candidates[0]?.body ?? ''))) {
+    span = gap >= 0 ? gap + 1 : candidates.length;
+    while (span < candidates.length && /^\s/u.test(candidates[span].body)) span += 1;
+    return span;
+  }
   if (gap >= 0 && span > gap + 1) {
     span = gap + 1;
     while (span < candidates.length && /^\s/u.test(candidates[span].body)) span += 1;
@@ -1082,6 +1088,17 @@ export function openNotesStore(path = notesDbPath(), { journal = notesJournalPat
       } else {
         moveToPast(liveLines('timeline'), { day });
       }
+      return true;
+    },
+    /** Before a Watch capture is appended to the Past: end the previous block (two newlines) unless
+     * that block is itself a Watch capture.
+     */
+    closePastBlockUnlessWatch() {
+      const tail = liveLines('past').at(-1);
+      if (!tail) return false;
+      const watch = String(tail.id).startsWith('watch-');
+      if (!!tail.gapAfter === !watch) return false;
+      batch([{ id: tail.id, gapAfter: !watch }]);
       return true;
     },
     archiveTree(blockId, index) {

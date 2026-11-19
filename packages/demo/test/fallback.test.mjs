@@ -12,7 +12,7 @@ test('one closed box per bold feature heading, its summary that heading alone', 
   const page = renderFallback();
   const headings = [...sections(DESCRIPTION).intro.matchAll(/^<summary>\*\*(\d+)\.\s+([^*]+)\*\*<\/summary>/gm)].map((m) => m[2].trim());
   const summaries = [...page.matchAll(/<summary>.*?<span class="line">(.*?)<\/span>/g)].map((m) => m[1]);
-  assert.equal(headings.length, 6);
+  assert.equal(headings.length, 3);
   assert.deepEqual(summaries, headings.map((h) => h.replace(/&/g, '&amp;')));
   assert.equal((page.match(/<details class="box"[^>]*\bopen\b/g) || []).length, 0, 'every box starts closed');
   assert.ok(!/<!--(lead|intro|boxes|install)-->/.test(page), 'every marker filled');
@@ -21,10 +21,13 @@ test('one closed box per bold feature heading, its summary that heading alone', 
 test('every paragraph of the copy is on the page, and every figure of the live answer is framed or inlined', () => {
   const page = renderFallback();
   const b = boxes();
-  assert.equal(b.length, 6);
-  assert.match(page, /I'm your <b>exobrain<\/b>, for <b>you<\/b>, <b>forever<\/b>\./);
+  assert.equal(b.length, 3);
+  assert.match(page, /I'm the <b>local<\/b>, <b>open-source<\/b> personal agent\./);
+  assert.match(page, /<ul class="sub"><li>State-of-the-art memory system<\/li><li>Always-on MacOS computer use<\/li><li>Batteries included<\/li><\/ul>/, "the lead bullets are a list, as in the live answer");
+  assert.equal((page.match(/<div class="code"><pre/g) || []).length, 2, "both install blocks, top and bottom, as in the live answer");
+  assert.match(page, /<title>tophat: I'm the local, open-source personal agent/);
   assert.match(page, /Benchmark results comparing research memory systems and production assistants:/);
-  assert.match(page, /Scan this repo for privacy, security, and malintent; then help me install it:\n<a href="https:\/\/github.com\/tophat-md\/tophat">/);
+  assert.match(page, /Scan this repo for privacy, security, and malintent; then install it:\n<a href="https:\/\/github.com\/tophat-md\/tophat">/);
   for (const name of FRAMED) {
     // a built widget (memory-graph) ships as its template; its .html is generated from a private snapshot and gitignored, so a release tree has only the template
     assert.ok(existsSync(path.join(WIDGETS_DIR, name + '.html')) || existsSync(path.join(WIDGETS_DIR, name + '.template.html')), name);

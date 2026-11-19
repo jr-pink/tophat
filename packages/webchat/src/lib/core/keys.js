@@ -104,3 +104,46 @@ export function isStopShortcut(event, apple = isApple()) {
   return apple && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && !event.isComposing
     && String(event.key || '').toLowerCase() === 'c';
 }
+
+// ---- global shortcuts: never while he is typing ---------------------------------------------------------------------
+// A page-wide key ("/" focuses the search) must not fire from inside a text field. It did on /secrets (2026-11-18): a "/"
+// typed into the note field moved focus to the search box, the rest of the note went into the filter, and the list under it
+// emptied. The rule lives here, once, so a page binds its shortcuts through bindGlobalKeys() and cannot forget it; the matcher
+// and the typing test are the docstore kit's (packages/runner/tools/docstore-kit/lib/keys.js), the same ones the kit's own
+// keymap uses.
+import { isTyping, matches, parseSpec } from '../../../../runner/tools/docstore-kit/lib/keys.js';
+
+/** True when `el` is a control a person types into: text-like input, textarea, select, contenteditable, role=textbox. */
+export function isTextEntry(el) {
+  if (!el || el.nodeType !== 1) return false;
+  if (isTyping(el)) return true;
+  const role = el.getAttribute?.('role');
+  return role === 'textbox' || role === 'searchbox' || role === 'combobox' || Boolean(el.closest?.('[contenteditable="true"], [contenteditable=""]'));
+}
+
+/** Whether a keydown belongs to the focused field (or to an input method) and so to no global shortcut. */
+export function globalKeyBlocked(event, doc = typeof document === 'undefined' ? null : document) {
+  if (event.isComposing || event.keyCode === 229) return true;
+  return isTextEntry(event.target) || isTextEntry(doc?.activeElement);
+}
+
+/**
+ * Bind page-wide shortcuts: `{ '/': fn, 'mod+k': fn }` (kit spec syntax). Nothing fires while focus is in a text field or during
+ * input-method composition, a bare key never fires on a ctrl/meta/alt chord, repeats are ignored, and preventDefault runs only
+ * when a binding matched. Returns the unbind function.
+ */
+export function bindGlobalKeys(map, { target = globalThis.window, mac = isApple() } = {}) {
+  const bindings = Object.entries(map).map(([spec, fn]) => ({ spec: parseSpec(spec, mac), fn }));
+  const onKey = (event) => {
+    if (event.defaultPrevented || globalKeyBlocked(event, target?.document)) return;
+    for (const binding of bindings) {
+      if (!matches(event, binding.spec)) continue;
+      if (event.repeat) return;
+      event.preventDefault();
+      binding.fn(event);
+      return;
+    }
+  };
+  target.addEventListener('keydown', onKey);
+  return () => target.removeEventListener('keydown', onKey);
+}

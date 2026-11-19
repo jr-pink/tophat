@@ -35,11 +35,9 @@ import { INCOGNITO_NOTE, incognitoEnv, isIncognito, removeIncognitoScratch } fro
 import { installProcessGuards } from './process-guard.mjs';
 import { harnessFeatures, memoryStatusLine, prefetchWaitMs, settleWithin } from './harness-v2.mjs';
 
-/**
- * The door a wake inherits from what caused it (the owner 2026-11-14 20:57 PST: "we should just track that the thing started by something with a
- * grant also gets a grant", "its like recursive children"; 22:56: "fix it and make it correct"): the grant of the first subagent, background
- * turn or job among `causes` ({ agentIds, jobIds }) whose row carries one, with the notice line of that grant (from the row's brief, else the
- * owner message that carried it). Null when none of them ran under a door.
+/** The door a wake inherits from what caused it: the grant of the first subagent, background turn or job among `causes` ({ agentIds, jobIds })
+ * whose row carries one, with the notice line of that grant (from the row's brief, else the owner message that carried it). Null when none of
+ * them ran under a door.
  */
 export function doorOfCauses(ledger, sessionId, { agentIds = [], jobIds = [] } = {}) {
   try {
@@ -144,12 +142,12 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     chatWork: null, checkInTimer: null, settleTimer: null, started: false, stopped: false, restarting: false,
     // the watchdog's view: when the oldest owner message no request has carried yet arrived, and when a request last left
     ownerPendingSince: null, lastRequestAt: 0, watchdogTimer: null, compactAbort: null,
-    // The home host's door grant the owner's latest message carries (base/door-tag.mjs): what the subagents, background turns and jobs
-    // started from now are tagged with. Read back from the ledger on a restart, so a relaunched runner tags the same way.
+    // The home host's door grant his latest message carries (base/door-tag.mjs): what the subagents, background turns and jobs started
+    // from now are tagged with. Read back from the ledger on a restart, so a relaunched runner tags the same way.
     door: lastOwnerDoor(ledger, sessionId) };
   // The grant work starts under: inside a tool call of a turn, that turn's own grant (turnTools sets callDoor around the synchronous part
-  // of the call, where agents.spawn and jobs.start read it), so a turn moved to the background keeps its grant after the owner types under
-  // another; otherwise the live turn's grant, else the one the next turn will start under.
+  // of the call, where agents.spawn and jobs.start read it), so a turn moved to the background keeps its grant after he types under another;
+  // otherwise the live turn's grant, else the one the next turn will start under.
   const NO_CALL = Symbol('no call');
   let callDoor = NO_CALL;
   const doorNow = () => (callDoor !== NO_CALL ? callDoor : state.turn ? state.turn.door : state.door);
@@ -250,7 +248,7 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   const SUBAGENT_INBOX = 'If the work this subagent belongs to began with an automated event (push wake, projects-watch, goal retry timer) '
     + `rather than a message from ${owner()}, apply the inbox rule to this wake; if ${owner()} asked for it, leave the chat as it is. ` + INBOX_RULE;
   function wakeTurn(blocks, reason) {
-    // The woken turn runs under the grant of what woke it, none when that ran under none; the stale grant of the owner's last message may have
+    // The woken turn runs under the grant of what woke it, none when that ran under none; the stale grant of his last message may have
     // closed long ago, and work a doorless cause starts has no lineage to it.
     state.door = doorOfCauses(ledger, sessionId, cause);
     cause.agentIds = []; cause.jobIds = [];
@@ -613,7 +611,11 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     const summarySeq = ledger.append(sessionId, 'user', 'summary', [{ type: 'text', text: `[Compacted context summary written ${at} by ${model}; ${older.length} earlier messages are retained in the runner ledger but not in this context]\n${summary}` }], at);
     state.lastInputTokens = 0;
     state.compactGeneration += 1;
-    emit({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger, pre_tokens: preTokens, messages: older.length, summary_seq: summarySeq } });
+    // Post-compact size is an estimate: the pre-compact measured count scaled by the character share left (kept rows plus the summary).
+    const sizeOf = (list) => list.reduce((n, row) => n + JSON.stringify(row.content).length, 0);
+    const preChars = sizeOf(rows), postChars = sizeOf(rows.slice(cut)) + summary.length;
+    const postTokens = preTokens && preChars > 0 ? Math.round(preTokens * Math.min(1, postChars / preChars)) : null;
+    emit({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger, pre_tokens: preTokens, post_tokens: postTokens, messages: older.length, summary_seq: summarySeq } });
     return 'compacted';
   }
   function pushLater() {
@@ -623,6 +625,19 @@ export function createRunner({ args, env = process.env, write = (line) => proces
   }
 
   const abortTurn = () => { if (state.turn) { state.turn.interrupted = true; state.turn.controller.abort(); state.turn.requestStop?.abort(); tools.abortForeground(); } state.compactAbort?.abort(); };
+  /**
+   * A model or effort change applies to the next message, never to a turn already running (also not to the background turn that turn
+   * becomes when he types): the running turn keeps what it started with, so a switch mid-turn is the same gesture as any other
+   * (the old turn runs on where it was, the next one starts on the new setting).
+   */
+  function pinTurn(t) {
+    if (!t?.opts || t.pinned) return;
+    const pinned = t.pinned = { model, effort: reasoningEffort };
+    const request = t.opts.request;
+    t.opts.getModel = () => pinned.model;
+    t.opts.setModel = (m) => { pinned.model = m; };
+    t.opts.request = (m) => { const r = request(m); if (pinned.effort) r.reasoning_effort = pinned.effort; else delete r.reasoning_effort; return r; };
+  }
   function control(message) {
     const request = message.request || {};
     const ok = (extra = {}) => emit({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, ...extra } });
@@ -641,9 +656,9 @@ export function createRunner({ args, env = process.env, write = (line) => proces
         return ok({ response: { still_queued: state.queue.length, cancelled } });
       }
       case 'restart': state.restarting = true; abortTurn(); return ok({ response: { still_queued: state.queue.length, restarting: true } });
-      case 'set_model': model = modelFor(request.model, env); return ok();
+      case 'set_model': pinTurn(state.turn); model = modelFor(request.model, env); return ok();
       case 'set_permission_mode': permissionMode = request.mode || permissionMode; tools.setPermissionMode(permissionMode); return ok();
-      case 'set_reasoning_effort': reasoningEffort = request.effort || null; return ok();
+      case 'set_reasoning_effort': pinTurn(state.turn); reasoningEffort = request.effort || null; return ok();
       case 'apply_flag_settings': return ok();
       default: return emit({ type: 'control_response', response: { subtype: 'error', request_id: message.request_id, error: `no such control ${request.subtype}` } });
     }
@@ -673,12 +688,12 @@ export function createRunner({ args, env = process.env, write = (line) => proces
     const { blocks, spoken, redactions, seq: at } = intake(texts, pace ? 'pace' : 'owner');
     if (!pace) {
       const d = doorOf(texts.join('\n'));
-      // The owner's message joins the live turn (or starts the next): its door governs from here. An automated event joining a live turn
-      // leaves that turn's grant alone; one that starts its own turn (idle now, or queued behind a compaction) runs under its cause's grant,
-      // or under none when it names no cause that ran under a door (a push wake has no lineage to the owner's last message's grant).
+      // His message joins the live turn (or starts the next): its door governs from here. An automated event joining a live turn leaves
+      // that turn's grant alone; one that starts its own turn (idle now, or queued behind a compaction) runs under its cause's grant, or
+      // under none when it names no cause that ran under a door (a push wake has no lineage to his last message's grant).
       if (d || !isContextOnly(primary)) { state.door = d; if (state.turn) state.turn.door = d; }
       else { inheritedDoor = doorOfCauses(ledger, sessionId, causesOf(texts.join('\n'))); if (!state.turn && !state.running) state.door = inheritedDoor; }
-    } // a message of the owner's without a door starts work under none
+    } // a message of his without a door starts work under none
     if (!pace) emit({ type: 'user', message: { role: 'user', content: spoken }, isReplay: true, parent_tool_use_id: null });
     if (redactions.length) process.stderr.write(`[rev6 pull] redacted ${redactions.join(', ')} from an owner message before it reached the model\n`);
     if (state.turn || state.running) {

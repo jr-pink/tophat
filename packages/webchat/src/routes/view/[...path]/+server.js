@@ -3,7 +3,8 @@ import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { mimeFor } from '$lib/server/files.js';
-import { rawFileResponse } from '$lib/server/file-response.js';
+import { readFileSync } from 'node:fs';
+import { rawFileResponse, connectOriginsFrom } from '$lib/server/file-response.js';
 import { CORS, liveStream, storeView } from '$lib/server/quicklook-live.js';
 
 // Published quicklook artifacts, served where their links actually point.
@@ -114,9 +115,16 @@ export function GET({ params, request, url }) {
   // The page's sources name this artifact's own URL prefix, so it can load its scripts, styles,
   // images, fonts, models and __live from its own folder and nothing else.
   const artifactSrc = artifactOrigins(request, here).map((o) => `${o}/view/${ulid}/`).join(' ');
-  return rawFileResponse({ path: real, size: stat.size }, mimeFor(real), request.headers.get('range'), {
+  // App-declared connect origins (quicklook.json "connect" -> meta.json), for HTML documents only.
+  const mime = mimeFor(real);
+  let connect = [];
+  if (mime === 'text/html') {
+    try { connect = connectOriginsFrom(JSON.parse(readFileSync(join(contain(QUICKLOOK_ROOT, resolve(QUICKLOOK_ROOT, ulid)), 'meta.json'), 'utf8')).connect); } catch { connect = []; }
+  }
+  return rawFileResponse({ path: real, size: stat.size }, mime, request.headers.get('range'), {
     interactiveHtml: true,
     artifactSrc,
+    connect,
     immutable: here.searchParams.has('v'),
     extraHeaders: CORS
   });

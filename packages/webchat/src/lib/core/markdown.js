@@ -26,32 +26,35 @@ function linkify(text) {
 
 export function renderInline(line) {
   const parts = String(line).split(/(`[^`]*`?)/u);
-  return parts
+  // Code spans are rendered first and held as placeholders, so bold, italics and math that open before
+  // a code span and close after it still pair up ("**saved in `dir/` )**").
+  const held = [];
+  const prose = parts
     .map((part) => {
-      if (part.startsWith('`')) {
-        const body = part.replace(/^`|`$/gu, '');
-        // A path with spaces in backticks is one link, not the fragment after its last space.
-        const whole = wholePath(body);
-        if (whole && whole.text === body.trim()) return `<code>${escapeHtml(body.slice(0, body.indexOf(whole.text)))}${pathSpan(whole)}${escapeHtml(body.slice(body.indexOf(whole.text) + whole.text.length))}</code>`;
+      if (!part.startsWith('`')) return part;
+      const body = part.replace(/^`|`$/gu, '');
+      // A path with spaces in backticks is one link, not the fragment after its last space.
+      const whole = wholePath(body);
+      let html;
+      if (whole && whole.text === body.trim()) html = `<code>${escapeHtml(body.slice(0, body.indexOf(whole.text)))}${pathSpan(whole)}${escapeHtml(body.slice(body.indexOf(whole.text) + whole.text.length))}</code>`;
+      else {
         const segments = segmentPaths(body);
         const inner = segments.some((s) => s.type === 'path')
           ? segments.map((s) => (s.type === 'path' ? pathSpan(s) : escapeHtml(s.text))).join('')
           : escapeHtml(body);
-        return `<code>${inner}</code>`;
+        html = `<code>${inner}</code>`;
       }
-      
-      
-      
-      
-      return segmentMath(part)
-        .map((segment) => (segment.type === 'math'
-          ? renderMath(segment.value, { display: segment.display })
-          : inlineProse(segment.value)))
-        .join('');
+      held.push(html);
+      return `\u0003${held.length - 1}\u0004`;
     })
     .join('');
+  return segmentMath(prose)
+    .map((segment) => (segment.type === 'math'
+      ? renderMath(segment.value, { display: segment.display })
+      : inlineProse(segment.value)))
+    .join('')
+    .replace(/\u0003(\d+)\u0004/gu, (whole, index) => held[Number(index)] ?? '');
 }
-
 
 // Markdown links and images inside a line, taken out before anything else touches the text so the
 // path linker cannot cut their targets up: `[name](path with spaces.md)`, `[x](<a b/c.md>)`,

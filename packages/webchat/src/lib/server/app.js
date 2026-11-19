@@ -14,6 +14,7 @@ import { startDaily as startFolderDescriptions } from './folder-descriptions.js'
 import { createAuth, readSecret } from './auth.js';
 import { ACTIONS, newId, normalizeSettings } from '../core/contract.js';
 import { canonicalWorkspace, normalizeWorkspace } from '../core/workspaces.js';
+import { applyHostAction } from './agent-chat-ops.js';
 import { routePatch } from '../core/model-route.js';
 import { RUNNING_STATES, readMark } from '../core/rowstate.js';
 import { requestRefresh } from './brief.js';
@@ -387,7 +388,7 @@ function build() {
   const relays = relayConfig({ building });
   const onUserMessage = (id) => { if (!process.env.VITEST) folderRouter.schedule(id, 0); };
   // The per-turn grants behind the host door (host-grant.js, host-door.js): one per turn he starts on a peer, ended by host-door.js when
-  // that turn and everything it started have ended (never here at turn end, which would cut its subagents off).
+  // that turn and everything it started have ended.
   const hostGrants = createGrantBook();
   const onTurnEnd = (id) => { titler.schedule(id); if (!process.env.VITEST) folderRouter.schedule(id); };
   const localRunner = createRunner({ store, defaultCwd: DEFAULT_CWD, liveChildren, beforeDispatch: createEvaluationCapture({ store }), onUserMessage, onTurnEnd,
@@ -400,13 +401,15 @@ function build() {
   // A chat on a peer gets a door back into its folder here for each turn (host-door.js): a reverse tunnel this host opens to the peer
   // named by its hosts.json `ssh`, open while that turn and what it started run there. Tests open none.
   const hostDoors = process.env.VITEST || building ? null : createHostDoors({ grants: hostGrants, cwdOf: (id) => store.conversation(id)?.cwd || DEFAULT_CWD,
-    logPath: webchatStorePath('host-door.jsonl'), home: selfDevice() || 'his home host' });
-  if (hostDoors) process.once('exit', () => hostDoors.closeAll());
+    logPath: webchatStorePath('host-door.jsonl'), statePath: webchatStorePath('host-doors.json'), home: selfDevice() || 'his home host' });
+  // A stop of this server keeps the doors (their record is an owner-only file, the installed tool stays on the peer); the next boot restores them.
+  if (hostDoors) process.once('exit', () => hostDoors.suspend());
   const remoteRuntimes = createRemoteRuntimes({ store, onUserMessage, onTurnEnd, door: hostDoors,
     decideHost: (id, { text, signal }) => folderRouter.routeHost(id, { text, gate: true, signal }),
     hostGateWanted: () => folderRouter.hasRemoteCandidate() });
   const runner = remoteRuntimes.wrap(localRunner);
   if (!process.env.VITEST && !building) remoteRuntimes.start();
+  hostDoors?.restore({ hooksFor: (chatId) => remoteRuntimes.doorHooks(chatId) }).catch((e) => console.log(`[host-door] restore failed: ${e?.message || e}`));
   
   
   
@@ -1035,7 +1038,7 @@ export function applyAction(action, {
       store.append(id, 'conversation.workspace', { workspace: canonicalWorkspace(payload.workspace) }, { at });
       break;
     case ACTIONS.HOST:
-      store.append(id, 'conversation.host', { host: String(payload.host || '').trim() || null }, { at });
+      applyHostAction({ store, id, payload, at });
       break;
     case ACTIONS.DEFER:
       store.append(id, 'conversation.deferred', {

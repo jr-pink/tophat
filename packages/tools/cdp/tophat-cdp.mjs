@@ -682,12 +682,15 @@ const CMD = {
     const sub = a.job_command || 'list';
     if (sub === 'list') {
       let t = await K.listTargets(ep);
-      if (!a.keep_stale) { K.reapJobs(t); t = await K.listTargets(ep); }
+      if (!a.keep_stale) { const orphans = []; K.reapJobs(t, { orphans }); await K.reapIdleTabs(t, { endpoint: ep, extra: orphans }).catch(() => []); t = await K.listTargets(ep); }
       const ui = K.uiJobs(), p = { jobs: K.allJobs().map((j) => K.jobRow(j, t, ui)), registry: K.jobsDir() };
       if (a.all) p.uiJobs = Object.values(ui).map((r) => ({ ...r, registry: K.uiJobsDir() }));
       return out(p);
     }
-    if (sub === 'reap') return out({ reaped: K.reapJobs(await K.listTargets(ep)) });
+    if (sub === 'reap') {
+      const t = await K.listTargets(ep), orphans = [], reaped = K.reapJobs(t, { orphans });
+      return out({ reaped, closedTabs: await K.reapIdleTabs(t, { endpoint: ep, extra: orphans }).catch(() => []) });
+    }
     if (sub === 'claim' || sub === 'adopt') {
       const ui = K.uiJobs()[a.name];
       if (sub === 'claim' && ui) warn(`note: ${a.name} is also a UI-automation job (window ${ui.windowID} of ${ui.app}). The job namespace is shared by convention; same name should mean the same piece of work.\n`);

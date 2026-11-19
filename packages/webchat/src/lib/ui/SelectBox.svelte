@@ -45,6 +45,7 @@
   style:left={`${x}px`}
   style:top={`${y}px`}
   data-testid={testid}
+  data-focus-at="note"
 >
   {#if quote}<p class="quote" title={quote}>{quote}</p>{/if}
   <textarea
@@ -54,6 +55,7 @@
     {placeholder}
     disabled={busy}
     {enterkeyhint}
+    data-focus-field
     onkeydown={onkeydown}
     onbeforeinput={onbeforeinput}
     onblur={onblur}

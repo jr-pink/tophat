@@ -165,6 +165,7 @@
     {/if}
     <Composer
       bind:this={composer}
+      focusPane="mp-room"
       onsend={send}
       oninterrupt={() => session.interrupt(conversationId)}
       {running}

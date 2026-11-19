@@ -1,6 +1,7 @@
 <script>
   import { widgetDocument } from '$lib/core/rich-content.js';
   import VideoPlayer from './VideoPlayer.svelte';
+  import AudioPlayer from './AudioPlayer.svelte';
   import { openWidget } from './lightbox.svelte.js';
   import { fetchFileVersion, withFileVersion } from '$lib/core/file-version.js';
 
@@ -76,6 +77,8 @@
 
 {#if kind === 'video'}
   <VideoPlayer {url} title={content.title} />
+{:else if kind === 'audio'}
+  <AudioPlayer {url} title={content.title} />
 {:else if kind === 'videos'}
   <VideoPlayer items={content.items.map((i) => ({ title: i.title, url: withConversation(i.url) }))} />
 {:else if kind === 'image' && broken}
@@ -105,11 +108,9 @@
     </div>
   </figcaption>
   {#if kind === 'image'}
-    <a href={ready ? url : undefined} target="_blank" rel="noreferrer"><img src={ready ? url : undefined} alt={content.title} data-zoomable loading="lazy" onerror={() => broken = true} /></a>
+    <a href={ready ? url : undefined} target="_blank" rel="noreferrer"><img src={ready ? url : undefined} alt={content.title} data-zoomable loading="lazy" decoding="async" onerror={() => broken = true} /></a>
   {:else if kind === 'video'}
     <video src={url} controls playsinline preload="metadata" aria-label={content.title}><track kind="captions" /></video>
-  {:else if kind === 'audio'}
-    <audio src={url} controls preload="metadata" aria-label={content.title}></audio>
   {:else if state.status === 'loading'}
     <p role="status">Loading widget…</p>
   {:else if state.status === 'error'}
@@ -136,7 +137,6 @@
   .actions svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
   @media (pointer: coarse) { .actions :is(button, a) { width: 32px; height: 32px; } }
   img, video { display: block; max-width: 100%; max-height: 75vh; margin: auto; object-fit: contain; }
-  audio { display: block; width: 100%; }
   iframe { display: block; width: 100%; height: 420px; margin: 0 !important; border: 0; background: white; }
   pre { max-height: 65vh; overflow: auto; padding: 1rem; font-size: .8rem; }
   p { padding: 1rem; }

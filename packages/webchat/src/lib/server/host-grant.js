@@ -1,11 +1,13 @@
 // The per-turn grant behind the host door (host-door.js; docs/HOST-DESIGN.md item 5).
 //
-// The boundary is the grant and nothing else. A grant is a random bearer token minted by this (home) host for one chat the owner is in, for
-// one turn he started; it lives in this process's memory only and dies when that turn and everything it started have ended (host-door.js),
-// at the 2 hour cap after his last message in the chat, or on restart. Inside it the door is
+// The boundary is the grant. A grant is minted by this (home) host for one chat the owner is in, for one turn he started; it dies when that
+// turn and everything it started have ended (host-door.js) or at the 2 hour cap after his last message in the chat. A restart of this host
+// does not end it: host-door.js keeps the open grants in an owner-only file and restores them under the same ids on boot. Who may use a
+// grant is decided by the door (the chat key plus the subagent the caller names, mapped to its grant by the team host's ledger), not by a
+// token held per grant. Inside it the door is
 // plain access as his user: run a command, read or write any file he could. There are no path fences, because a command could step over
 // any of them. What stays: a timeout and an output cap on commands, a size cap on what a read returns, and one append-only log line per call.
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { appendFile, mkdir, open, readdir, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -21,28 +23,36 @@ export const EXEC_OUTPUT_BYTES = 200_000;
 
 export class GrantError extends Error { constructor(message, status) { super(message); this.status = status; } }
 
-export function createGrantBook({ now = () => Date.now(), makeToken = () => randomBytes(24).toString('base64url'), makeId = () => randomBytes(6).toString('hex') } = {}) {
+export function createGrantBook({ now = () => Date.now(), makeId = () => randomBytes(6).toString('hex') } = {}) {
   const byId = new Map(); // grant id -> grant (one per turn; a chat may hold several while earlier turns' work still runs)
+  const view = (g) => ({ id: g.id, chatId: g.chatId, root: g.root, expiresAt: new Date(g.expiresAt).toISOString() });
   return {
     /** A new grant for one turn of the chat. `root` is the chat folder, the default cwd. */
     grant(chatId, root, { ttlMs = GRANT_TTL_MS } = {}) {
-      const g = { id: makeId(), chatId: String(chatId), root, token: makeToken(), expiresAt: now() + ttlMs };
+      const g = { id: makeId(), chatId: String(chatId), root, expiresAt: now() + ttlMs };
       byId.set(g.id, g);
-      return { id: g.id, token: g.token, expiresAt: new Date(g.expiresAt).toISOString(), root };
+      return view(g);
+    },
+    /** A grant that was live before a restart, under its own id (host-door.js restores its doors on boot). */
+    restore({ id, chatId, root, expiresAt }) {
+      if (!id || !chatId || !root || !(expiresAt > now())) return null;
+      const g = { id: String(id), chatId: String(chatId), root, expiresAt };
+      byId.set(g.id, g);
+      return view(g);
     },
     revoke(grantId) { return byId.delete(String(grantId)); },
     /** Move a live grant's end to `untilMs` (his next message in the chat pushes the hard cap out). */
     extend(grantId, untilMs) { const g = byId.get(String(grantId)); if (!g) return false; g.expiresAt = untilMs; return true; },
-    /** The live grant this id and token name, else null; an expired one is removed on the way. */
-    authorize(id, token) {
+    /** The live grant with this id, else null; an expired one is removed on the way. The door's caller proof is the chat key and the agent it
+     *  presents (host-door.js), never a token per grant. */
+    get(id) {
       const g = byId.get(String(id));
       if (!g) return null;
       if (g.expiresAt <= now()) { byId.delete(g.id); return null; }
-      const a = Buffer.from(String(token ?? '')), b = Buffer.from(g.token);
-      return a.length === b.length && timingSafeEqual(a, b) ? g : null;
+      return g;
     },
-    /** What is granted now, without the tokens (for a status line). */
-    active() { return [...byId.values()].map((g) => ({ id: g.id, chat: g.chatId, root: g.root, expiresAt: new Date(g.expiresAt).toISOString() })); }
+    /** What is granted now (for a status line). */
+    active() { return [...byId.values()].map(view); }
   };
 }
 

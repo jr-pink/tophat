@@ -7,11 +7,14 @@ export function mediaUrl(value) {
   return `/api/file?path=${encodeURIComponent(source)}&raw=1`;
 }
 
+// Every extension the inline audio player takes; files.js serves each with an audio/* type and Range support.
+export const AUDIO_EXT = /\.(mp3|wav|ogg|oga|m4a|aac|opus|flac)$/;
+
 export function mediaKind(value) {
   const path = String(value).split(/[?#]/)[0].toLowerCase();
   if (/\.(png|jpe?g|webp|gif|svg|avif)$/.test(path)) return 'image';
   if (/\.(mp4|webm|mov|m4v|ogv|avi|mkv|wmv|flv|mpe?g|3gp|mts|m2ts)$/.test(path)) return 'video';
-  if (/\.(mp3|wav|ogg|m4a)$/.test(path)) return 'audio';
+  if (AUDIO_EXT.test(path)) return 'audio';
   if (/\.html?$/.test(path)) return 'widget-file';
   return null;
 }
@@ -24,6 +27,9 @@ const MEDIA_LINE = /^!\[([^\]]*)\]\((<[^>]+>|[^)]+)\)$/u;
 export const REMOTE_IMAGE_ROUTE = '/api/remote-image';
 
 export function remoteImageUrl(source, route = REMOTE_IMAGE_ROUTE) {
+  // A Commons "File:" page is HTML; Special:FilePath redirects to the image bytes.
+  const commons = String(source).match(/^https?:\/\/commons\.wikimedia\.org\/wiki\/(File:[^?#]+)/iu);
+  if (commons) source = `https://commons.wikimedia.org/wiki/Special:FilePath/${commons[1].slice(5)}?width=800`;
   return `${route}?u=${encodeURIComponent(source)}`;
 }
 

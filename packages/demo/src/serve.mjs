@@ -211,7 +211,7 @@ export async function serve(c) {
   }
 
   /** A fixed reply once the visitor's turns are used up: the visitor's message and the answer, written into the chat and streamed like the opener. */
-  const LIMIT_ANSWER = "Ok that's the demo. Give it a spin:\n\n```\nScan this repo for privacy, security, and malintent; then help me install it:\n" + repo + "\n```";
+  const LIMIT_ANSWER = "Ok that's the demo. Give it a spin:\n\n```\nScan this repo for privacy, security, and malintent; then install it:\n" + repo + "\n```";
   function playScripted(action, text, answer) {
     const id = action.conversation_id;
     const before = store.cursor();

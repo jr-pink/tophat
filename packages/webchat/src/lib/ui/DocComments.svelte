@@ -33,6 +33,9 @@
   import { uiApp } from '$lib/client/ui-app.js';
   import { docCommentsDecl, docThreadsDecl, overlayThreads } from '$lib/core/docs-state.js';
   import { docsCommentSink, isOffline } from '$lib/client/docs-sync.js';
+  import { collapsedOf, sidechatDecl } from '$lib/core/sidechat-state.js';
+  import { threadFocus } from '../../../../runner/tools/docstore-kit/lib/intent.js';
+  import { intentStore } from '$lib/client/intent.js';
 
   let { doc, api, threads = $bindable([]) } = $props();
 
@@ -52,12 +55,16 @@
   let narrow = $state(false);       // below RAIL_MIN_PX: popovers instead of the rail
   let rail = $state(null);
   let drafts = $state([]);          // rail cards opened here with no comment yet
-  let focusedId = $state(null);
-  let autofocusId = $state(null);
-  let collapsed = $state([]);
+  // Focus is the kit intent record's, the rail's folds are kit state, exactly as in a chat pane (ChatPane.svelte): the same store
+  // and the same transitions, keyed by this document. No flag here says which thread is focused.
+  const intent = intentStore();
+  const sideStore = uiApp().use(sidechatDecl);
+  const paneKey = `doc:${doc.token}`;
+  const focusedId = $derived(threadFocus($intent, paneKey));
+  const collapsed = $derived(collapsedOf($sideStore, paneKey));
+  const blurThread = (id) => intent.dispatch('blurThread', { pane: paneKey, id, to: { kind: 'chrome' } });
   let rev = $state(0);
   const RAIL_MIN_PX = 1100;
-  let quickBox = null;
   let replyBox = $state(null);
   const painted = new Map();        // thread id -> { el, start, end }
 
@@ -254,18 +261,17 @@
     }
   };
   async function focusRail(id) {
-    collapsed = collapsed.filter((entry) => entry !== id);
-    focusedId = id;
+    sideStore.dispatch('thread.expand', { key: paneKey, id });
+    intent.dispatch('openThread', { pane: paneKey, id });
     rev += 1;
     await tick();
     rail?.remeasure();
-    rail?.focusCard(id);
   }
   function railResolve(id, resolved) {
     if (drafts.some((draft) => draft.id === id)) { drafts = drafts.filter((draft) => draft.id !== id); return; }
     const thread = all.find((entry) => entry.id === id);
     if (thread) setResolved(thread, resolved);
-    if (focusedId === id) focusedId = null;
+    if (focusedId === id) blurThread(id);
   }
   /** Delete's two presses: the first arms it, the second deletes the whole thread (an action in the log, delivered by the sink). */
   function pressDelete(id) {
@@ -276,7 +282,7 @@
     cache.dispatch('delete.disarm');
     drafts = drafts.filter((draft) => draft.id !== id);
     adopt(threads.filter((entry) => entry.id !== id));
-    if (focusedId === id) focusedId = null;
+    if (focusedId === id) blurThread(id);
     if (peek?.id === id) peek = null;
     rev += 1;
     flushOutbox();
@@ -289,8 +295,8 @@
   });
   function railCollapse(id) {
     if (drafts.some((draft) => draft.id === id)) drafts = drafts.filter((draft) => draft.id !== id);
-    else collapsed = [...collapsed, id];
-    if (focusedId === id) focusedId = null;
+    else sideStore.dispatch('thread.collapse', { key: paneKey, id });
+    if (focusedId === id) blurThread(id);
   }
 
   // --- placing a popover -------------------------------------------------------------------------
@@ -395,7 +401,6 @@
     if (!narrow) {
       const id = randomId('t');
       drafts = [...drafts, { ...found.anchor, id, comments: [], resolvedAt: null, draft: true }];
-      autofocusId = id;
       window.getSelection()?.removeAllRanges();
       await focusRail(id);
       return true;
@@ -403,7 +408,7 @@
     const rect = found.rect();
     quick = { ...placeOver(rect || { left: window.innerWidth / 2, width: 0, top: window.innerHeight / 2, bottom: window.innerHeight / 2 }), anchor: found.anchor, rect: found.rect, text: '' };
     await tick();
-    quickBox?.focus({ preventScroll: true });
+    intent.dispatch('focus', { pane: paneKey, at: { kind: 'note', id: null } });
     return true;
   }
 
@@ -433,7 +438,7 @@
     replyText = '';
     peek = { id, ...spot, attached: Boolean(rect) };
     await tick();
-    replyBox?.focus({ preventScroll: true });
+    intent.dispatch('focus', { pane: paneKey, at: { kind: 'note', id: 'reply' } });
   }
 
   function sendReply() {
@@ -442,7 +447,7 @@
     if (!text || !thread) return;
     say({ threadId: thread.id, lineId: thread.lineId, quote: thread.quote, start: thread.start, end: thread.end }, text);
     replyText = '';
-    replyBox?.focus({ preventScroll: true });
+    intent.dispatch('focus', { pane: paneKey, at: { kind: 'note', id: 'reply' } });
   }
 
   function onReplyKey(event) {
@@ -591,6 +596,7 @@
   };
 </script>
 
+<div data-focus-pane={paneKey} style="display: contents">
 {#if !narrow}
   <SideThreads
     bind:this={rail}
@@ -600,13 +606,12 @@
     {focusedId}
     {collapsed}
     wide={true}
-    {autofocusId}
+    highlights={{ strong: focusedId ? [focusedId] : [], faint: railThreads.map((thread) => thread.id).filter((id) => id !== focusedId) }}
     comments={true}
     onresolve={railResolve}
     ondelete={pressDelete}
     armedId={armed}
     {deletable}
-    onfocus={(id) => { focusedId = id; }}
     oncollapse={railCollapse}
   />
 {/if}
@@ -626,7 +631,6 @@
       quote={quick.anchor.quote}
       placeholder="Comment"
       testid="doc-comment-box"
-      onbox={(el) => { quickBox = el; }}
       onvalue={(text) => { quick.text = text; }}
       onkeydown={onQuickKey}
     >
@@ -656,7 +660,7 @@
         {/each}
       </div>
       <div class="preply">
-        <textarea bind:this={replyBox} bind:value={replyText} rows="1" placeholder="Reply" onkeydown={onReplyKey} data-testid="doc-comment-reply-box"></textarea>
+        <textarea bind:this={replyBox} bind:value={replyText} rows="1" placeholder="Reply" onkeydown={onReplyKey} data-focus-at="note:reply" data-focus-field data-testid="doc-comment-reply-box"></textarea>
         <button class="primary" onclick={sendReply} disabled={!replyText.trim()} data-testid="doc-comment-reply">Reply</button>
       </div>
       <div class="prow">
@@ -701,6 +705,7 @@
       {/if}
     </div>
   {/if}
+</div>
 </div>
 
 <style>

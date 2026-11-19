@@ -110,12 +110,12 @@
   },
   {
    "id": "different",
-   "title": "how is this different from other assistants",
+   "title": "how is tophat different from other assistants",
    "workspace": "faqs",
    "messages": [
     {
      "role": "user",
-     "text": "how is this different from other assistants"
+     "text": "how is tophat different from other assistants"
     },
     {
      "role": "assistant",
@@ -125,27 +125,27 @@
   },
   {
    "id": "money",
-   "title": "how do you make money",
+   "title": "how does tophat make money",
    "workspace": "faqs",
    "messages": [
     {
      "role": "user",
-     "text": "how do you make money"
+     "text": "how does tophat make money"
     },
     {
      "role": "assistant",
-     "text": "We don't. Tophat is supported by donations.\n\nThe code is open, and the core has no dependencies beyond Node itself, so you can use it as a base and customize it however you like: fork it, strip it down, or build your own assistant on top of it."
+     "text": "It doesn't. Tophat is supported by donations.\n\nThe code is open, and the core has no dependencies beyond Node itself, so you can use it as a base and customize it however you like: fork it, strip it down, or build your own assistant on top of it."
     }
    ]
   },
   {
    "id": "data",
-   "title": "where does my data go",
+   "title": "where does my data go with tophat",
    "workspace": "faqs",
    "messages": [
     {
      "role": "user",
-     "text": "where does my data go"
+     "text": "where does my data go with tophat"
     },
     {
      "role": "assistant",
@@ -155,12 +155,12 @@
   },
   {
    "id": "run",
-   "title": "what do i need to run it",
+   "title": "what do i need to run tophat",
    "workspace": "faqs",
    "messages": [
     {
      "role": "user",
-     "text": "what do i need to run it"
+     "text": "what do i need to run tophat"
     },
     {
      "role": "assistant",
@@ -208,24 +208,24 @@
   },
   {
    "id": "values",
-   "title": "values study",
+   "title": "value study",
    "workspace": "curiosity / collection",
    "messages": [
     {
      "role": "user",
-     "text": "random but how do people actually figure out what their values are"
+     "text": "i want to play with light more in my sketches, how do i do a value study"
     },
     {
      "role": "assistant",
-     "text": "Researchers use a few methods, and they work better than just thinking about it:\n\n- **Card sorts.** You get a deck of 50 to 100 values (honesty, adventure, security, and so on) and sort them into very important, important and not important. The forced ranking is the point: it is easy to say everything matters, and hard to keep it up when only ten cards fit in the top pile.\n- **Questionnaires.** Shalom Schwartz's work, tested across many countries, groups values into about ten broad types, such as achievement, benevolence, security and self-direction, and shows which ones tend to pull against each other.\n- **Looking at behaviour.** What you spend your time and money on, and what you are angry about, show your values more reliably than what you say. A gap between the two is the interesting part.\n- **Peak and low moments.** Write down the best and worst weeks of the last year and ask what was present or missing.\n\nA practical way to start: do a card sort once, then check it against your calendar and bank statement for a week. Where they disagree, either the values or the schedule needs to change."
+     "text": "A value study is a small, fast sketch that skips line and detail and only works out where the light and dark go. Painters do them to settle the light before they commit to a drawing.\n\n- **Go small.** About 2 by 3 inches, 5 to 10 minutes each. Small keeps you from drawing details.\n- **Use three values.** Paper white for the lights, one mid gray, one dark. Squint at the scene until it falls into those three shapes, then block them in flat.\n- **Pick the light first.** Decide where it comes from and where the lightest light meets the darkest dark. That edge is where the eye goes.\n- **Do a few of the same scene.** Move the light or the darks around and see which one still reads from across the room.\n\nA soft pencil (4B to 6B) or a gray brush pen works; one gray marker plus a black one is fastest."
     },
     {
      "role": "user",
-     "text": "is the card sort worth doing alone?"
+     "text": "why only three values?"
     },
     {
      "role": "assistant",
-     "text": "Yes, it takes about 20 minutes and works fine alone. It works better if you do it twice, a week apart, and then look at which cards moved. The ones that stayed in the top pile both times are the ones to trust."
+     "text": "Because the eye reads a picture as a few big shapes of light and dark before anything else. Three forces you to decide which areas group together; with ten you end up copying every shift you see and the light gets muddy. Once three works, add a fourth for the half-tones and stop there."
     }
    ]
   },

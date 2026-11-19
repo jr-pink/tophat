@@ -99,6 +99,10 @@ async function httpRoute(base, route) {
 async function chromeSession(chrome, dir) {
   const port = await freePort();
   const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(dir, 'chrome-profile')}`, '--no-first-run', '--hide-scrollbars', '--window-size=1280,800', 'about:blank'], { stdio: 'ignore' });
+  // never leak the browser: kill it on every exit path (throw, process.exit, SIGTERM from `timeout`, Ctrl-C)
+  const reapChrome = () => { try { proc.kill('SIGKILL'); } catch { /* gone */ } };
+  process.once('exit', reapChrome);
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.once(sig, () => { reapChrome(); process.kill(process.pid, sig); });
   const url = await until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()).webSocketDebuggerUrl, 20_000, 'chrome');
   const ws = new WebSocket(url); await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
   let seq = 0; const pending = new Map(), listeners = new Set();

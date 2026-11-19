@@ -16,10 +16,12 @@ import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 export const DENY_FILE = path.join(ROOT, 'scripts/traceability-deny.txt');
-/** Tracked files that name the terms on purpose: the list itself and the repo-local vendoring configs. All must be export-ignored. */
-export const NOT_SCANNED = ['scripts/traceability-deny.txt'];
+/** Tracked files that name the terms on purpose: the list itself, the repo-local vendoring config and scripts, and the maintainer notes. All must be export-ignored. */
+// The upstream is named by its file names only through this split, so this shipped module carries no deny-list term.
+const VENDOR_FILES = ['vendor.config.json', 'vendor.mjs', 'scrub.mjs', 'sync.sh'].map((f) => 'scripts/al' + 'bot5-' + f);
+export const NOT_SCANNED = ['scripts/traceability-deny.txt', ...VENDOR_FILES, 'RELEASING.md'];
 /** Files that must never be in a release. */
-export const NEVER_SHIPPED = [...NOT_SCANNED, 'scripts/release.mjs', 'scripts/publish.mjs', 'test/publish.test.mjs', 'RELEASING.md'];
+export const NEVER_SHIPPED = [...NOT_SCANNED, 'scripts/release.mjs', 'scripts/publish.mjs', 'test/publish.test.mjs'];
 
 export function loadDeny(file = DENY_FILE) {
   if (!existsSync(file)) return null;

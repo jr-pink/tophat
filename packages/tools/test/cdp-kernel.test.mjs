@@ -156,6 +156,28 @@ test('job registry: same layout, exclusive claim, reaping rules, protected ids',
   assert.deepEqual(K.defaultJobName({ TOPHAT_AGENT_ID: 'agent/2e36 e1c7!' }), ['agent-2e36-e1c7', 'TOPHAT_AGENT_ID']);
   assert.deepEqual(K.defaultJobName({}, 42), ['auto-42', 'process']);
 });
+test('idle tabs: only unheld, unprotected, unchanged pages past the ttl are closed; the last page stays', async () => {
+  const dir = tmp(), env = { TOPHAT_CDP_JOBS: path.join(dir, 'jobs'), TOPHAT_CDP_PROTECT_FILE: path.join(dir, 'p.txt'), HOME: dir };
+  fs.writeFileSync(env.TOPHAT_CDP_PROTECT_FILE, 'P1\n');
+  K.saveJob(K.newJobRecord('held', 'H1'), env);
+  const page = (id, url = `https://x.com/${id}`) => ({ id, type: 'page', url, title: id });
+  const targets = [page('H1'), page('P1'), page('I1'), page('I2'), page('C1'), { id: 'F1', type: 'iframe', url: 'https://x.com/f', title: '' }];
+  const closed = []; const close = async (id) => { closed.push(id); return true; };
+  const t0 = Date.parse('2026-11-18T00:00:00Z'), H = 3600e3;
+  assert.deepEqual(await K.reapIdleTabs(targets, { close, env, now: t0 }), [], 'first sight starts the clock, closes nothing');
+  assert.deepEqual(await K.reapIdleTabs(targets, { close, env, now: t0 + 0.5 * H }), []);
+  const moved = targets.map((t) => (t.id === 'C1' ? { ...t, url: 'https://x.com/changed' } : t));   // C1 navigated: clock restarts
+  assert.deepEqual((await K.reapIdleTabs(moved, { close, env, now: t0 + 1.5 * H })).sort(), ['I1', 'I2'], 'held, protected, changed and non-page targets survive');
+  assert.deepEqual(closed.sort(), ['I1', 'I2']);
+  assert.deepEqual(await K.reapIdleTabs(moved.filter((t) => t.id !== 'I1' && t.id !== 'I2'), { close, env, now: t0 + 1.5 * H }), []);
+  assert.deepEqual(await K.reapIdleTabs(moved, { close, env, now: t0 + 9 * H, ttl: 0 }), [], 'ttl 0 turns it off');
+  // an orphaned ephemeral claim's tab goes at once, but never the only page
+  assert.deepEqual(await K.reapIdleTabs([page('E1'), page('E2')], { close, env, now: t0 + 9 * H, extra: ['E1', 'E2'] }), ['E2'], 'the last page stays');
+  const orphans = [];
+  K.saveJob({ ...K.newJobRecord('eph', 'E1', { ephemeral: true }), pid: 999999, lastSeen: '2020-01-01T00:00:00+0000' }, env);
+  assert.deepEqual(K.reapJobs([page('E1'), page('H1')], { env, orphans }), ['eph']);
+  assert.deepEqual(orphans, ['E1']);
+});
 test('endpoint discovery: env, config, local only, never a guessed port', () => {
   const dir = tmp();
   assert.throws(() => K.discover({ HOME: dir }), (e) => e.code === 1 && /guessing a port/.test(e.message));

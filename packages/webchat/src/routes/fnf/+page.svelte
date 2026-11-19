@@ -199,6 +199,7 @@
   {#if error}<div class="error">{error}</div>{/if}
 
   <Composer
+    focusPane="fnf"
     onsend={send}
     placeholder="Say it and forget it…"
     autofocus={true}

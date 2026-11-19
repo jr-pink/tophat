@@ -65,10 +65,18 @@ export function fetchVaultSecret(spec, env = process.env) {
   const named = envGet(env, 'TOPHAT_CDP_PASS_BIN');
   const bin = named || process.execPath;
   const lead = named ? [] : [fileURLToPath(new URL('../../bin/tophat-pass.mjs', import.meta.url))];
-  const argv = field === 'totp' ? ['totp', entry] : ['get', entry, '--raw', '-n', ...(field ? ['--field', field] : [])];
+  // A dotted field (card billing_address.postal_code) walks the JSON secret in process; tophat-pass reads one level only.
+  const dotted = field.includes('.') && field !== 'totp';
+  const argv = field === 'totp' ? ['totp', entry] : ['get', entry, '--raw', '-n', ...(field && !dotted ? ['--field', field] : [])];
   const r = spawnSync(bin, [...lead, ...argv], { encoding: 'utf8', timeout: 30000, env });
   if (r.error) throw usage(`could not run tophat-pass for ${entry}: ${r.error.code || r.error.name}`);
   if (r.status !== 0 || !r.stdout) throw usage(`tophat-pass could not read ${spec} (exit ${r.status ?? -1}); nothing was typed`);
+  if (dotted) {
+    let o; try { o = JSON.parse(r.stdout); } catch { throw usage(`${entry} is not a JSON secret, so ${field} cannot be read; nothing was typed`); }
+    const v = field.split('.').reduce((x, k) => (x && typeof x === 'object' ? x[k] : undefined), o);
+    if (v == null || typeof v === 'object') throw usage(`${entry} has no field ${field}; nothing was typed`);
+    return String(v);
+  }
   return field === 'totp' ? r.stdout.trim() : r.stdout.replace(/[\r\n]+$/, '');
 }
 

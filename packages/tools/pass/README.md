@@ -21,7 +21,7 @@ metadata only. Values print only from `get`, `totp`, `recovery --spend`, `genera
 - `import` deletes the export after a good import (it is every password in cleartext); `--keep` retains it, and a failed import
   deletes nothing.
 - A vault sealed under an older record-binding prefix (a store made before a product rename) reads when
-  `TOPHAT_VAULT_LEGACY_AAD_PREFIX` names that prefix. It is a read fallback: writes use the current prefix.
+  `vault.json` beside config.json lists that prefix (`{"aadPrefixes": ["tophat", "older"]}`); a missing or malformed file is an error that names it, raised only when the current prefix does not open a record. It is a read fallback: writes use the current prefix.
 - Exit codes: 0 ok, 1 error, 2 usage, 3 unknown credential or field, 4 locked.
 
 `tophat-cdp --secret-from VAULT_ID[:field]` and `tophat-vnc` read their secrets through this command (or through

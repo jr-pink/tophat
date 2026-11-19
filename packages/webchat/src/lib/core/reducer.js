@@ -391,7 +391,7 @@ function applyEvent(draft, event) {
     case 'message.user': {
       upsert(draft, id, content.itemId || event.event_id,
         { type: 'user', at, cursor: event.cursor, agentId: null },
-        (item) => ({ ...item, text: content.text || '', participantId: content.participantId ?? null, queued: false }));
+        (item) => ({ ...item, text: content.text || '', participantId: content.participantId ?? null, queued: false, ...(content.cards?.length ? { cards: content.cards } : {}) }));
       const current = draft.conversations[id];
       patchConversation(draft, id, at, {
         turns: current.turns + 1,
@@ -471,12 +471,13 @@ function applyEvent(draft, event) {
       upsert(draft, id, content.itemId || event.event_id,
         {
           type: 'compaction', at, cursor: event.cursor, agentId: null,
-          trigger: 'auto', preTokens: null, messages: null, summary: '', summaryAt: null, model: null
+          trigger: 'auto', preTokens: null, postTokens: null, messages: null, summary: '', summaryAt: null, model: null
         },
         (item) => ({
           ...item,
           trigger: content.trigger || item.trigger,
           preTokens: content.preTokens ?? item.preTokens,
+          postTokens: content.postTokens ?? item.postTokens,
           messages: content.messages ?? item.messages,
           summary: content.summary || item.summary,
           summaryAt: content.summaryAt ?? item.summaryAt,

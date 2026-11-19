@@ -53,6 +53,9 @@ describe('the first minute, against a scratch demo', { skip, concurrency: 6 }, (
     const chromeUp = (async () => {
       const port = await freePort();
       chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${path.join(dir, 'profile')}`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+      // never leak the browser if the run is killed before after() (SIGTERM from `timeout`, Ctrl-C)
+      process.once('exit', () => { try { chrome.kill('SIGKILL'); } catch { /* gone */ } });
+      for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.once(sig, () => { try { chrome.kill('SIGKILL'); } catch { /* gone */ } process.kill(process.pid, sig); });
       return until(async () => (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()).webSocketDebuggerUrl, 20_000, 'chrome');
     })();
     const cfg = path.join(dir, 'cfg'), state = path.join(dir, 'state'), ws0 = path.join(dir, 'ws');

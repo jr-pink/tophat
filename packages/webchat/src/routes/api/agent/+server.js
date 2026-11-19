@@ -10,7 +10,10 @@ import { PROVIDERS } from '$lib/core/providers.js';
 import { spawnDurableWork, agentTranscript, deliverWorkResult } from '$lib/server/work-service.js';
 import { secretsDir } from '../../../lib/server/secrets.js';
 import { cleanTitle } from '$lib/core/arrival-title.js';
-import { canonicalWorkspace } from '$lib/core/workspaces.js';
+import { fileChatWorkspace, moveChatHost } from '$lib/server/agent-chat-ops.js';
+import { foldersOf } from '$lib/server/autoroute.js';
+import { readAll as readDescriptions } from '$lib/server/folder-descriptions.js';
+import { listHosts } from '$lib/server/hosts.js';
 import { conversationEventStream, SSE_HEADERS } from '$lib/server/conversation-stream.js';
 import { receiveUpload } from '$lib/server/peer-upload.js';
 import { importChat } from '$lib/server/chat-import.js';
@@ -100,10 +103,27 @@ export async function POST({ request, getClientAddress }) {
     // too.
     const id = resolveConversation(app.store, String(body.conversationId || ''));
     if (!id) return json({ error: `no conversation ${body.conversationId}` }, { status: 404 });
-    if (op === 'workspace') applyAction({ op: 'conversation.set_workspace', conversation_id: id, payload: { workspace: canonicalWorkspace(body.workspace) } });
-    else applyAction({ op: 'conversation.set_aside', conversation_id: id, payload: { aside: body.aside !== false } });
+    if (op === 'workspace') {
+      // A name that is no existing folder is refused unless create is true (owner: "don't create folders like that"); the
+      // error lists the folders. This chat's own workspace does not make a folder exist.
+      const folders = foldersOf(app.store.conversations().filter((c) => c.id !== id), readDescriptions()).map((f) => f.name);
+      const filed = fileChatWorkspace({ apply: applyAction, id, workspace: body.workspace, create: body.create === true, folders });
+      if (filed.status !== 200) return json(filed.body, { status: filed.status });
+      return json({ ...filed.body, aside: Boolean(app.store.conversation(id)?.aside) }, { headers: { 'cache-control': 'no-store' } });
+    }
+    applyAction({ op: 'conversation.set_aside', conversation_id: id, payload: { aside: body.aside !== false } });
     const c = app.store.conversation(id);
     return json({ ok: true, id, workspace: c?.workspace || null, aside: Boolean(c?.aside) }, { headers: { 'cache-control': 'no-store' } });
+  }
+
+  if (op === 'host') {
+    // chat_host (rev6/pull/chat.mjs): the host selector in the chat menu, for the chat's own agent. The same conversation.set_host
+    // action the browser sends, through applyAction; only the sign-in differs (this route's service token). Answers the chat's host
+    // read back from the store.
+    const id = resolveConversation(app.store, String(body.conversationId || ''));
+    if (!id) return json({ error: `no conversation ${body.conversationId}` }, { status: 404 });
+    const moved = moveChatHost({ store: app.store, apply: applyAction, hosts: listHosts(), id, host: body.host });
+    return json(moved.body, { status: moved.status, headers: { 'cache-control': 'no-store' } });
   }
 
   if (op === 'rename') {

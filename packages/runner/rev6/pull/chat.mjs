@@ -1,4 +1,4 @@
-// The chat's own agent names and files its conversation: chat_rename and chat_archive. Before this an
+// The chat's own agent names, files and homes its conversation: chat_rename, chat_archive, chat_workspace, chat_host. Before this an
 // agent had no way to touch its own chat's title or archive flag short of minting a browser session
 // cookie.
 //
@@ -16,6 +16,7 @@ import { webchatOrigin } from '../base/endpoints.mjs';
 export const agentUrl = (env = process.env) => env.TOPHAT_WEBCHAT_AGENT_URL || `${webchatOrigin({ env })}/api/agent`;
 const MAX_TITLE = 90;
 const MAX_WORKSPACE = 60;
+const MAX_HOST = 80;
 // The specs are data, in tools.json's "chat" group (chatSpecs in tools.mjs).
 
 function serviceToken(env) {
@@ -56,10 +57,19 @@ export function createChatTools({ env = process.env, conversationId = env.TOPHAT
     },
     // /api/agent op workspace existed but no tool reached it, so a chat's agent that was told "this chat didn't get filed" could
     // only rename it.
+    // The webchat refuses a name that is no existing folder (unless create is true) and lists the folders in its error.
     async chat_workspace(i) {
       const workspace = String(i?.workspace ?? '').replace(/\s+/gu, ' ').trim();
       if (workspace.length > MAX_WORKSPACE) return { error: `workspace is ${workspace.length} characters; keep it to ${MAX_WORKSPACE}` };
-      return call({ op: 'workspace', workspace });
+      return call({ op: 'workspace', workspace, ...(i?.create === true ? { create: true } : {}) });
+    },
+    // The host selector in the chat menu, for this chat's agent: /api/agent op host applies the same conversation.set_host action the
+    // menu sends and answers the chat's host read back ({ ok, host, label, changed }); the webchat resolves the name against its hosts.
+    async chat_host(i) {
+      const host = String(i?.host ?? '').replace(/\s+/gu, ' ').trim();
+      if (!host) return { error: 'chat_host needs a host: a host name such as "teamhost", or "local" for this host' };
+      if (host.length > MAX_HOST) return { error: `host is ${host.length} characters; keep it to ${MAX_HOST}` };
+      return call({ op: 'host', host });
     },
   };
 }

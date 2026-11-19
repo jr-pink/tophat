@@ -25,13 +25,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { findMyFor } from './findmy-link.mjs';
+import { lastExchange as recentExchange, RECENT_DAYS } from '../base/recent-exchange.mjs';
 // identity.mjs (rev6/push) holds the private-people gate; loaded so that a broken push module (it is edited by other
 // work) cannot take the runner's tools down with it. Without the gate, linking is off (fail closed), never ungated.
 let identity = null;
 try { identity = await import('../push/identity.mjs'); } catch { identity = null; }
 
-const RECENT_DAYS = 14;
-const MSG_SOURCES = String(process.env.TOPHAT_MESSAGING_SOURCES || 'imessage-history,beeper').split(',').map((s) => s.trim()).filter(Boolean);
 // mentions.method values (rev6/push/identity.mjs resolve) that are a settled identity, not a guess or a carry-over.
 export const TRUSTED_METHODS = ['name', 'thread-key', 'thread-copresence', 'new', 'interpreter-code'];
 const TRUSTED_SQL = TRUSTED_METHODS.map((m) => `'${m}'`).join(',');
@@ -122,26 +121,7 @@ function persons(h, index, ids) {
   });
 }
 
-function lastExchange(h, p, since, until) {
-  let best = null;
-  for (const r of p.idents) {
-    if (r.source === 'contacts') continue;
-    const native = String(r.native || ''), key = String(r.key || '');
-    const forms = new Set([native]);
-    if (key.startsWith('phone:')) { const d = key.slice(6); forms.add(`+1${d}`); forms.add(`+${d}`); }
-    if (key.startsWith('email:')) forms.add(key.slice(6));
-    for (const f of forms) {
-      if (!f) continue;
-      for (const src of MSG_SOURCES) {
-        const a = stmt(h, 'SELECT MAX(occurred_at) t FROM raw_data WHERE source=? AND author=? AND occurred_at>=? AND occurred_at<=?').get(src, f, since, until)?.t;
-        if (a && (!best || a > best.at)) best = { at: a, via: src, handle: f };
-      }
-      const t = stmt(h, "SELECT MAX(occurred_at) t FROM raw_data WHERE source='imessage-history' AND account='' AND thread=? AND occurred_at>=? AND occurred_at<=?").get(`imessage:${f}`, since, until)?.t;
-      if (t && (!best || t > best.at)) best = { at: t, via: 'imessage-history', handle: f };
-    }
-  }
-  return best;
-}
+function lastExchange(h, p, since, until) { return recentExchange((sql, ...args) => stmt(h, sql).get(...args), p.idents, since, until); }
 
 /** The conversation's own context, as it stood at the question:
  *   named:   entities its earlier turns named UNAMBIGUOUSLY (TRUSTED_METHODS only), and, for a chat born from an event, entities named in the arrival's thread

@@ -16,7 +16,9 @@
     focusedId = null,
     collapsed = [],
     wide = true,
-    autofocusId = null,
+    // What the passages are painted with: { faint: [thread ids], strong: [thread ids] }, from the kit intent record (highlightsFor).
+    // The page owns the answer: a pane that is not the focused one passes nothing, so no colour is left behind.
+    highlights = { faint: [], strong: [] },
     hoverBlock = null,
     oncomment = () => {},
     selection = null,
@@ -34,7 +36,6 @@
     onquickkey = () => {},
     onquickbeforeinput = () => {},
     onquickbox = () => {},
-    onfocus = () => {},
     oncollapse = () => {},
     onnewchat = () => {},
     // Comment mode (public documents): passed to each card; `onresolve(id, resolved)`.
@@ -120,14 +121,22 @@
     if (!registry) return;
     const all = [];
     const focus = [];
+    const strong = new Set(highlights.strong);
+    const faint = new Set(highlights.faint);
     for (const thread of threads) {
+      if (!strong.has(thread.id) && !faint.has(thread.id)) continue;
       const found = rangeFor(thread);
       if (!found?.range) continue;
-      (thread.id === focusedId ? focus : all).push(found.range);
+      (strong.has(thread.id) ? focus : all).push(found.range);
     }
+    // The two registry names are the document's, shared by every pane: a pane with nothing to paint that never painted leaves them
+    // alone, so a second pane cannot wipe the focused pane's marks; a pane that painted and now has none (its focus left) clears them.
+    if (!all.length && !focus.length && !painting) return;
+    painting = all.length > 0 || focus.length > 0;
     setHighlight(registry, 'sidechat', all);
     setHighlight(registry, 'sidechat-focus', focus);
   }
+  let painting = false;
 
   function setHighlight(registry, name, ranges) {
     if (!ranges.length) { registry.delete(name); return; }
@@ -149,6 +158,7 @@
     threads.length;
     chatState.rev;
     focusedId;
+    highlights;
     if (!scroller) return;
     tick().then(measure);
   });
@@ -190,7 +200,6 @@
   }
 
   export function remeasure() { tick().then(measure); }
-  export function focusCard(id) { cards[id]?.focusComposer(); }
 </script>
 
 
@@ -276,8 +285,6 @@
           {chatState}
           {thread}
           focused={thread.id === focusedId}
-          autofocus={thread.id === autofocusId}
-          onfocus={() => onfocus(thread.id)}
           oncollapse={() => oncollapse(thread.id)}
           {onnewchat}
           {comments}
@@ -297,7 +304,10 @@
   .rail {
     position: absolute;
     top: 0;
-    right: 12px;
+    /* Sit against the text column, not the viewport edge: the column is centred in
+       what the transcript's rail padding leaves, so its right edge is
+       (100% - pad + colW) / 2; never closer than 12px to the viewport. */
+    right: max(12px, calc(100% - (100% - var(--rail-pad, 344px) + min(var(--column) + 2 * var(--column-gutter), 100% - var(--rail-pad, 344px))) / 2 - var(--rail-width)));
     width: var(--rail-width);
     height: 0;
     pointer-events: none;

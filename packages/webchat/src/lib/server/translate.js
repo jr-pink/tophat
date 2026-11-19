@@ -456,6 +456,7 @@ export function translate(ctx, msg) {
         // pre_tokens is absent when nothing measured the context that was cut; the count of rows replaced is
         // always known, so the card can be honest about the size of the cut even then.
         preTokens: Number.isFinite(meta.pre_tokens) ? meta.pre_tokens : null,
+        postTokens: Number.isFinite(meta.post_tokens) ? meta.post_tokens : null,
         messages: written?.messages ?? (Number.isFinite(meta.messages) ? meta.messages : null),
         summary: written?.summary || '',
         summaryAt: written?.writtenAt || null,

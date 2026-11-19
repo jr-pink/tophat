@@ -41,7 +41,7 @@ export function resolveConversation(store, id) {
 
 // `automated` is true for everything from outside the app (push wakes, projects-watch, goal retry timers, Discord and
 // other /api/inbound callers) and false only for the owner's own fire-and-forget message (routes/api/ff).
-export async function settle(ffId, { text, wire = null, context = null, conversationId = null, title: given = null, automated = true } = {}) {
+export async function settle(ffId, { text, wire = null, context = null, cards = null, conversationId = null, title: given = null, automated = true } = {}) {
   const store = app.store;
   let title = null;
   // A chat an arrival opens is named "Who: what": the title the push plane sent, else one derived from
@@ -92,7 +92,7 @@ export async function settle(ffId, { text, wire = null, context = null, conversa
   if (!automated && store.conversation(conversationId)?.archived) {
     store.append(conversationId, 'conversation.archived', { archived: false }, { at: new Date().toISOString() });
   }
-  const sent = app.runner.send(conversationId, automated ? withInboxRule(wire || text) : (wire || text), { display: text }) || {};
+  const sent = app.runner.send(conversationId, automated ? withInboxRule(wire || text) : (wire || text), { display: text, ...(cards?.length ? { cards } : {}) }) || {};
   store.ffSettle(ffId, { state: 'sent', conversationId, title: title || store.conversation(conversationId)?.title, reason });
   return { conversationId, title, reason, injected: Boolean(sent.injected) };
 }

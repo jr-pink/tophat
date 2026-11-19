@@ -7,6 +7,7 @@ import { requireChat, scopeContext } from '$lib/server/scope-guard.js';
 import { isText, listDirectory, mimeFor, readForPreview } from '$lib/server/files.js';
 import { playable } from '$lib/server/video.js';
 import { fileVersion } from '$lib/core/file-version.js';
+import { rawCacheHeaders, notModified } from '$lib/server/file-cache.js';
 
 export async function GET(event) {
   const { url, request } = event;
@@ -67,11 +68,8 @@ export async function GET(event) {
     // is kept for good. Anything else is revalidated each time (an image), so a rewritten file is never
     // shown from a copy kept under the same URL; the etag makes that a 304 while the file is unchanged.
     const version = fileVersion(found);
-    const pinned = Boolean(version) && url.searchParams.get('v') === version;
-    const headers = version ? { etag: `"${version}"` } : {};
-    if (pinned) headers['cache-control'] = 'private, max-age=31536000, immutable';
-    else if (mime.startsWith('image/')) headers['cache-control'] = 'private, no-cache';
-    if (version && !request.headers.get('range') && request.headers.get('if-none-match') === headers.etag) {
+    const headers = rawCacheHeaders({ version, requestedVersion: url.searchParams.get('v'), mime });
+    if (notModified({ headers, ifNoneMatch: request.headers.get('if-none-match'), range: request.headers.get('range') })) {
       return new Response(null, { status: 304, headers: { ...headers, 'cache-control': headers['cache-control'] || 'private, max-age=5' } });
     }
     return rawFileResponse(found, mime, request.headers.get('range'), { extraHeaders: headers });

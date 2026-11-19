@@ -1,6 +1,6 @@
-// What of one door grant still runs on this (team) host (docs/HOST-DESIGN.md item 5). The member's home host asks this after the grant's turn ended (GET /api/door) and keeps the
-// door open while the answer is live. Read-only from the runner ledger, where rev6 tags each subagent, background turn and job with the
-// grant of the turn that started it (rev6/base/door-tag.mjs):
+// What of one door grant still runs on this (team) host. The member's home host asks this after the grant's turn ended (GET /api/door) and
+// keeps the door open while the answer is live. Read-only from the runner ledger, where rev6 tags each subagent, background turn and job with
+// the grant of the turn that started it (rev6/base/door-tag.mjs):
 //   turn    the chat's runner is busy and his latest message in it carries this grant (the turn itself, or a wake of it by a report)
 //   agents  subagents and background turns tagged with the grant and still running
 //   jobs    background jobs tagged with it and still running

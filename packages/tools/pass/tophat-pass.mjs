@@ -11,7 +11,7 @@
 //   TOPHAT_VAULT_DIR, TOPHAT_VAULT_KEY_FILE   the vault (default ~/.config/tophat/vault and vault-master-key beside it)
 //   TOPHAT_PASS_MANAGER                       path of the PasswordManager module (default: the runner package beside this one)
 //   TOPHAT_PASS_PASSPHRASE | --passphrase-stdin   unlock a passphrase-protected vault; otherwise exit 4
-//   TOPHAT_VAULT_LEGACY_AAD_PREFIX            read a vault sealed under an older record-binding prefix (read fallback only)
+//   vault.json beside config.json            {"aadPrefixes": [...]}: read a vault sealed under an older record-binding prefix (read fallback only)
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
@@ -67,8 +67,10 @@ const HELP = `tophat-pass: read and manage a tophat credential vault from the co
         where the vault is, whether it exists, how many entries, locked or not.
   tophat-pass recovery ID [--spend]
         how many recovery codes are left; --spend prints one unused code and marks it used.
-  tophat-pass generate [--length N]
-        a new random password (default: three readable six-character groups). Stores nothing.
+  tophat-pass generate
+        a new random password, always Apple Passwords style: three six-character alphanumeric groups joined by
+        dashes (abc4ef-ghijKm-npqrst). Stores nothing. --length alone is refused: a site that rejects that shape
+        is the only reason for --dense N (N random characters with symbols); say which site needed it.
 
 Write verbs. A secret comes from --file PATH or stdin, never argv. Nothing here prints a stored value.
   tophat-pass init
@@ -195,8 +197,10 @@ export async function main(argv, env = process.env) {
       return EXIT.ok;
     }
     if (verb === 'generate') {
-      const length = flags.length === undefined ? undefined : Number(flags.length);
-      out(guard(() => store.module.generatePassword(length)));
+      // One shape for every password an agent makes (the owner, 2026-11-17: "use the apple passwords style 6 x 3
+      // alpha-numeric with dash separated"). --length used to switch silently to a dense symbol password.
+      if (flags.length !== undefined) throw new Fail('generate makes Apple-style passwords (xxxxxx-xxxxxx-xxxxxx) only; --length is not accepted. For a site that rejects that shape use --dense N.', EXIT.usage);
+      out(guard(() => store.module.generatePassword(flags.dense === undefined ? undefined : { dense: Number(flags.dense) })));
       return EXIT.ok;
     }
     if (verb === 'init') {

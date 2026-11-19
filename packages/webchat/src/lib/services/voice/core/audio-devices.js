@@ -170,6 +170,23 @@ export function audioConstraint(deviceId) {
   return { audio };
 }
 
+/**
+ * The constraint voice mode opens a microphone with. Dictation turns echo cancellation off because it wants the
+ * cleanest possible waveform for the decoder; a conversation has a loudspeaker in the room playing the reply, and
+ * without cancellation the recogniser hears the reply and answers it. The same switch is what lets his voice over
+ * the reply count as a barge-in instead of the reply itself.
+ */
+export function voiceConstraint(deviceId) {
+  const audio = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true
+  };
+  if (deviceId) audio.deviceId = { exact: deviceId };
+  return { audio };
+}
+
 const OBVIOUSLY_NOT_A_HORN = /macbook|built-?in|imac|airpods|headset|display audio/iu;
 
 export function conditionMismatch({ label, condition }) {

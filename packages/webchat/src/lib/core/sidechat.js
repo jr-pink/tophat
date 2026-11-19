@@ -10,11 +10,13 @@ export const SELECT_GESTURES = false;
 // selection still do nothing (SELECT_GESTURES).
 export const SELECT_PILL = true;
 
-export const RAIL_WIDTH = 320;
+// 30% wider than the 320 / 520 it was.
+export const RAIL_WIDTH = 416;
 // The rail grows with the pane: a third of it, between 320px and 520px.
-export const RAIL_MAX_WIDTH = 520;
+export const RAIL_MAX_WIDTH = 676;
 export function railWidthFor(paneWidth) {
-  const width = Math.round((Number(paneWidth) || 0) / 3);
+  // a third of the pane, 30% wider than before at every width (floor and ceiling scaled the same)
+  const width = Math.round(((Number(paneWidth) || 0) / 3) * 1.3);
   return Math.max(RAIL_WIDTH, Math.min(RAIL_MAX_WIDTH, width));
 }
 export const RAIL_MIN_PANE = 900;

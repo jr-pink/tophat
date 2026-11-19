@@ -169,7 +169,7 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
     entry.running = true;
     // A run's end is delivered once per run: a resumed child (agent_send on a finished one, a restart relaunch) must report again, so the
     // previous run's delivery stamp goes with its ended_at. Kept stamped, the second report was "already delivered" and never woke the
-    // parent (agent_887d19e8, 2026-11-15: finished 08:45Z, parent not woken until 19:49Z).
+    // parent.
     q("UPDATE agents SET status = 'running', ended_at = NULL, delivered_at = NULL, owner_pid = ? WHERE id = ?").run(process.pid, id);
     entry.promise = run(id).catch((error) => { finish.run('failed', `[runner error: ${error.message}]`, null, null, 0, now(), null, id); live.delete(id); for (const w of entry.waiters) w(); settledNow(id); });
   }

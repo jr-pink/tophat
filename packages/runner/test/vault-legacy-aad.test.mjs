@@ -1,4 +1,4 @@
-// A vault written under an older AAD prefix stays readable through TOPHAT_VAULT_LEGACY_AAD_PREFIX; writes use the current prefix.
+// A vault written under an older AAD prefix stays readable when vault.json (beside config.json) lists that prefix; writes use the current prefix.
 import assert from 'node:assert/strict';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -18,26 +18,28 @@ const reseal = (file, key, name, from, to) => {
   fs.writeFileSync(file, Buffer.concat([bytes.subarray(0, 4), nonce, c.getAuthTag(), ct]));
 };
 
-test('a record sealed under a legacy AAD prefix reads only when that prefix is named', () => {
+test('a record sealed under a legacy AAD prefix reads only when vault.json names that prefix', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-aad-'));
   const m = new PasswordManager({ directory: path.join(dir, 'vault'), keyFile: path.join(dir, 'vault-master-key') });
-  const saved = process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX;
+  const saved = process.env.TOPHAT_CONFIG;
+  const listing = (prefixes) => fs.writeFileSync(path.join(dir, 'vault.json'), JSON.stringify({ aadPrefixes: prefixes }));
   try {
-    delete process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX;
+    process.env.TOPHAT_CONFIG = path.join(dir, 'config.json');
+    listing(['tophat']);
     m.write('note-one', 'hello');
     assert.equal(m.read('note-one'), 'hello');
     const key = m.key();
     reseal(m.file('note-one'), key, 'note-one', 'tophat', 'older');
     assert.throws(() => m.read('note-one'), /integrity/);
-    process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX = 'older';
+    listing(['tophat', 'older']);
     assert.equal(m.read('note-one'), 'hello');
-    // a new write is sealed under the current prefix, and still reads with the fallback on
+    // a new write is sealed under the current prefix, and still reads with the fallback listed
     m.write('note-two', 'fresh');
     reseal(m.file('note-two'), key, 'note-two', 'tophat', 'tophat');
-    delete process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX;
+    listing(['tophat']);
     assert.equal(m.read('note-two'), 'fresh');
   } finally {
-    if (saved === undefined) delete process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX; else process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX = saved;
+    if (saved === undefined) delete process.env.TOPHAT_CONFIG; else process.env.TOPHAT_CONFIG = saved;
     m.lock?.(); fs.rmSync(dir, { recursive: true, force: true });
   }
 });

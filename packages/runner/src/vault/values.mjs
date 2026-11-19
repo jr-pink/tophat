@@ -57,12 +57,13 @@ export function totp(input, now = Date.now()) {
     return { code, expiresAt: (Math.floor(now / 1000 / spec.period) + 1) * spec.period * 1000 };
   } finally { key.fill(0); }
 }
-// A manager that cannot make a password sends people back to reusing one. Uniform
-// over an unambiguous alphabet: no character-class rules, which shrink the search
-// space more than they add at these lengths. Easy to read aloud and type by hand;
-// about 87 bits. An explicit length keeps the old dense form.
-export function generatePassword(length) {
-  if (length === undefined) {
+// A manager that cannot make a password sends people back to reusing one. Easy
+// to read aloud and type; about 87 bits. A bare length is refused rather than
+// silently switching shape. A site that cannot take this shape is the one named
+// opt-in: {dense: N}, N random characters with symbols.
+export const APPLE_PASSWORD_RE = /^[A-Za-z0-9]{6}-[A-Za-z0-9]{6}-[A-Za-z0-9]{6}$/;
+export function generatePassword(options) {
+  if (options === undefined || options === null) {
     const lower = 'abcdefghijkmnpqrstuvwxyz', upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ', digit = '23456789';
     const chars = Array.from({ length: 18 }, () => lower[randomInt(lower.length)]);
     const capital = randomInt(18);
@@ -72,6 +73,9 @@ export function generatePassword(length) {
     chars[number] = digit[randomInt(digit.length)];
     return [0, 6, 12].map((i) => chars.slice(i, i + 6).join('')).join('-');
   }
+  required(record(options) && Object.keys(options).every((k) => k === 'dense'),
+    'Passwords are Apple style (xxxxxx-xxxxxx-xxxxxx); only {dense: N} opts out, for a site that rejects that shape');
+  const length = options.dense;
   required(Number.isInteger(length) && length >= 12 && length <= 128, 'Password length must be 12 to 128 characters');
   const alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+';
   return Array.from({ length }, () => alphabet[randomInt(alphabet.length)]).join('');
@@ -122,7 +126,7 @@ export function normalizeValue(kind, value) {
     // grant is an opaque JSON blob. The issuer, account, scopes and expiry are
     // structured so they can be read and compared without decrypting a token.
     required(record(value), 'OAuth credential requires issuer, account and a token');
-    required(typeof value.issuer === 'string' && value.issuer.trim().length > 0 && value.issuer.length <= 200, 'OAuth issuer required');
+    required(value.issuer == null || (typeof value.issuer === 'string' && value.issuer.length <= 200), 'Invalid OAuth issuer');
     required(typeof value.account === 'string' && value.account.trim().length > 0 && value.account.length <= 320, 'OAuth account required');
     const scopes = value.scopes === undefined ? [] : value.scopes;
     required(Array.isArray(scopes) && scopes.length <= 200
@@ -145,7 +149,7 @@ export function normalizeValue(kind, value) {
       required(!Number.isNaN(at.getTime()), 'Invalid OAuth expiry');
       expiresAt = at.toISOString();
     }
-    return {issuer: value.issuer.trim(), account: value.account.trim(),
+    return {issuer: (value.issuer || '').trim() || null, account: value.account.trim(),
       scopes: [...new Set(scopes.map((scope) => scope.trim()))].sort(),
       accessToken, refreshToken, tokenType: text('tokenType', 40) || 'Bearer',
       clientId: text('clientId', 400), expiresAt};
