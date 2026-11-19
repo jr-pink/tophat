@@ -99,7 +99,7 @@
   {#if mounted}
   <div class="floating-composer" hidden={surface !== 'composer'} role="dialog" aria-label="Create chat behind" data-testid="background-chat">
     <header><span>Create chat behind</span><button class="focus-ring" aria-label="Close background composer" onclick={dismiss}>×</button></header>
-    <Composer bind:this={composer} draftKey="background-chat-draft" {online}
+    <Composer bind:this={composer} focusPane="background-chat" draftKey="background-chat-draft" {online}
       placeholder="Message a new chat…" onsend={send} dictate={dictateControl}
       onsubmit={() => mic?.holdStop({ send: true })}
       onstage={(key) => session.stageUpload(key)}

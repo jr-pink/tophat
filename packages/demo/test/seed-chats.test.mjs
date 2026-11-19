@@ -158,10 +158,10 @@ test('read state: a chat marked read is read through its last message, the rest 
     for (const id of store.conversationIdsInScope(scopeOf(GUEST))) state[store.conversation(id).title] = unreadOf(store.conversation(id)) ? 'unread' : 'read';
     assert.deepEqual(state, {
       'switch to dumbbell bench?': 'unread', 'pistol squat progression': 'read',
-      'values study': 'unread',
+      'value study': 'unread',
       'whats new this week': 'unread', 'how does the memory bench work': 'unread', 'how sharing works': 'read', 'current memory graph': 'read',
       'encyclopedia cave, what was that place': 'read',
-      'how is this different from other assistants': 'read', 'how do you make money': 'read', 'where does my data go': 'read', 'what do i need to run it': 'read'
+      'how is tophat different from other assistants': 'read', 'how does tophat make money': 'read', 'where does my data go with tophat': 'read', 'what do i need to run tophat': 'read'
     });
   } finally { store.close?.(); rmSync(dir, { recursive: true, force: true }); }
 });

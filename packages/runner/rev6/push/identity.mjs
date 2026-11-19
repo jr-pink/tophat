@@ -2,7 +2,7 @@
 // in a thread, and which people no model may read. Ports rev5 handles.py, mentions.py, rosters.py
 // and the store's private-person matcher, with identical keys so rows written by either side join.
 // Never: merge on a name, mint an id from a model's string, or let a private person's text reach a packet.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -190,12 +190,28 @@ export function collisionQualifier(identities, etype, rivalType) {
   return etype && rivalType && etype !== rivalType && etype !== 'misc' ? etype : null;
 }
 
+/** The bare name a placeholder stands for: the key marked in its name_problem, else its name minus the marker. */
+export function placeholderKey(row) {
+  const m = /^ambiguous: ([^;]+);/u.exec(row.name_problem || '');
+  return m ? m[1].trim() : mentionKey(String(row.name ?? '').replace(/\s*\((?:ambiguous|unresolved):.*$/u, ''));
+}
+/** The source scope a placeholder collects for: `source` or `source account`; legacy per-mention placeholders carry the source in the name. */
+export function placeholderScope(row) {
+  const m = /;\s*scope: ([^;]*);/u.exec(row.name_problem || '');
+  if (m) return m[1].trim();
+  const l = /\((?:ambiguous|unresolved): (\S+)/u.exec(row.name || '');
+  return l ? l[1] : '';
+}
+export const scopeOf = (row) => [row?.source || 'memory', row?.account || ''].filter(Boolean).join(' ');
+export const typeCompatible = (a, b) => a === b || a === 'misc' || b === 'misc' || !a || !b;
+
 /** Every live entity's name and aliases on one key, read once per batch. */
 export class NameIndex {
   constructor(store) {
-    this.byKey = new Map(); this.byToken = new Map(); this.rows = new Map();
-    for (const row of store.all('SELECT id,name,type,aliases,created_at,name_status FROM entities WHERE merged_into IS NULL')) {
+    this.byKey = new Map(); this.byToken = new Map(); this.rows = new Map(); this.unresolved = new Map();
+    for (const row of store.all('SELECT id,name,type,aliases,created_at,name_status,name_problem FROM entities WHERE merged_into IS NULL')) {
       this.rows.set(row.id, row);
+      if (row.name_status === AMBIGUOUS) this.listPlaceholder(row);
       // An unresolved placeholder answers only to its own marked name: its bare name is the question, not a candidate.
       const names = row.name_status === AMBIGUOUS ? [row.name] : [row.name, ...(row.aliases || [])];
       for (const s of names) { const k = mentionKey(s); if (k) { const l = this.byKey.get(k) || []; if (!l.includes(row.id)) l.push(row.id); this.byKey.set(k, l); } }
@@ -203,8 +219,17 @@ export class NameIndex {
     }
   }
   tok(t) { if (!this.byToken.has(t)) this.byToken.set(t, new Set()); return this.byToken.get(t); }
-  add(id, name, type = 'misc', aliases = [], nameStatus = null) {
-    this.rows.set(id, { id, name, type, aliases: [...aliases], created_at: null, name_status: nameStatus });
+  listPlaceholder(row) {
+    const k = `${placeholderKey(row)}\u0000${placeholderScope(row)}`;
+    const l = this.unresolved.get(k) || []; if (!l.includes(row.id)) l.push(row.id); this.unresolved.set(k, l);
+  }
+  /** The live placeholder already collecting evidence for this bare key in this source scope (type-compatible), oldest first. */
+  placeholderFor(key, scope, type = 'misc') {
+    return (this.unresolved.get(`${key}\u0000${scope}`) || []).find((id) => typeCompatible(this.rows.get(id)?.type, type)) ?? null;
+  }
+  add(id, name, type = 'misc', aliases = [], nameStatus = null, nameProblem = null) {
+    this.rows.set(id, { id, name, type, aliases: [...aliases], created_at: null, name_status: nameStatus, name_problem: nameProblem });
+    if (nameStatus === AMBIGUOUS) this.listPlaceholder(this.rows.get(id));
     if (nameStatus === AMBIGUOUS) aliases = [];
     for (const s of [name, ...aliases]) { const k = mentionKey(s); if (k) { const l = this.byKey.get(k) || []; if (!l.includes(id)) l.push(id); this.byKey.set(k, l); } }
     for (const t of new Set([name, ...aliases].flatMap(tokens))) this.tok(t).add(id);
@@ -310,6 +335,21 @@ function candidateFacts(store, eid, at) {
 }
 const days = (a, b) => (Date.parse(a) - Date.parse(b)) / 86400e3;
 
+/** Group candidate ids that are plausibly one thing under two rows: a shared distinctive alias, or identical bare twins. */
+function kinGroups(index, ids, key) {
+  const parent = new Map(ids.map((e) => [e, e]));
+  const find = (e) => { while (parent.get(e) !== e) { parent.set(e, parent.get(parent.get(e))); e = parent.get(e); } return e; };
+  const join = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(rb, ra); };
+  const seen = new Map();
+  for (const eid of ids) {
+    const r = index.rows.get(eid) || {};
+    const own = new Set([r.name, ...(r.aliases || [])].map(mentionKey).filter((k) => k && k !== key && (k.includes(' ') || /\d/u.test(k))));
+    if (r.name_status === 'collides') own.add(`bare:${mentionKey(r.name)}`);
+    for (const k of own) { if (seen.has(k)) join(seen.get(k), eid); else seen.set(k, eid); }
+  }
+  return new Map(ids.map((e) => [e, find(e)]));
+}
+
 /** Score each candidate on what surrounds one mention; returns the winner and the signals that decided, or null. */
 export function contextJudge(store, index, { name, aliases = [], row = null, at, candidates, co = [], room = null, hubs = new Set() }) {
   const key = mentionKey(name);
@@ -342,18 +382,47 @@ export function contextJudge(store, index, { name, aliases = [], row = null, at,
     const score = Object.values(sig).reduce((a, b) => a + b, 0);
     return { entity: eid, name: r.name ?? null, score: Math.round(score * 100) / 100, signals: sig };
   }).sort((a, b) => b.score - a.score);
-  const [top, second] = scores;
+  // Duplicates of one thing never split the vote: candidates that share a distinctive alias (a handle or a full multi-word
+  // name other than the bare mention) or are interchangeable bare 'collides' twins form one group, and the margin is
+  // measured against the best candidate OUTSIDE the leader's group. Nothing is merged here; settle merges on structure.
+  const group = kinGroups(index, scores.map((x) => x.entity), key);
+  const [top] = scores;
+  const second = scores.find((x) => group.get(x.entity) !== group.get(top.entity));
   const decided = top.score >= CONTEXT.decide && top.score - (second?.score ?? 0) >= CONTEXT.margin;
   const signals = Object.entries(top.signals).filter(([k, v]) => v > 0 && !['prior'].includes(k)).sort((a, b) => b[1] - a[1]).map(([k]) => k);
   return { entity: decided ? top.entity : null, decided, signals, scores };
 }
 
-/** A placeholder for a mention neither code nor model could settle: marked, findable, and merged later when he answers. */
+/** The one placeholder for a bare name in a source scope, minted only when none exists yet (resolveBatch reuses it after that): its
+ * name is stable, so every undecided mention of the key attaches to it and its notes and mentions collect the evidence (per-mention
+ * considered/scores/signals, raw id and day live on the mention rows, never in the entity name). "the placeholders should collect
+ * evidence so they can at least be attached to".
+ */
 export function placeholderFor(item, name, row, candidates) {
-  const day = String(row?.occurred_at || '').slice(0, 10), src = row?.source || 'memory', tag = String(row?.id || '').slice(-4);
+  const scope = scopeOf(row);
   const list = candidates.slice(0, 6).map((c) => `${c.entity} ${c.name}`).join(' | ');
-  return { ...omit(item, 'surface'), name: `${name} (ambiguous: ${src} ${day}${tag ? ' ' + tag : ''})`.replace(/\s+/gu, ' '), aliases: [], name_status: AMBIGUOUS,
-    name_problem: `ambiguous: ${mentionKey(name)}; candidates: ${list || 'none named'}` };
+  return { ...omit(item, 'surface'), name: `${name} (unresolved: ${scope})`.replace(/\s+/gu, ' '), aliases: [], name_status: AMBIGUOUS,
+    name_problem: `ambiguous: ${mentionKey(name)}; scope: ${scope}; candidates: ${list || 'none named'}` };
+}
+
+// ---- confirmed names (the owner's answers and existing merges): a bare name already settled onto one entity is not asked again ----
+export const questionsStatePath = (store) => path.join(path.dirname(store.path), 'memory-questions.json');
+/** `Map(bare key -> Set(entity ids))`: winners of the owner's merge answers, his renames, and winners of merges whose loser was a bare or placeholder row. */
+export function confirmedNames(store) {
+  const out = new Map();
+  const put = (k, e) => { if (k && e) { if (!out.has(k)) out.set(k, new Set()); out.get(k).add(e); } };
+  const keyOf = (row) => (row.name_status === AMBIGUOUS ? placeholderKey(row) : mentionKey(String(row.name ?? '').replace(/\s*\([^)]*\)\s*$/u, '')));
+  let state = {};
+  try { state = JSON.parse(readFileSync(questionsStatePath(store), 'utf8')) || {}; } catch { /* no answers yet */ }
+  for (const [id, v] of Object.entries(state.verdicts || {})) {
+    if (!['answered:merge', 'answered:rename'].includes(v?.verdict)) continue;
+    const row = store.one('SELECT id,name,name_status,name_problem,merged_into FROM entities WHERE id=?', [id]);
+    if (!row) continue;
+    if (v.verdict === 'answered:rename') { for (const a of store.one('SELECT aliases FROM entities WHERE id=?', [id])?.aliases || []) if (/\((?:ambiguous|unresolved):/u.test(a)) put(mentionKey(a.replace(/\s*\((?:ambiguous|unresolved):.*$/u, '')), store.resolveEntity(id)); continue; }
+    put(keyOf(row), store.resolveEntity(id));
+  }
+  for (const row of store.all("SELECT id,name,name_status,name_problem,merged_into FROM entities WHERE merged_into IS NOT NULL AND name_status IN ('collides','ambiguous')")) put(keyOf(row), store.resolveEntity(row.merged_into));
+  return out;
 }
 
 export const MODEL_SYSTEM = `You resolve one referring expression at a time to an entity in a personal memory store, or you decline.
@@ -442,7 +511,7 @@ export function resolveBatch(store, changes, rows, { caller = null, sourceText =
   const dflt = rows.length ? rows.reduce((a, b) => (b.occurred_at < a.occurred_at ? b : a)) : null;
   const context = contextOf(changes, byId);
   const low = String(sourceText || '').toLowerCase();
-  const report = { resolved: [], created: [], batch_duplicates: [], unsettled: [], unquoted: [], recorded: 0, model: null };
+  const report = { resolved: [], created: [], batch_duplicates: [], unsettled: [], unquoted: [], placeholders: [], recorded: 0, model: null };
   const mapping = new Map(), keep = [], records = [], pending = [], byKey = new Map(), rooms = new Map(), qcache = new Map();
 
   const quoted = (item, row) => {
@@ -473,13 +542,32 @@ export function resolveBatch(store, changes, rows, { caller = null, sourceText =
   const BEARING = new Set(['name', 'thread_key', 'key', 'time']);
   const bearingOf = (answer) => [...new Set(answer.considered.filter((c) => BEARING.has(c.arm)).map((c) => c.entity))].filter((e) => !index.placeholder(e));
   const withScores = (considered, judged) => { const by = new Map(judged.scores.map((x) => [x.entity, x])); return considered.map((c) => (by.has(c.entity) ? { ...c, score: by.get(c.entity).score, signals: by.get(c.entity).signals } : c)); };
+  const touchedPlaceholders = new Set();
   const mintPlaceholder = (item, name, row, at, considered, why) => {
-    const ident = item.id, cands = [...new Map(considered.filter((c) => BEARING.has(c.arm)).map((c) => [c.entity, c])).values()];
+    const ident = item.id, key = mentionKey(name), scope = scopeOf(row), cands = [...new Map(considered.filter((c) => BEARING.has(c.arm)).map((c) => [c.entity, c])).values()];
+    // One placeholder per bare key per source scope: found, else created. The mention and its notes attach to it.
+    const existing = index.placeholderFor(key, scope, item.type || 'misc');
+    if (existing) {
+      mapping.set(ident, existing);
+      touchedPlaceholders.add(existing);
+      noteAll(item, row, at, existing, AMBIGUOUS, considered);
+      report.unsettled.push({ name, answer: AMBIGUOUS, placeholder: index.rows.get(existing)?.name ?? existing, reused: true, competitors: cands.map((c) => c.name).slice(0, 6), why });
+      return;
+    }
     const ph = placeholderFor(item, name, row, cands);
     keep.push(ph);
-    index.add(ident, ph.name, ph.type || 'misc', [], AMBIGUOUS);
+    index.add(ident, ph.name, ph.type || 'misc', [], AMBIGUOUS, ph.name_problem);
+    touchedPlaceholders.add(ident);
     noteAll(item, row, at, ident, AMBIGUOUS, considered);
     report.unsettled.push({ name, answer: AMBIGUOUS, placeholder: ph.name, competitors: cands.map((c) => c.name).slice(0, 6), why });
+  };
+  // A bare name the owner already settled (his answer, or a merge that made the entity carry it): decisive among the real candidates.
+  let confirmed = null;
+  const confirmedPick = (key, bearing) => {
+    confirmed ||= confirmedNames(store);
+    const real = bearing.filter((e) => !index.placeholder(e) && index.rows.get(e)?.name_status !== 'collides');
+    const hit = real.filter((e) => confirmed.get(key)?.has(e));
+    return hit.length === 1 ? hit[0] : null;
   };
   const aliasesWith = (existing, item, name) => {
     const set = new Set([...(existing.aliases || []), ...(item.aliases || [])]);
@@ -496,7 +584,7 @@ export function resolveBatch(store, changes, rows, { caller = null, sourceText =
     const key = mentionKey(name);
     if (byKey.has(key)) {
       const first = byKey.get(key);
-      mapping.set(ident, first.id);
+      mapping.set(ident, mapping.get(first.id) ?? first.id);
       first.aliases = sortedSet([...(first.aliases || []), ...(item.aliases || [])]);
       report.batch_duplicates.push({ dropped: ident, kept: first.id, name });
       continue;
@@ -530,6 +618,15 @@ export function resolveBatch(store, changes, rows, { caller = null, sourceText =
         const method = `context:${judged.signals.join('+') || 'score'}`;
         noteAll(item, row, at, eid, method, answer.considered);
         report.resolved.push({ name, entity: eid, method, as: existing.name ?? null, at, scores: judged.scores.slice(0, 4).map((x) => [x.name, x.score]) });
+        continue;
+      }
+      const named = confirmedPick(key, bearing);
+      if (named) {
+        const existing = index.rows.get(named) || {};
+        mapping.set(ident, named);
+        keep.push({ id: named, aliases: aliasesWith(existing, item, name) });
+        noteAll(item, row, at, named, 'confirmed-name', answer.considered);
+        report.resolved.push({ name, entity: named, method: 'confirmed-name', as: existing.name ?? null, at });
         continue;
       }
       if (caller) {
@@ -585,6 +682,7 @@ export function resolveBatch(store, changes, rows, { caller = null, sourceText =
   }
   changes.entities = keep;
   rewrite(changes, mapping);
+  report.placeholders = [...touchedPlaceholders];
   changes.mentions = records;
   report.recorded = records.length;
   return report;

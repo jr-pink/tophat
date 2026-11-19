@@ -9,28 +9,26 @@
   // paste a service secret is still how a connector gets its credential.
   import { onMount, tick } from 'svelte';
   import Nav from '$lib/ui/Nav.svelte';
+  import SecretForm from '$lib/ui/SecretForm.svelte';
   import { vaultReplica } from '$lib/client/vault-offline.js';
+  import { bindGlobalKeys } from '$lib/core/keys.js';
+  import { KINDS, KIND_BY_ID, uiKind, visibleGroups, buildEntry, draftFromEntry, describeRevealed, subtitle,
+    canEdit, derivedName } from '$lib/core/secret-form.js';
+  import { DRAFT_KEY_NEW, editKey } from '$lib/core/secret-draft-state.js';
+  import { draft as draftBox, peek as peekBox, restoreDrafts, dirtyKeys } from '$lib/ui/secret-drafts.svelte.js';
 
-  const KINDS = [
-    { id: 'login', label: 'Logins' },
-    { id: 'totp', label: 'Verification codes' },
-    { id: 'oauth', label: 'OAuth grants' },
-    { id: 'recovery-codes', label: 'Recovery codes' },
-    { id: 'ssh-key', label: 'Keys' },
-    { id: 'passkey-reference', label: 'Passkeys' },
-    { id: 'secret', label: 'Secrets' },
-  ];
-  const KIND_LABEL = Object.fromEntries(KINDS.map((kind) => [kind.id, kind.label]));
+  // The panes that replace the list (a vault tool); everything else is the list beside a credential.
+  const TOOLS = ['activity', 'requests', 'import', 'devices'];
+  const KIND_LABEL = Object.fromEntries(KINDS.map((kind) => [kind.id, kind.plural]));
 
   let entries = $state([]);
   let history = $state([]);
   let status = $state(null);
   let requests = $state([]);
   let query = $state('');
-  // The list is one click away in the sidebar; the thing he opens this page to do
-  // is put a password in, so that is the landing pane rather than a browse view he
-  // has to navigate out of.
-  let scope = $state({ type: 'new' });     // all | kind | group | archived | activity | requests | import | new
+  // The list and the credential are always side by side; a form for a new or edited credential takes the credential's
+  // place and never replaces the list, so searching can never navigate away from it.
+  let scope = $state({ type: 'all' });     // all | kind | group | archived | activity | requests | import | devices
   let selectedId = $state(null);
   let revealed = $state(null);             // { id, kind, value }
   let busy = $state(null);
@@ -44,13 +42,13 @@
   const haystack = (entry) => [
     entry.name, entry.id, entry.issuer, entry.account,
     (entry.origins || []).join(' '), (entry.usernames || []).join(' '), (entry.emails || []).join(' '), (entry.phones || []).join(' '), (entry.groups || []).join(' '),
-    (entry.scopes || []).join(' '), KIND_LABEL[entry.kind],
+    (entry.scopes || []).join(' '), KIND_LABEL[uiKind(entry)], KIND_BY_ID[uiKind(entry)]?.label,
   ].filter(Boolean).join(' ').toLowerCase();
 
-  let groups = $derived([...new Set(entries.flatMap((entry) => entry.groups || []))].sort());
+  let groups = $derived([...new Set(entries.flatMap((entry) => visibleGroups(entry.groups)))].sort());
 
   let scoped = $derived(entries.filter((entry) => {
-    if (scope.type === 'kind') return entry.kind === scope.id;
+    if (scope.type === 'kind') return uiKind(entry) === scope.id;
     if (scope.type === 'group') return (entry.groups || []).includes(scope.id);
     if (scope.type === 'archived') return entry.archived;
     return !entry.archived;
@@ -62,15 +60,11 @@
     return [...rows].sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
   });
 
-  let selected = $derived(shown.find((entry) => entry.id === selectedId)
-    || entries.find((entry) => entry.id === selectedId) || null);
+  // The open credential is whatever he picked, whether or not the filter currently shows it: typing in the search box narrows the
+  // list and never closes or changes the credential beside it, and clearing the filter brings its row back.
+  let selected = $derived(entries.find((entry) => entry.id === selectedId) || null);
   let entryHistory = $derived(selectedId ? history.filter((event) => event.id === selectedId) : []);
 
-  const subtitle = (entry) => {
-    if (entry.kind === 'oauth') return entry.account || entry.issuer || '';
-    if (entry.kind === 'recovery-codes') return `${entry.remaining ?? 0} unused`;
-    return (entry.origins || [])[0]?.replace(/^https:\/\//, '') || entry.id;
-  };
   const when = (at) => {
     if (!at) return '';
     const date = new Date(at);
@@ -216,8 +210,13 @@
       await load();
       await loadRequests();
     })();
+    draftBox(DRAFT_KEY_NEW);
+    restoreDrafts();
+    // "/" jumps to the search box, but never from inside a field (core/keys.js bindGlobalKeys)
+    const unbind = bindGlobalKeys({ '/': () => searchBox?.focus() });
+    window.addEventListener('beforeunload', beforeUnload);
     const timer = setInterval(() => { load(); loadRequests(); }, 30000);
-    return () => { clearInterval(timer); stopSync(); replica?.stop(); };
+    return () => { clearInterval(timer); stopSync(); replica?.stop(); unbind(); window.removeEventListener('beforeunload', beforeUnload); clearTimeout(revealTimer); };
   });
 
   const post = (payload) => api('/api/password-manager', {
@@ -312,31 +311,38 @@
 
   function select(entry) {
     selectedId = entry.id;
-    revealed = null;
-    if (LISTLESS.includes(scope.type)) scope = { type: 'all' };
+    revealed = null; confirmDelete = false;
+    // another credential, not another form: the draft he was typing stays in the store and is flagged in the list
+    mode = 'view';
+    leaveTool();
   }
 
   function go(next) {
     scope = next;
     if (next.type === 'devices') loadDevices();
-    revealed = null;
-    if (!LISTLESS.includes(next.type)) selectedId = null;
     notice = ''; error = null;
   }
 
-  // Typing from a pane that shows no list moves to All items; a list scope he chose
-  // (a kind, a group, Archived) is kept, and clearing the query never yanks him
-  // back. The unsaved draft is separate state, so it survives the switch.
-  const LISTLESS = ['new', 'import', 'activity', 'requests', 'devices'];
+  // Typing in the search box filters the list. From a vault tool (Activity, Import ...) it brings the list back; it never
+  // touches the credential or the form beside the list.
   function onSearchInput(event) {
-    if (event.currentTarget.value.trim() && LISTLESS.includes(scope.type)) go({ type: 'all' });
+    if (event.currentTarget.value.trim() && TOOLS.includes(scope.type)) go({ type: 'all' });
+  }
+  function onSearchKeydown(event) {
+    if (event.key === 'Escape' && !event.isComposing) { query = ''; event.currentTarget.blur(); }
   }
 
   // The vault returns one value at a time, on an explicit click. Nothing is
   // prefetched: a list render must never be a reason to decrypt 654 secrets.
+  let revealTimer;
   async function reveal(entry) {
     busy = `reveal:${entry.id}`; error = null;
-    try { revealed = await post({ action: 'reveal', id: entry.id }); }
+    try {
+      revealed = await post({ action: 'reveal', id: entry.id });
+      // a revealed value does not stay on screen for good
+      clearTimeout(revealTimer);
+      revealTimer = setTimeout(() => (revealed = null), 60_000);
+    }
     catch (cause) {
       // Offline, a value this device has never synced is the one thing it cannot show.
       if (cause?.missing) error = 'That one is not on this device yet.';
@@ -362,13 +368,6 @@
     finally { busy = null; }
   }
 
-  // Keyboard: the search field is the default focus and Escape clears it, which
-  // is the whole interaction in Passwords.app.
-  function onKeydown(event) {
-    if (event.key === '/' && document.activeElement !== searchBox) { event.preventDefault(); searchBox?.focus(); return; }
-    if (event.key === 'Escape' && document.activeElement === searchBox) { query = ''; }
-  }
-
   // ---- vault protection -------------------------------------------------
   let passphrase = $state('');
   async function protection(action) {
@@ -387,114 +386,110 @@
     finally { passphrase = ''; busy = null; }
   }
 
-  // So the form is two fields. Everything else is a chip he can add,
-  // Contacts.app style, and the identifier is derived from the label unless he
-  // opens that field and types one.
-  const blank = () => ({ id: '', name: '', kind: 'login', website: '', username: '', value: '',
-    passphrase: '', issuer: '', account: '', scopes: '', expiresAt: '', refreshToken: '',
-    groups: '', notes: '', replace: false });
-  let draft = $state(blank());
-  let added = $state([]);   // extra field keys he has chosen to show
+  // ---- the credential form (new and edit) ------------------------------------------------------------------------------
+  // The form is a view of a draft in the store (core/secret-draft-state.js, lib/ui/secret-drafts.svelte.js). Nothing he types is
+  // held by the form, the search box or the list: closing the form, picking another credential, typing in the search box, the
+  // 30-second refresh and Tab leave the draft alone, and it comes back on a reload of this tab. Only a successful Save or a
+  // confirmed Discard removes it.
+  let mode = $state('view');                       // view | new | edit
+  let formErrors = $state({});
+  let formWarnings = $state([]);
+  let formRef = $state(null);
+  let formKey = $derived(mode === 'new' ? DRAFT_KEY_NEW : mode === 'edit' && selectedId ? editKey(selectedId) : null);
+  let formBox = $derived(formKey ? peekBox(formKey) : peekBox(null));
+  let dirtyForms = $derived(new Set(dirtyKeys()));
+  let newDirty = $derived(dirtyForms.has(DRAFT_KEY_NEW));
+  const takenIds = () => new Set(entries.map((entry) => entry.id));
 
-  const EXTRA = [
-    { key: 'username', label: 'Username', kinds: ['login'] },
-    { key: 'website', label: 'Website', placeholder: 'example.com', kinds: ['login', 'totp', 'passkey-reference'] },
-    { key: 'notes', label: 'Note', multiline: true },
-    { key: 'groups', label: 'Group', placeholder: 'comma separated' },
-    { key: 'passphrase', label: 'Key passphrase', secret: true, kinds: ['ssh-key'] },
-    { key: 'issuer', label: 'Issuer', placeholder: 'mercury.com', kinds: ['oauth'] },
-    { key: 'account', label: 'Account', kinds: ['oauth'] },
-    { key: 'scopes', label: 'Scopes', placeholder: 'space or comma separated', kinds: ['oauth'] },
-    { key: 'expiresAt', label: 'Expires', placeholder: '2026-12-01T00:00:00Z', kinds: ['oauth'] },
-    { key: 'refreshToken', label: 'Refresh token', secret: true, kinds: ['oauth'] },
-    { key: 'id', label: 'Identifier' },
-  ];
-  const fits = (f) => !f.kinds || f.kinds.includes(draft.kind);
-  let showing = $derived(added.map((key) => EXTRA.find((f) => f.key === key)).filter((f) => f && fits(f)));
-  let offered = $derived(EXTRA.filter((f) => fits(f) && !added.includes(f.key)));
-  function addField(key) { if (key && !added.includes(key)) added = [...added, key]; }
-  function dropField(key) { added = added.filter((k) => k !== key); draft[key] = ''; }
-  // A kind whose value cannot be stored without a companion field brings that
-  // field with it rather than failing on save.
-  const REQUIRED_BY_KIND = { oauth: ['issuer', 'account'], 'passkey-reference': ['website'] };
-  function setKind(next) {
-    draft.kind = next;
-    for (const key of REQUIRED_BY_KIND[next] || []) addField(key);
-  }
-  const VALUE_LABEL = { login: 'Password', totp: 'Secret or otpauth:// URI', 'recovery-codes': 'Codes, one per line',
-    'ssh-key': 'Private key', 'passkey-reference': 'Authenticator provider', oauth: 'Access token', secret: 'Value' };
+  function leaveTool() { if (TOOLS.includes(scope.type)) scope = { type: 'all' }; }
 
-  // Adding a password was three required fields: a name, a lowercase-with-dashes
-  // id, and the value. Two of those are derivable from the site and the username,
-  // and a form that will not save until he invents an identifier is not a place
-  // to paste a password into. The id is still exact if he types one.
-  const host = (text) => {
-    const raw = String(text || '').trim();
-    if (!raw) return '';
-    try { return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.replace(/^www\./, ''); }
-    catch { return raw.replace(/^https?:\/\//, '').split('/')[0]; }
-  };
-  const slug = (text) => String(text || '').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
-  function derivedName() {
-    if (draft.name.trim()) return draft.name.trim();
-    const site = host(draft.website) || draft.issuer.trim();
-    const who = draft.username.trim() || draft.account.trim();
-    if (site && who) return `${site} (${who})`;
-    return site || who || '';
+  async function startNew(kind) {
+    error = null; notice = ''; formErrors = {}; formWarnings = [];
+    const box = draftBox(DRAFT_KEY_NEW);
+    // an untouched or empty draft starts blank (of the kind asked for); one with content is resumed as it was
+    if (!box.dirty) box.set({ kind: kind || box.data.kind || 'login' });
+    else if (kind && kind !== box.data.kind) box.patch({ kind });
+    revealed = null; leaveTool(); mode = 'new';
+    await tick(); formRef?.focusFirst?.();
   }
-  function derivedId(name) {
-    const typed = slug(draft.id);
-    if (typed.length >= 2) return typed;
-    let base = slug(name);
-    if (base.length < 2) base = `${draft.kind}-${Date.now().toString(36)}`;
-    const taken = new Set(entries.map((entry) => entry.id));
-    if (!taken.has(base)) return base;
-    let n = 2;
-    while (taken.has(`${base}-${n}`)) n += 1;
-    return `${base}-${n}`;
-  }
-  // Enough to save: something to call it, and something to store.
-  let draftName = $derived(derivedName());
-  let canSave = $derived(Boolean(draftName) && Boolean(
-    draft.kind === 'oauth' ? (draft.value || draft.refreshToken) : draft.value));
 
-  async function saveDraft() {
-    busy = 'save'; error = null;
+  async function startEdit(entry) {
+    error = null; notice = ''; formErrors = {}; formWarnings = [];
+    const box = draftBox(editKey(entry.id));
+    if (!box.dirty) {
+      busy = `edit:${entry.id}`;
+      try {
+        const shown = revealed?.id === entry.id ? revealed : await post({ action: 'reveal', id: entry.id });
+        const data = draftFromEntry(entry, shown);
+        box.set(data, data);
+      } catch (cause) {
+        busy = null;
+        if (cause?.missing) error = 'That one is not on this device yet, so it cannot be edited here.';
+        else if (cause?.signedOut) signedOut = true;
+        else error = locked ? 'Unlock the vault first.' : 'Could not read this credential to edit it.';
+        return;
+      }
+      busy = null;
+    }
+    revealed = null; selectedId = entry.id; mode = 'edit';
+    await tick(); formRef?.focusFirst?.();
+  }
+
+  async function saveForm() {
+    const box = formBox;
+    if (!box || busy === 'save') return;
+    const editing = mode === 'edit';
+    const built = buildEntry(box.data, { taken: takenIds(), editId: editing ? selectedId : null });
+    formErrors = built.errors; formWarnings = built.warnings;
+    if (!built.ok) { await tick(); formRef?.focusFirstInvalid?.(); return; }
+    busy = 'save'; error = null; notice = '';
     try {
-      let value = draft.value;
-      if (draft.kind === 'login') value = { username: draft.username, password: draft.value };
-      if (draft.kind === 'recovery-codes') value = draft.value.split(/\r?\n/).map((v) => v.trim()).filter(Boolean);
-      if (draft.kind === 'ssh-key') value = { privateKey: draft.value, passphrase: draft.passphrase };
-      if (draft.kind === 'passkey-reference') value = { rpId: host(draft.website), provider: draft.value };
-      if (draft.kind === 'oauth') value = {
-        issuer: draft.issuer, account: draft.account,
-        scopes: draft.scopes.split(/[\s,]+/).filter(Boolean),
-        accessToken: draft.value || null, refreshToken: draft.refreshToken || null,
-        expiresAt: draft.expiresAt || null,
-      };
-      const name = derivedName();
-      const id = derivedId(name);
-      const body = await post({ action: 'save', overwrite: draft.replace, entry: {
-        id, name, kind: draft.kind,
-        origins: draft.website ? [draft.website.includes('://') ? draft.website : `https://${draft.website}`] : [],
-        groups: draft.groups.split(',').map((v) => v.trim()).filter(Boolean),
-        notes: draft.notes, value } });
-      const saved = id;
-      draft = blank(); added = [];
+      const body = await post({ action: 'save', overwrite: editing, entry: built.entry });
+      // the vault has it (or this device queued it): only now is the draft done with
+      box.clear();
+      formErrors = {}; formWarnings = [];
       await refresh();
-      go({ type: 'all' }); selectedId = saved;
-      if (body?.queued) notice = 'Saved on this device; it reaches the Mac when it is back.';
-    } catch (cause) { failed(cause, 'Could not save.'); }
+      selectedId = built.id; mode = 'view'; revealed = null;
+      notice = body?.queued ? 'Saved on this device; it reaches the Mac when it is back.' : 'Saved.';
+    } catch (cause) { failed(cause, 'Could not save. What you typed is still here.'); }
     finally { busy = null; }
+  }
+
+  /** Close the form and keep the draft. */
+  function closeForm() { formBox?.flush(); mode = 'view'; }
+  /** Throw the draft away (the form asked him first). */
+  function discardForm() {
+    const box = formBox;
+    box?.clear(); formErrors = {}; formWarnings = [];
+    mode = 'view';
+  }
+
+  // Closing the tab or reloading with an unsaved draft asks first; the draft itself is already written to this tab's
+  // sessionStorage (flushed here), so a reload loses nothing and a close is the only way to lose it.
+  function beforeUnload(event) {
+    if (!dirtyKeys().length) return;
+    for (const key of dirtyKeys()) draftBox(key).flush();
+    event.preventDefault();
+    event.returnValue = '';
+  }
+
+  const kindName = (entry) => KIND_BY_ID[uiKind(entry)]?.label || 'Secret';
+  let confirmDelete = $state(false);
+  async function forget(entry) {
+    confirmDelete = false;
+    await act({ action: 'forget', id: entry.id }, 'Could not delete.');
+    draftBox(editKey(entry.id)).clear();
+    if (selectedId === entry.id) { selectedId = null; mode = 'view'; revealed = null; }
   }
 
   // ---- groups on an existing entry --------------------------------------
   let groupDraft = $state('');
   let editingGroups = $state(false);
-  function startGroups(entry) { groupDraft = (entry.groups || []).join(', '); editingGroups = true; }
+  function startGroups(entry) { groupDraft = visibleGroups(entry.groups).join(', '); editingGroups = true; }
   async function commitGroups(entry) {
-    await act({ action: 'groups', id: entry.id, groups: groupDraft.split(',').map((v) => v.trim()).filter(Boolean) },
+    // the page's own type tags (kind:card) are not his to edit and are kept
+    const tags = (entry.groups || []).filter((g) => g.startsWith('kind:'));
+    await act({ action: 'groups', id: entry.id, groups: [...new Set([...groupDraft.split(',').map((v) => v.trim()).filter(Boolean), ...tags])] },
       'Could not change groups.');
     editingGroups = false;
   }
@@ -552,7 +547,6 @@
 </script>
 
 <svelte:head><title>secrets · tophat</title></svelte:head>
-<svelte:window onkeydown={onKeydown} />
 
 <div class="app">
   <aside>
@@ -561,9 +555,9 @@
       <Nav current="none" />
     </div>
 
-    <input class="search" type="search" placeholder="Search" spellcheck="false"
+    <input class="search" type="search" placeholder="Search  ( / )" spellcheck="false" aria-label="Search credentials"
       autocomplete="off" autocapitalize="off" autocorrect="off"
-      bind:this={searchBox} bind:value={query} oninput={onSearchInput} data-testid="search" />
+      bind:this={searchBox} bind:value={query} oninput={onSearchInput} onkeydown={onSearchKeydown} data-testid="search" />
 
     <!-- One word for where the vault is being read from. Offline carries what is waiting to go. -->
     <div class="pillrow">
@@ -582,10 +576,10 @@
         All items<span class="count">{entries.filter((e) => !e.archived).length}</span>
       </button>
       {#each KINDS as kind (kind.id)}
-        {@const n = entries.filter((e) => !e.archived && e.kind === kind.id).length}
+        {@const n = entries.filter((e) => !e.archived && uiKind(e) === kind.id).length}
         {#if n}
           <button class:on={scope.type === 'kind' && scope.id === kind.id} onclick={() => go({ type: 'kind', id: kind.id })}>
-            {kind.label}<span class="count">{n}</span>
+            {kind.plural}<span class="count">{n}</span>
           </button>
         {/if}
       {/each}
@@ -594,7 +588,7 @@
         <p class="section">Groups</p>
         {#each groups as group (group)}
           <button class:on={scope.type === 'group' && scope.id === group} onclick={() => go({ type: 'group', id: group })}>
-            {group}<span class="count">{entries.filter((e) => !e.archived && (e.groups || []).includes(group)).length}</span>
+            <span class="grp">{group}</span><span class="count">{entries.filter((e) => !e.archived && (e.groups || []).includes(group)).length}</span>
           </button>
         {/each}
       {/if}
@@ -614,7 +608,9 @@
     </nav>
 
     <div class="foot">
-      <button class="new" onclick={() => { draft = blank(); go({ type: 'new' }); }}>New credential</button>
+      <button class="new" data-testid="new-credential" onclick={() => startNew()}>
+        New credential{#if newDirty}<span class="dot" title="You have an unsaved new credential" aria-label="unsaved draft"></span>{/if}
+      </button>
       {#if status?.keyStorage === 'passphrase-wrapped'}
         <button class="link" onclick={() => protection('lock')} disabled={offline || locked}>
           {offline ? 'Lock needs the Mac' : locked ? 'Locked' : 'Lock now'}</button>
@@ -668,8 +664,7 @@
         {#if offline}<p class="why small" data-testid="online-only-unlock">Unlocking needs the Mac, and this device keeps no copy to read meanwhile.</p>{/if}
       </section>
 
-    {:else if scope.type === 'requests' || scope.type === 'new'}
-      {#if scope.type === 'requests' || requests.length}
+    {:else if scope.type === 'requests'}
       <section class="pane">
         <h2>Service secret requests</h2>
         <p class="why">A connector needs a credential it cannot get for itself. What you type here goes straight to the keyring and never into chat.</p>
@@ -700,60 +695,6 @@
         {:else}
           <p class="empty">Nothing is waiting on you.</p>
         {/each}
-      </section>
-      {/if}
-
-      <section class="pane">
-        <div class="newhead">
-          <h2>New credential</h2>
-          <select class="kind" value={draft.kind} onchange={(e) => setKind(e.currentTarget.value)} data-testid="kind">
-            {#each KINDS as kind (kind.id)}<option value={kind.id}>{kind.label}</option>{/each}
-          </select>
-        </div>
-
-        <label class="field"><span>Label</span>
-          <input type="text" bind:value={draft.name} data-testid="label"
-            placeholder={draftName || 'what you would call it'} /></label>
-
-        <label class="field"><span>{VALUE_LABEL[draft.kind] || 'Value'}</span>
-          {#if ['recovery-codes', 'ssh-key'].includes(draft.kind)}
-            <textarea rows="6" spellcheck="false" autocomplete="off" bind:value={draft.value}></textarea>
-          {:else}
-            <input type="password" spellcheck="false" autocomplete="off" bind:value={draft.value} data-testid="value" />
-          {/if}
-        </label>
-
-        {#each showing as f (f.key)}
-          <label class="field">
-            <span>{f.label}<button class="link drop" onclick={() => dropField(f.key)} title="remove this field">×</button></span>
-            {#if f.multiline}
-              <textarea rows="3" spellcheck="false" autocomplete="off" bind:value={draft[f.key]}></textarea>
-            {:else if f.secret}
-              <input type="password" spellcheck="false" autocomplete="off" bind:value={draft[f.key]} />
-            {:else}
-              <input type="text" spellcheck="false" autocomplete="off" bind:value={draft[f.key]}
-                placeholder={f.key === 'id' ? derivedId(draftName) : (f.placeholder || '')} />
-            {/if}
-          </label>
-        {/each}
-
-        {#if offered.length}
-          <div class="addrow">
-            {#each offered as f (f.key)}
-              <button class="chip" onclick={() => addField(f.key)} data-testid={`add-${f.key}`}>+ {f.label}</button>
-            {/each}
-          </div>
-        {/if}
-
-        <button class="primary" data-testid="save-new" disabled={busy === 'save' || !canSave} onclick={saveDraft}>
-          {busy === 'save' ? 'Saving…' : 'Save'}
-        </button>
-        {#if draftName}
-          <p class="why small">Saved as <code>{derivedId(draftName)}</code>.</p>
-        {/if}
-        {#if slug(draft.id).length >= 2 && entries.some((e) => e.id === slug(draft.id))}
-          <label class="check"><input type="checkbox" bind:checked={draft.replace} /> Replace the existing <code>{slug(draft.id)}</code></label>
-        {/if}
       </section>
 
     {:else if scope.type === 'import'}
@@ -827,30 +768,61 @@
       </section>
 
     {:else}
+      {#if requests.length}
+        <p class="notice" data-testid="requests-banner">{requests.length} service secret request{requests.length === 1 ? '' : 's'} waiting.
+          <button class="link" onclick={() => go({ type: 'requests' })}>Review</button></p>
+      {/if}
       <div class="split">
-        <ul class="list" data-testid="entries">
-          {#each shown as entry (entry.id)}
-            <li>
-              <button class:on={entry.id === selectedId} onclick={() => select(entry)} data-testid="entry">
-                <span class="title">{entry.name}</span>
-                <span class="sub">{subtitle(entry)}</span>
-                {#if entry.archived}<span class="tag">archived</span>{/if}
-                {#if entry.kind === 'oauth' && expired(entry)}<span class="tag warn">expired</span>{/if}
-              </button>
-            </li>
-          {:else}
-            <li class="empty">{query ? `Nothing matches “${query}”.` : 'Nothing here yet.'}</li>
-          {/each}
-        </ul>
+        <div class="listcol">
+          <div class="listhead">
+            <span class="why small" data-testid="list-count">{shown.length}{query.trim() || scoped.length !== shown.length ? ` of ${scoped.length}` : ''}</span>
+            <button class="link" data-testid="new-in-list" onclick={() => startNew()}>+ New</button>
+          </div>
+          <ul class="list" data-testid="entries">
+            {#if newDirty}
+              <li>
+                <button class:on={mode === 'new'} onclick={() => startNew()} data-testid="entry-draft-new">
+                  <span class="title">{derivedName(peekBox(DRAFT_KEY_NEW).data) || 'New credential'}</span>
+                  <span class="sub">Unsaved new {(KIND_BY_ID[peekBox(DRAFT_KEY_NEW).data.kind]?.label || 'credential').toLowerCase()}</span>
+                  <span class="tag warn">draft</span>
+                </button>
+              </li>
+            {/if}
+            {#each shown as entry (entry.id)}
+              <li>
+                <button class:on={entry.id === selectedId && mode !== 'new'} onclick={() => select(entry)} data-testid="entry">
+                  <span class="title">{entry.name}</span>
+                  <span class="sub">{subtitle(entry)}</span>
+                  {#if dirtyForms.has(editKey(entry.id))}<span class="tag warn">unsaved edit</span>{/if}
+                  {#if entry.archived}<span class="tag">archived</span>{/if}
+                  {#if uiKind(entry) === 'oauth' && expired(entry)}<span class="tag warn">expired</span>{/if}
+                </button>
+              </li>
+            {:else}
+              {#if !newDirty}
+                <li class="empty">
+                  {#if query.trim()}Nothing matches “{query}”. <button class="link" onclick={() => (query = '')}>Clear search</button>
+                  {:else if scope.type === 'archived'}Nothing is archived.
+                  {:else}Nothing here yet. <button class="link" onclick={() => startNew()}>Add a credential</button>{/if}
+                </li>
+              {/if}
+            {/each}
+          </ul>
+        </div>
 
-        <section class="detail">
-          {#if !selected}
-            <p class="empty">Select a credential.</p>
+        <section class="detail" data-testid="detail">
+          {#if mode === 'new' || (mode === 'edit' && selected)}
+            <SecretForm bind:this={formRef} draft={formBox} {mode}
+              title={mode === 'edit' ? `Edit ${selected.name}` : 'New credential'}
+              errors={formErrors} warnings={formWarnings} busy={busy === 'save'} dirty={formBox.dirty}
+              onsave={saveForm} onclose={closeForm} ondiscard={discardForm} />
+          {:else if !selected}
+            <p class="empty">Select a credential, or <button class="link" onclick={() => startNew()}>add a new one</button>.</p>
           {:else}
             <header class="dhead">
               <div>
                 <h2>{selected.name}</h2>
-                <p class="why">{KIND_LABEL[selected.kind]} · {selected.id}</p>
+                <p class="why">{kindName(selected)} · {selected.id}</p>
               </div>
             </header>
 
@@ -858,7 +830,7 @@
               <p class="row"><span class="label">Website</span><a href={origin} rel="noreferrer noopener" target="_blank">{origin}</a></p>
             {/each}
             {#if selected.kind === 'oauth'}
-              <p class="row"><span class="label">Issuer</span>{selected.issuer}</p>
+              {#if selected.issuer}<p class="row"><span class="label">Issuer</span>{selected.issuer}</p>{/if}
               <p class="row"><span class="label">Account</span>{selected.account}</p>
               <p class="row"><span class="label">Scopes</span>{(selected.scopes || []).join(' ') || 'none recorded'}</p>
               <p class="row"><span class="label">Expires</span>{selected.expiresAt || 'no expiry'}
@@ -877,54 +849,51 @@
                 <button class="secondary" onclick={() => commitGroups(selected)}>Save</button>
                 <button class="link" onclick={() => (editingGroups = false)}>cancel</button>
               {:else}
-                <span>{(selected.groups || []).join(', ') || 'none'}</span>
+                <span>{visibleGroups(selected.groups).join(', ') || 'none'}</span>
                 <button class="link" onclick={() => startGroups(selected)}>edit</button>
               {/if}
             </div>
 
-            <div class="value">
+            <div class="value" data-testid="value">
               {#if revealed?.id === selected.id}
-                {#if selected.kind === 'login'}
-                  {#each [['Username', revealed.value.usernames], ['Email', revealed.value.emails], ['Phone', revealed.value.phones]] as [label, items]}
-                    {#each items || [] as item (label + item)}
-                      <p class="row"><span class="label">{label}</span><code>{item}</code>
-                        <button class="link" onclick={() => copy(item)}>copy</button></p>
-                    {/each}
-                  {/each}
-                  <p class="row"><span class="label">Password</span><code class="secret">{revealed.value.password}</code>
-                    <button class="link" onclick={() => copy(revealed.value.password)}>copy</button></p>
-                {:else if selected.kind === 'totp'}
-                  <p class="row"><span class="label">Code</span><code class="secret big">{revealed.value.code}</code>
-                    <button class="link" onclick={() => copy(revealed.value.code)}>copy</button></p>
-                {:else if selected.kind === 'recovery-codes'}
-                  <pre class="secret">{revealed.value.join('\n')}</pre>
-                {:else if selected.kind === 'oauth'}
-                  {#if revealed.value.accessToken}
-                    <p class="row"><span class="label">Access</span><code class="secret">{revealed.value.accessToken}</code>
-                      <button class="link" onclick={() => copy(revealed.value.accessToken)}>copy</button></p>
+                {#each describeRevealed(selected, revealed) as item (item.label + item.value)}
+                  {#if item.block}
+                    <div class="valblock"><span class="label">{item.label}</span>
+                      <pre class="secret" data-secret>{item.value}</pre>
+                      {#if item.copy}<button class="link" onclick={() => copy(item.value)}>copy</button>{/if}</div>
+                  {:else}
+                    <p class="row"><span class="label">{item.label}</span>
+                      {#if item.secret}<code class="secret" class:big={item.big} data-secret>{item.value}</code>{:else}<code>{item.value}</code>{/if}
+                      {#if item.copy}<button class="link" onclick={() => copy(item.value)}>copy</button>{/if}</p>
                   {/if}
-                  {#if revealed.value.refreshToken}
-                    <p class="row"><span class="label">Refresh</span><code class="secret">{revealed.value.refreshToken}</code>
-                      <button class="link" onclick={() => copy(revealed.value.refreshToken)}>copy</button></p>
-                  {/if}
-                {:else if typeof revealed.value === 'string'}
-                  <pre class="secret">{revealed.value}</pre>
-                {:else}
-                  <pre class="secret">{JSON.stringify(revealed.value, null, 2)}</pre>
-                {/if}
+                {/each}
                 <button class="link" onclick={() => (revealed = null)}>hide</button>
               {:else}
-                <button class="secondary" disabled={busy === `reveal:${selected.id}`} onclick={() => reveal(selected)}>
-                  {busy === `reveal:${selected.id}` ? 'Reading…' : selected.kind === 'totp' ? 'Show code' : 'Show'}
-                </button>
+                <div class="masked-row">
+                  <span class="mask" aria-hidden="true">{uiKind(selected) === 'card' ? '•••• •••• •••• ••••' : '••••••••••••'}</span>
+                  <button class="secondary" data-testid="reveal" disabled={busy === `reveal:${selected.id}`} onclick={() => reveal(selected)}>
+                    {busy === `reveal:${selected.id}` ? 'Reading…' : selected.kind === 'totp' ? 'Show code' : 'Show'}
+                  </button>
+                </div>
               {/if}
             </div>
 
             <div class="row actions">
+              {#if canEdit(selected)}
+                <button class="secondary" data-testid="edit" disabled={busy === `edit:${selected.id}`} onclick={() => startEdit(selected)}>
+                  {dirtyForms.has(editKey(selected.id)) ? 'Resume editing' : busy === `edit:${selected.id}` ? 'Opening…' : 'Edit'}
+                </button>
+              {/if}
               <button class="secondary" onclick={() => act({ action: 'archive', id: selected.id, archived: !selected.archived }, 'Could not archive.')}>
                 {selected.archived ? 'Unarchive' : 'Archive'}
               </button>
-              <button class="link danger" onclick={() => act({ action: 'forget', id: selected.id }, 'Could not delete.')}>Delete</button>
+              {#if confirmDelete}
+                <span class="confirm" role="alert">Delete {selected.name} for good?
+                  <button class="link danger" data-testid="delete-yes" onclick={() => forget(selected)}>Delete</button>
+                  <button class="link" onclick={() => (confirmDelete = false)}>Keep</button></span>
+              {:else}
+                <button class="link danger" data-testid="delete" onclick={() => (confirmDelete = true)}>Delete</button>
+              {/if}
             </div>
 
             <h3>History</h3>
@@ -945,12 +914,15 @@
 </div>
 
 <style>
-  .app { display: grid; grid-template-columns: 232px 1fr; height: 100vh; overflow: hidden; }
+  .app { display: grid; grid-template-columns: 248px minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; }
   aside {
     border-right: 1px solid var(--line); background: var(--bg-sunken);
     display: flex; flex-direction: column; gap: 10px; padding: 16px 12px; overflow-y: auto;
   }
-  .brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  /* The title and the section pill are two rows. They shared one row, and "secrets" pushed the pill past the sidebar's edge, where the
+     list column painted over it and it could not be clicked (2026-11-18). */
+  .brand { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+  .brand :global(.pill) { max-width: 100%; }
   h1 { font-size: 17px; margin: 0; font-weight: 600; }
   h2 { font-size: 15px; margin: 0; font-weight: 600; }
   h3 { font-size: 12px; margin: 14px 0 2px; font-weight: 600; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .04em; }
@@ -974,9 +946,11 @@
   .foot { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 10px; }
   .foot .new { justify-content: center; border: 1px solid var(--line); background: var(--bg-raised); color: var(--ink); }
 
-  main { overflow: hidden; display: flex; flex-direction: column; padding: 0; }
-  .split { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; height: 100%; overflow: hidden; }
-  .list { list-style: none; margin: 0; padding: 8px; overflow-y: auto; border-right: 1px solid var(--line); }
+  main { overflow: hidden; display: flex; flex-direction: column; padding: 0; min-width: 0; }
+  .split { display: grid; grid-template-columns: minmax(220px, 320px) minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+  .listcol { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+  .listhead { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px 0; }
+  .list { list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; min-height: 0; }
   .list li { margin: 0; }
   .list button {
     display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
@@ -985,7 +959,13 @@
   }
   .list button:hover { background: var(--bg-raised); }
   .list button.on { background: var(--accent); color: #14100d; }
-  .title { font-size: 13.5px; font-weight: 500; }
+  .title { font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
+  .grp { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); display: inline-block; margin-left: 8px; }
+  .masked-row { display: flex; align-items: center; gap: 12px; }
+  .mask { font-family: var(--mono, ui-monospace, monospace); color: var(--ink-faint); letter-spacing: .08em; }
+  .valblock { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; width: 100%; }
+  .confirm { font-size: 12.5px; color: var(--ink-dim); display: inline-flex; gap: 8px; align-items: baseline; }
   .sub { font-size: 12px; opacity: .65; overflow-wrap: anywhere; }
   .tag { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
   .tag.warn { color: var(--warn); opacity: 1; }
@@ -1023,18 +1003,7 @@
     font-size: 13.5px; font-weight: 600; border: none; cursor: pointer; align-self: flex-start; }
   .primary:disabled { background: var(--line); color: var(--ink-faint); }
   a.primary { text-decoration: none; display: inline-block; }
-  .newhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .newhead .kind { width: auto; font-family: inherit; font-size: 12.5px; padding: 5px 8px;
-    color: var(--ink-dim); background: var(--bg-raised); }
-  .addrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
-  .chip { border: 1px dashed var(--line); border-radius: 999px; padding: 4px 11px; font-size: 12.5px;
-    background: none; color: var(--ink-faint); cursor: pointer; }
-  .chip:hover { border-style: solid; color: var(--ink); background: var(--bg-raised); }
-  .field span { display: flex; align-items: center; gap: 6px; }
-  .drop { font-size: 14px; line-height: 1; }
   .why.small { font-size: 12px; color: var(--ink-faint); }
-  .more { color: var(--ink-faint); font-size: 12.5px; display: flex; flex-direction: column; gap: 10px; }
-  .more > summary { cursor: pointer; width: fit-content; }
   .secondary { border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font-size: 13px;
     background: var(--bg-raised); color: var(--ink); cursor: pointer; }
   .secondary:disabled { opacity: .5; }
@@ -1056,9 +1025,17 @@
   a { color: var(--accent); }
 
   @media (max-width: 860px) {
-    .app { grid-template-columns: 1fr; height: auto; overflow: visible; }
-    aside { border-right: none; border-bottom: 1px solid var(--line); }
-    .split { grid-template-columns: 1fr; }
-    .list { border-right: none; border-bottom: 1px solid var(--line); max-height: 40vh; }
+    .app { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
+    aside { border-right: none; border-bottom: 1px solid var(--line); overflow: visible; }
+    nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+    nav button { width: auto; }
+    .section { width: 100%; margin: 6px 0 0; }
+    .foot { margin-top: 0; }
+    main { overflow: visible; }
+    .split { grid-template-columns: minmax(0, 1fr); overflow: visible; }
+    .listcol { border-right: none; border-bottom: 1px solid var(--line); }
+    .list { max-height: 38vh; }
+    .detail, .pane { padding: 16px 14px 48px; overflow: visible; }
+    .error, .notice, .lockrow { margin-left: 14px; margin-right: 14px; }
   }
 </style>

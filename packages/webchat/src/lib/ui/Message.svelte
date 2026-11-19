@@ -9,6 +9,8 @@
   import VideoPlayer from './VideoPlayer.svelte';
   import { attachedVideos } from '../core/rich-content.js';
   import { automatedEvent, seededMessage } from '../core/automated-event.js';
+  import EventCard from './EventCard.svelte';
+  import { acceptCards } from '../core/event-cards.js';
   import { useFolds } from './disclosure.svelte.js';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -30,6 +32,8 @@
   const seedLabel = $derived(seeded ? `Automated event: Earlier transcript (ran ${seeded.where})` : '');
   const seedOpen = $derived(seeded ? folds.isOpen('seed', item.id) : false);
   const toggleSeed = () => folds.toggle('seed', item.id);
+  // The structured payload an automated event carried (push plane arrivals): drawn as the thread above the fold line.
+  const eventCards = $derived(event && item.cards ? acceptCards(item.cards) : []);
   const eventOpen = $derived(event ? folds.isOpen('event', item.id) : false);
   const toggleEvent = () => folds.toggle('event', item.id);
 
@@ -69,7 +73,8 @@
 </script>
 
 {#if event}
-  <div class="row event" class:highlight data-item={item.id} data-role="user" data-automated="true" data-open={eventOpen ? 'true' : 'false'}>
+  <div class="row event" class:has-card={eventCards.length > 0} class:highlight data-item={item.id} data-role="user" data-automated="true" data-open={eventOpen ? 'true' : 'false'}>
+    {#if eventCards.length}<EventCard cards={eventCards} itemId={item.id} />{/if}
     <button
       type="button"
       class="event-head focus-ring"
@@ -170,6 +175,7 @@
     transition: opacity var(--panel) var(--ease);
   }
   .event { margin: 6px 0; display: flex; flex-direction: column; align-items: flex-start; max-width: min(88%, 640px); }
+  .event.has-card { max-width: 100%; }
   .event-head {
     display: flex; align-items: center; gap: 6px; max-width: 100%; min-height: 24px;
     padding: 2px 8px 2px 4px; border-radius: 6px; cursor: pointer; text-align: left;

@@ -5,6 +5,11 @@ scripts/release.mjs export-ignore
 scripts/publish.mjs export-ignore
 test/publish.test.mjs export-ignore
 RELEASING.md export-ignore
+# Syncing the vendored packages from the upstream app (vendor-branch pattern): the transform, its scrub, its config and the sync driver. Globbed, not named: this file ships.
+scripts/a?bot5-vendor.mjs export-ignore
+scripts/a?bot5-vendor.config.json export-ignore
+scripts/a?bot5-scrub.mjs export-ignore
+scripts/a?bot5-sync.sh export-ignore
 
 # Demo hosting tooling for the maintainers' own deployment (edge worker, its deploy script, the preview proxy) and the test that names the denied terms to assert their absence:
 # they carry hostnames and the original deployment's names, so they stay in the source repository (publish was refused with 25 hits on these paths, 2026-11-10).

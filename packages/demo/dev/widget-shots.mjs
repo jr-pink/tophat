@@ -49,6 +49,10 @@ const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const profile = mkdtempSync(path.join(os.tmpdir(), 'widget-shots-'));
 const port = 9400 + Math.floor(Math.random() * 400);
 const proc = spawn(chrome, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run', '--hide-scrollbars', '--force-device-scale-factor=2', 'about:blank'], { stdio: 'ignore' });
+// never leak the browser: kill it on every exit path (throw, process.exit, SIGTERM from `timeout`, Ctrl-C)
+const reapChrome = () => { try { proc.kill('SIGKILL'); } catch { /* gone */ } };
+process.once('exit', reapChrome);
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.once(sig, () => { reapChrome(); process.kill(process.pid, sig); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function connect() {
   for (let i = 0; i < 60; i++) {

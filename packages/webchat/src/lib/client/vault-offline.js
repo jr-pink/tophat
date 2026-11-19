@@ -571,7 +571,7 @@ export function createVaultReplica({
       const code = await totp(record.value, now(), { crypto });
       return { id, kind: record.kind, value: { code: code.code, expiresAt: new Date(code.expiresAt).toISOString() }, local: true };
     }
-    return { id, kind: record.kind ?? found.kind, value: record.value, local: true };
+    return { id, kind: record.kind ?? found.kind, value: record.value, notes: found.notes || '', local: true };
   }
 
   function notHere() {

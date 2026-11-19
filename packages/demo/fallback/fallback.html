@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>tophat: your exobrain, for you, forever.</title>
-<meta name="description" content="I'm a local, open-source agent and memory system that does the easy stuff, so you can focus on what matters.">
+<!--head-->
 <meta name="color-scheme" content="light">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
@@ -22,9 +21,11 @@ h1{font:inherit;font-weight:400;font-size:1.3em;margin:0 0 .5em}
 h1 b{color:var(--rose);font-weight:700}
 p{margin:0}
 .sub{color:var(--dim);margin-bottom:2.6em}
+ul.sub{margin:0 0 1em;padding-left:2ch}
 .intro p{margin:0 0 1em}
 .intro{margin-bottom:1.4em}
 h2{font:inherit;font-weight:700;margin:0 0 .7em}
+h3{font:inherit;font-weight:700;color:var(--rose);margin:1.6em 0 0}
 a{color:var(--rose);text-decoration-color:var(--rose-lt);text-underline-offset:3px}
 a:hover{text-decoration-color:var(--rose)}
 em{font-style:italic}
@@ -82,7 +83,7 @@ button:hover{border-color:var(--rose)}
 </main>
 <script>addEventListener('message',function(e){var d=e.data;if(!d||d.tophatFigure!=='height')return;var px=Math.round(+d.px);if(!(px>=60&&px<=3000))return;document.querySelectorAll('iframe.w-runner-qol').forEach(function(f){if(f.contentWindow===e.source)f.style.height=px+2+'px'})});</script>
 <script>
-(function(){var c=document.querySelector('.code'),p=document.getElementById('install');if(!c||!p)return;var b=document.createElement('button');b.type='button';b.textContent='copy';b.onclick=function(){var t=p.textContent;var done=function(){b.textContent='copied';setTimeout(function(){b.textContent='copy'},1200)};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){})}else{var r=document.createRange();r.selectNodeContents(p);var s=getSelection();s.removeAllRanges();s.addRange(r)}};c.appendChild(b)})();
+document.querySelectorAll('.code').forEach(function(c){var p=c.querySelector('pre');if(!p)return;var b=document.createElement('button');b.type='button';b.textContent='copy';b.onclick=function(){var t=p.textContent;var done=function(){b.textContent='copied';setTimeout(function(){b.textContent='copy'},1200)};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(done,function(){})}else{var r=document.createRange();r.selectNodeContents(p);var s=getSelection();s.removeAllRanges();s.addRange(r)}};c.appendChild(b)});
 </script>
 </body>
 </html>

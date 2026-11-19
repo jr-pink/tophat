@@ -5,6 +5,7 @@ import {randomBytes, createCipheriv, createDecipheriv, createHash, scryptSync} f
 import {TYPES, invalid, normalizeValue, originOf, totp} from './values.mjs';
 import {parseImport} from './imports.mjs';
 import {read1PuxData} from './archive-import.mjs';
+import {tophatConfigFile} from '../core/gmail-accounts.mjs';
 import {newReplicaId, REPLICA, stampChanges, validHlc} from './replica.mjs';
 export {TYPES, originOf, normalizeValue, totp, generatePassword} from './values.mjs';
 
@@ -12,10 +13,38 @@ const ID = /^[a-z0-9][a-z0-9-]{1,100}$/;
 const VALUE_FILE = /^value-[0-9a-f]{32}\.enc$/;
 const RECORD_HEADER = Buffer.from('AV01'), KEY_HEADER = Buffer.from('AK01');
 const AAD_PREFIX = 'tophat';
-// A store written under an older AAD prefix stays readable: the prefix named in TOPHAT_VAULT_LEGACY_AAD_PREFIX is tried
-// when the current one does not authenticate. Reads only; every write uses the current prefix.
-const aadPrefixes = () => (process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX && process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX !== AAD_PREFIX
-  ? [AAD_PREFIX, process.env.TOPHAT_VAULT_LEGACY_AAD_PREFIX] : [AAD_PREFIX]);
+// A store may hold records sealed under another AAD prefix: tophat's own manager seals under 'tophat', this one under
+// 'tophat', and the live store holds both. The prefixes to fall back to are named once, in vault.json beside config.json
+// (`aadPrefixes`), never in an environment variable or a literal here. They are read only when the current prefix does not
+// authenticate, and a missing or malformed file is an error that names the file. Reads only; every write uses the current
+// prefix.
+export const VAULT_PREFIXES_FILE = 'vault.json';
+export function vaultPrefixesFile(env = process.env) {
+  return path.join(path.dirname(tophatConfigFile(env)), VAULT_PREFIXES_FILE);
+}
+class VaultPrefixConfigError extends Error {}
+export function legacyAadPrefixes(env = process.env) {
+  const file = vaultPrefixesFile(env);
+  let parsed;
+  try {parsed = JSON.parse(fs.readFileSync(file, 'utf8'));}
+  catch (error) {throw new VaultPrefixConfigError(`Vault AAD prefixes unavailable: cannot read ${file} (${error.code || error.message}); it must hold {"aadPrefixes": [...]}`);}
+  const list = parsed?.aadPrefixes;
+  if (!Array.isArray(list) || !list.length || !list.every(x => typeof x === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(x))) {
+    throw new VaultPrefixConfigError(`Vault AAD prefixes unavailable: ${file} needs "aadPrefixes", a non-empty array of prefix names`);
+  }
+  return list.filter(prefix => prefix !== AAD_PREFIX);
+}
+// Run attempt(prefix) under the current prefix, then under each configured one; the last failure is rethrown.
+function underPrefixes(attempt) {
+  try {return attempt(AAD_PREFIX);}
+  catch (first) {
+    let last = first;
+    for (const prefix of legacyAadPrefixes()) {
+      try {return attempt(prefix);} catch (error) {last = error;}
+    }
+    throw last;
+  }
+}
 const KEY_AAD = Buffer.from(`${AAD_PREFIX}:master-key:v1`);
 export const SCRYPT = {N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024};
 const check = (ok, message) => {if (!ok) throw invalid(message);};
@@ -60,17 +89,14 @@ export function sealRecord(key, name, text) {
 export function openRecord(key, name, bytes) {
   try {
     check(bytes.length >= 32 && bytes.subarray(0, 4).equals(RECORD_HEADER), 'Invalid vault record');
-    for (const prefix of aadPrefixes()) {
-      try {
-        const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(4, 16));
-        decipher.setAAD(Buffer.from(`${prefix}:${name}`));
-        decipher.setAuthTag(bytes.subarray(16, 32));
-        return Buffer.concat([decipher.update(bytes.subarray(32)), decipher.final()]);
-      } catch (error) {
-        if (prefix === aadPrefixes().at(-1)) throw error;
-      }
-    }
-  } catch {
+    return underPrefixes(prefix => {
+      const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(4, 16));
+      decipher.setAAD(Buffer.from(`${prefix}:${name}`));
+      decipher.setAuthTag(bytes.subarray(16, 32));
+      return Buffer.concat([decipher.update(bytes.subarray(32)), decipher.final()]);
+    });
+  } catch (error) {
+    if (error instanceof VaultPrefixConfigError) throw error;
     throw new Error('Vault integrity check failed');
   }
 }
@@ -205,26 +231,21 @@ export class PasswordManager {
     check(bytes.length === 80 && bytes.subarray(0, 4).equals(KEY_HEADER), 'Vault has no wrapped master key');
     const derived = scryptSync(passphrase, bytes.subarray(4, 20), 32, SCRYPT);
     try {
-      const prefixes = aadPrefixes();
-      for (const prefix of prefixes) {
-        try {
-          const decipher = createDecipheriv('aes-256-gcm', derived, bytes.subarray(20, 32));
-          decipher.setAAD(Buffer.from(`${prefix}:master-key:v1`));
-          decipher.setAuthTag(bytes.subarray(32, 48));
-          this.unlockedKey = Buffer.concat([decipher.update(bytes.subarray(48)), decipher.final()]);
-          break;
-        } catch (error) {
-          if (prefix === prefixes.at(-1)) throw error;
-        }
-      }
+      this.unlockedKey = underPrefixes(prefix => {
+        const decipher = createDecipheriv('aes-256-gcm', derived, bytes.subarray(20, 32));
+        decipher.setAAD(Buffer.from(`${prefix}:master-key:v1`));
+        decipher.setAuthTag(bytes.subarray(32, 48));
+        return Buffer.concat([decipher.update(bytes.subarray(48)), decipher.final()]);
+      });
       this.unlockExpires = Date.now() + ttlMs;
       // Expiring lazily leaves the key in memory until something next asks for
       // it, which on an idle machine is until the process exits. The timer is
       // unref'd so holding it never keeps a command alive.
       this.unlockTimer = setTimeout(() => this.lock(), ttlMs);
       this.unlockTimer.unref();
-    } catch {
+    } catch (error) {
       this.lock();
+      if (error instanceof VaultPrefixConfigError) throw error;
       throw new Error('Vault unlock failed');
     } finally {
       derived.fill(0);
@@ -270,7 +291,7 @@ export class PasswordManager {
     try {
       value = JSON.parse(this.read('catalog'));
     } catch (error) {
-      throw /locked/i.test(error.message) ? error : new Error('Vault catalog unavailable');
+      throw /locked/i.test(error.message) || error instanceof VaultPrefixConfigError ? error : new Error('Vault catalog unavailable');
     }
     const shaped = value.version === 2 && Number.isSafeInteger(value.revision)
       && value.entries && typeof value.entries === 'object' && !Array.isArray(value.entries)

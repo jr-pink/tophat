@@ -19,12 +19,18 @@ export function uploadPercent(attachment) {
 }
 
 export async function reservePaths(names, { fetchImpl = fetch } = {}) {
+  // A dead connection (fetch rejects) or a 5xx/408/429 is the moment, not a verdict: `transient`.
   const response = await fetchImpl('/api/upload/reserve', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ names })
+  }).catch((cause) => {
+    throw Object.assign(new Error(`could not reserve an upload path (offline: ${cause?.message || cause})`), { status: 0, transient: true });
   });
-  if (!response.ok) throw new Error(`could not reserve an upload path (${response.status})`);
+  if (!response.ok) {
+    const status = response.status;
+    throw Object.assign(new Error(`could not reserve an upload path (${status})`), { status, transient: status >= 500 || status === 408 || status === 429 });
+  }
   const body = await response.json();
   return body.files || [];
 }
@@ -138,17 +144,28 @@ function untilOnline() {
 export async function uploadFile(file, {
   path = null, fetchImpl = fetch, xhrImpl = null, transport = null, onprogress = null,
   chunkBytes = CHUNK_BYTES, retry = RETRY, watch = WATCH, sleep = defaultSleep, waitOnline = untilOnline,
-  journal = null, onstatus = null
+  journal = null, onstatus = null, onreserve = null
 } = {}) {
   const send = transport || defaultTransport({ fetchImpl, xhrImpl });
   const name = file.name || 'pasted';
   const size = Number(file.size) || 0;
   if (!path) {
-    const reserved = await reservePaths([name], { fetchImpl }).catch((cause) => {
-      throw new UploadFailure(`could not reserve an upload path: ${cause.message}`, { kind: 'reserve' });
-    });
-    path = reserved[0]?.path;
-    if (!path) throw new UploadFailure('could not reserve an upload path', { kind: 'reserve' });
+    // Never dropped for being offline: the file waits here, retrying with backoff and for the `online`
+    // event, until the server hands out a path. Only a real verdict (401, 4xx) ends it.
+    for (let tries = 0; ; tries += 1) {
+      try {
+        const reserved = await reservePaths([name], { fetchImpl });
+        path = reserved[0]?.path;
+        if (!path) throw Object.assign(new Error('the server returned no path'), { transient: true });
+        break;
+      } catch (cause) {
+        if (!cause.transient) throw new UploadFailure(`could not reserve an upload path: ${cause.message}`, { status: cause.status, kind: 'reserve' });
+        onstatus?.({ retrying: tries + 1, reason: 'waiting to reach the server; the file is queued' });
+        await waitOnline();
+        await sleep(Math.min(retry.maxMs, retry.baseMs * 2 ** Math.min(tries, 10)));
+      }
+    }
+    await onreserve?.(path);
   }
   const report = (loaded) => onprogress?.({ loaded: Math.min(size, loaded), total: size });
   let attempts = 0;

@@ -1,10 +1,12 @@
 # tophat
 
-I'm your **exobrain**, for **you**, **forever**.
+I'm the **local**, **open-source** personal agent.
 
-A local agent and memory system for getting stuff done.
+- State-of-the-art memory system
+- Always-on MacOS computer use
+- Batteries included
 
-Collects and understands full context, and lives on your Mac to act for you.
+Made by hackers, for hackers, to get stuff done.
 
 <!-- intro -->
 
@@ -21,25 +23,12 @@ Benchmark results comparing research memory systems and production assistants:
 
 <!-- figure:memory-bench -->
 
-How it works: a graph that ingests disconnected facts and builds knowledge over time.
+How it works: a graph that ingests disconnected facts and builds knowledge over time. Facts are stored on edges (links) instead of vertices (entities/pages), and wiki pages are generated from those facts over time. This models how real-world learning happens: append-only information linking concepts, and emergent understanding over time.
 
 </details>
 
 <details data-stream="closed">
-<summary>**2. Customizable chat interface**</summary>
-
-A polished baseline chat interface, fully customizable just by asking.
-
-(Tophat was built by dog-fooding and self-modification.)
-
-<!-- figure:runner-qol -->
-
-<!-- figure:auto-chat -->
-
-</details>
-
-<details data-stream="closed">
-<summary>**3. MacOS integration and computer use**</summary>
+<summary>**2. MacOS integration and computer use**</summary>
 
 Tophat lives on a machine of yours so it can act as you.
 
@@ -56,31 +45,21 @@ So on a whim, you can say "next time i need to go somewhere check traffic and ub
 </details>
 
 <details data-stream="closed">
-<summary>**4. Connectors enough to capture full context**</summary>
+<summary>**3. Batteries included**</summary>
 
-Email, instant messaging, REST APIs, and webhooks included.
+### First-party connectors
 
-Extensions for location, screen recording, and all-day audio.
+Connectors for email, instant messaging, REST APIs, and webhooks come included.
 
-Or build your own with just a few prompts (and share a PR!)
+### Shared memory
 
-<!-- figure:connectors -->
-
-</details>
-
-<details data-stream="closed">
-<summary>**5. Per-memory e2ee p2p sharing for collaborative projects.**</summary>
-
-Per-fact permissions so peers can collaborate while keeping some secrets. ([technical post](https://github.com/tophat-md/tophat/blob/main/README.md#sharing-devices-and-cross-scope-pages))
+Per-memory e2ee p2p sharing for collaborative projects: per-fact permissions so peers can collaborate while keeping some secrets. ([technical post](https://github.com/tophat-md/tophat/blob/main/README.md#sharing-devices-and-cross-scope-pages))
 
 <!-- figure:sharing -->
 
-</details>
+### For you, forever
 
-<details data-stream="closed">
-<summary>**6. All local, private, fully customizable, and open-source.**</summary>
-
-Code is open for customization. Memories live in a local sqlite of markdown. Tophat is for you, forever.
+Memories live in a local sqlite of markdown. Code is open for customization. Tophat is for you, forever.
 
 </details>
 
@@ -89,6 +68,6 @@ Code is open for customization. Memories live in a local sqlite of markdown. Top
 Ready to try on your exobrain?
 
 ```
-Scan this repo for privacy, security, and malintent; then help me install it:
+Scan this repo for privacy, security, and malintent; then install it:
 https://github.com/tophat-md/tophat
 ```

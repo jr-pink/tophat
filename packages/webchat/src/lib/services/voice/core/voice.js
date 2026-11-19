@@ -213,6 +213,32 @@ export function nextVoice(voice, input) {
     }
 
     
+    // The realtime recogniser decides the end of a turn itself (semantic voice activity detection on the server)
+    // and hands over the finished transcript in one piece. That is one input rather than final-then-endpoint: the
+    // microphone stays open through it, so a correction spoken while the agent is still working goes out too.
+    case 'utterance': {
+      const text = [voice.heard, (input.text || '').trim()].map((part) => part.trim()).filter(Boolean).join(' ');
+      if (!text) return withEffects(voice, []);
+      if (at === 'listening' || at === 'waiting') {
+        return withEffects(
+          { ...voice, state: 'waiting', heard: '', partial: '', turn: true, pendingSend: text, restarts: 0 },
+          ['send']
+        );
+      }
+      if (at === 'speaking') {
+        return withEffects(
+          { ...voice, state: 'waiting', heard: '', partial: '', turn: true, reply: '', pendingSend: text, restarts: 0 },
+          ['stop_speaking', 'send']
+        );
+      }
+      return withEffects(voice, []);
+    }
+    // His voice, over the level that echo cannot reach, while the reply is being spoken: stop talking and listen.
+    case 'barge_in': {
+      if (at !== 'speaking') return withEffects(voice, []);
+      return withEffects({ ...voice, state: 'listening', reply: '', heard: '', partial: '', ...afresh(input) }, ['stop_speaking', 'listen']);
+    }
+
     case 'turn_ended': {
       
       
@@ -307,7 +333,7 @@ export function voiceViolations(before, after, input, effects = []) {
   
   
   
-  const revision = input?.type === 'partial' || input?.type === 'final';
+  const revision = input?.type === 'partial' || input?.type === 'final' || input?.type === 'utterance';
   const was = revision ? String(before.partial ? before.heard : pendingText(before)).trim() : pendingText(before);
   if (was) {
     const survives = pendingText(after);

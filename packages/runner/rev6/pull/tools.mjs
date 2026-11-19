@@ -277,6 +277,8 @@ export function createJobs(db, { sessionId, cwd, env = process.env, now = () => 
       for (const r of rows) stamp.run(now(), r.id);
       return rows.map(describe);
     },
+    /** Hand job reports back that were taken for a wake which then failed to start. */
+    redeliver(ids) { const un = db.prepare('UPDATE jobs SET delivered_at = NULL WHERE id = ? AND session_id = ?'); for (const id of ids || []) un.run(id, sessionId); },
     running() { return db.prepare("SELECT id, tool, started_at FROM jobs WHERE session_id = ? AND status = 'running'").all(sessionId); },
     stopAll() {
       for (const [id, entry] of live) {
@@ -409,7 +411,7 @@ export function createTools({ db, sessionId, cwd, roots = [], env = process.env,
     ...(attachmentsConfigured(env) ? { async read_document(i) { return withImage(await readDocument(i, { env, cwd, checkPath: (p, at) => boundary.check(p, at) }), env); } } : {}),
     ...(mailTools ? { mail_search: (i) => mailTools.mail_search(i), mail_read: (i) => mailTools.mail_read(i), mail_send: (i) => mailTools.mail_send(i) } : {}),
     ...(goals ? goalHandlers(goals) : {}),
-    ...(chat ? { chat_rename: (i) => chat.chat_rename(i), chat_archive: (i) => chat.chat_archive(i), chat_workspace: (i) => chat.chat_workspace(i), chat_handoff: (i) => chat.chat_handoff(i) } : {}),
+    ...(chat ? { chat_rename: (i) => chat.chat_rename(i), chat_archive: (i) => chat.chat_archive(i), chat_workspace: (i) => chat.chat_workspace(i), chat_host: (i) => chat.chat_host(i), chat_handoff: (i) => chat.chat_handoff(i) } : {}),
     ...(agents ? { Agent: (i, call) => agents.spawn(i, call?.id), agent_send: (i) => agents.send(i), agent_list: async () => ({ agents: agents.list() }), agent_wait: (i) => agents.wait(i), agent_cancel: async (i) => agents.cancel(i) } : {}),
     web_search: viaWeb('web_search'), web_open: viaWeb('web_open'), web_find: viaWeb('web_find'),
     browser_acquire: viaBrowser((b, i) => b.browser.acquire(i.isolated ? { isolated: true } : {})),

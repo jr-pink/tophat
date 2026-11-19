@@ -19,9 +19,23 @@ const INTERACTIVE_CSP = "sandbox allow-scripts; default-src 'none'; script-src '
 // names it. `connectSrc` is the older name and means the same. `immutable`
 // is for a file asked for by content hash (?v=<hash>): the URL names the bytes, so the browser may
 // keep them for good and a reload or an app swap never fetches them again.
-export function interactiveCsp(artifactSrc = null) {
+// `connect` is an app-declared allowlist of extra connect-src origins (quicklook.json "connect", carried in the artifact's
+// meta.json by docstore-kit). Only exact https:// or wss:// origins pass; anything else is dropped here, so a bad meta.json
+// can never widen the policy beyond named hosts, and only connect-src is touched (no script, frame or form origins).
+const CONNECT_ORIGIN = /^(?:(?:https|wss):\/\/(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|(?:http|ws):\/\/(?:localhost|127\.0\.0\.1))(?::\d{1,5})?$/u;
+export function connectOriginsFrom(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list.slice(0, 8)) {
+    const o = String(raw).trim().toLowerCase();
+    if (CONNECT_ORIGIN.test(o) && !out.includes(o)) out.push(o);
+  }
+  return out;
+}
+export function interactiveCsp(artifactSrc = null, connect = []) {
   const src = String(artifactSrc || '').trim();
-  if (!src) return INTERACTIVE_CSP;
+  const extra = connectOriginsFrom(connect).join(' ');
+  if (!src) return extra ? INTERACTIVE_CSP.replace("connect-src 'none'", `connect-src ${extra}`) : INTERACTIVE_CSP;
   return INTERACTIVE_CSP
     .replace("script-src 'unsafe-inline' 'unsafe-eval'", `script-src 'unsafe-inline' 'unsafe-eval' ${src}`)
     .replace("style-src 'unsafe-inline'", `style-src 'unsafe-inline' ${src}`)
@@ -29,11 +43,11 @@ export function interactiveCsp(artifactSrc = null) {
     .replace('media-src data: blob:', `media-src data: blob: ${src}`)
     .replace('font-src data:', `font-src data: ${src}`)
     .replace('worker-src blob:', `worker-src blob: ${src}`)
-    .replace("connect-src 'none'", `connect-src ${src}`);
+    .replace("connect-src 'none'", `connect-src ${src}${extra ? ' ' + extra : ''}`);
 }
 
-export function rawFileResponse(found, mime, range, { interactiveHtml = false, artifactSrc = null, connectSrc = null, immutable = false, extraHeaders = null } = {}) {
-  const interactive = interactiveCsp(artifactSrc || connectSrc);
+export function rawFileResponse(found, mime, range, { interactiveHtml = false, artifactSrc = null, connectSrc = null, connect = [], immutable = false, extraHeaders = null } = {}) {
+  const interactive = interactiveCsp(artifactSrc || connectSrc, connect);
   const headers = {
     'content-type': mime,
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'private, max-age=5',

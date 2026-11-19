@@ -35,10 +35,27 @@ export function parseSpec(spec, mac) {
 // spec naming shift and the unshifted character ("mod+shift+.") also matches the shifted one.
 export const SHIFTED = { '.': '>', ',': '<', '/': '?', ';': ':', "'": '"', '[': '{', ']': '}', '\\': '|', '-': '_', '=': '+', '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')' }
 
+
+// The character a keydown stands for when e.key cannot be trusted. The number row is matched by physical key. With Option held, any
+// other key whose character was rewritten to a non-ASCII or dead one falls back to its US-QWERTY physical position.
+const CODE_CHARS = { Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Backslash: '\\', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Backquote: '`' }
+export function physicalChar(e) {
+  const code = e.code || ''
+  let m = /^Digit([0-9])$/.exec(code)
+  if (m) return m[1]
+  if (!e.altKey) return null
+  const k = e.key || ''
+  if (k.length === 1 && k.charCodeAt(0) < 128 && k !== ' ') return null
+  m = /^Key([A-Z])$/.exec(code)
+  if (m) return m[1].toLowerCase()
+  return CODE_CHARS[code] || null
+}
+
 export function matches(e, s) {
   const single = e.key.length === 1
   const letter = single && e.key.toLowerCase() !== e.key.toUpperCase()
   let sameKey = single && s.key.length === 1 ? e.key.toLowerCase() === s.key.toLowerCase() : e.key === s.key
+  if (!sameKey && s.key.length === 1) { const c = physicalChar(e); if (c && c === s.key.toLowerCase()) sameKey = true }
   if (!sameKey && s.shift && e.shiftKey && single && s.key.length === 1 && SHIFTED[s.key] === e.key) sameKey = true
   if (!sameKey) return false
   if (!!e.ctrlKey !== s.ctrl || !!e.metaKey !== s.meta || !!e.altKey !== s.alt) return false
@@ -64,9 +81,14 @@ export function createKeys(target = globalThis.window, { mac = /Mac|iPhone|iPad/
   }
   target.addEventListener('keydown', onKey)
   return {
-    bind(map, { repeat = false } = {}) {
-      const mine = Object.entries(map).map(([spec, fn]) => ({ spec: parseSpec(spec, mac), fn, repeat }))
-      stack.push(...mine)
+    // rank (optional) orders bindings independently of WHEN they were bound: a higher rank wins, equal ranks fall back
+    // to newest-wins. Parts bind with their file order as rank, so a part that mounts late (its data arrived last)
+    // does not steal a key from a later part; unranked bindings rank above every ranked one, newest first, as before.
+    bind(map, { repeat = false, rank = Infinity } = {}) {
+      const mine = Object.entries(map).map(([spec, fn]) => ({ spec: parseSpec(spec, mac), fn, repeat, rank }))
+      let at = stack.length
+      while (at > 0 && stack[at - 1].rank > rank) at--
+      stack.splice(at, 0, ...mine)
       return () => { for (const b of mine) { const i = stack.indexOf(b); if (i >= 0) stack.splice(i, 1) } }
     },
     dispose() { target.removeEventListener('keydown', onKey) },

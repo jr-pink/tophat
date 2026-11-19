@@ -36,6 +36,7 @@
 
   // The fallback for anything without its own menu: what the browser's would offer that matters here.
   $effect(() => provideMenu('app', (_ctx, x) => [
+    x.src && { id: 'copy-image-data', label: 'Copy Image', run: () => copyImage(x.src) },
     x.selection && { id: 'copy', label: 'Copy', keys: '⌘C', run: () => navigator.clipboard?.writeText(x.selection) },
     x.href && { id: 'open-link', label: 'Open Link in New Tab', run: () => globalThis.open(x.href, '_blank', 'noopener') },
     x.href && { id: 'copy-link', label: 'Copy Link Address', run: () => navigator.clipboard?.writeText(x.href) },
@@ -45,6 +46,21 @@
     { id: 'back', label: 'Back', keys: '⌘[', run: () => history.back() },
     { id: 'reload', label: 'Reload', keys: '⌘R', run: () => location.reload() }
   ]));
+
+  // Copy the image itself (PNG on the clipboard; the clipboard API takes only PNG, so other types are redrawn through a canvas).
+  // The blob is passed as a promise so Safari keeps the user-gesture.
+  function copyImage(src) {
+    const png = (async () => {
+      const blob = await (await fetch(src, { credentials: 'include' })).blob();
+      if (blob.type === 'image/png') return blob;
+      const bitmap = await createImageBitmap(blob);
+      const canvas = Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height });
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      return await new Promise((ok, bad) => canvas.toBlob((b) => (b ? ok(b) : bad(new Error('toBlob failed'))), 'image/png'));
+    })();
+    return navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+      .catch((cause) => console.error('[context-menu] copy image', cause));
+  }
 
   function run(item) {
     const id = open?.id;

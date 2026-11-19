@@ -89,8 +89,10 @@ function chunks(md) {
 
 /** Title, description and Open Graph / Twitter tags of the site, from the description's own lead (no claim is written here). */
 export const SITE_URL = 'https://tophat.md';
+/** The lead as plain sentences: bold marks dropped, each `- item` bullet a sentence of its own. */
+export const plainLead = (lead) => lead.replace(/\*\*/g, '').replace(/^-\s+(.*?)\.?\s*$/gm, '$1.');
 export function metaTags(file) {
-  const lead = sections(file).lead.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+  const lead = plainLead(sections(file).lead).replace(/\s+/g, ' ').trim();
   const [tagline, ...rest] = lead.split(/(?<=[.!?])\s+/);
   const desc = esc(lead), title = 'tophat';
   return `<meta name="description" content="${desc}"><meta property="og:type" content="website"><meta property="og:site_name" content="${title}"><meta property="og:title" content="${title}: ${esc(tagline.replace(/[.!?]$/, ''))}"><meta property="og:description" content="${esc(rest.join(' ') || lead)}"><meta property="og:url" content="${SITE_URL}/"><meta property="og:image" content="${SITE_URL}/og.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${title}"><meta name="twitter:description" content="${desc}"><meta name="twitter:image" content="${SITE_URL}/og.png">`;
@@ -106,7 +108,7 @@ export function textPage({ file, contextFile, repo, markdown, why = 'check', sit
   const md = (t) => html(markdown(t));
   const seen = new Set(), toc = [], body = [];
   const s = sections(file);
-  const lead = s.lead.replace(/\*\*/g, '').split(/\n\s*\n|(?<=\.)\s+/).map((x) => x.trim()).filter(Boolean);
+  const lead = plainLead(s.lead).split(/\n\s*\n|(?<=\.)\s+/).map((x) => x.trim()).filter(Boolean);
   const add = (title, level, text, id) => { body.push((title ? `<h${level} id="${id}">${esc(title)}</h${level}>` : '') + md(text)); };
   // the description: its intro and features, then the install block
   body.push(`<h1>${esc(lead[0] || 'tophat')}</h1><p class="sub">${esc(lead.slice(1).join(' '))}</p>`);

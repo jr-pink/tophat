@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sections, FIGURES } from '../src/answer.mjs';
+import { sections, FIGURES, metaTags, plainLead } from '../src/answer.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEMO = path.join(HERE, '..');
 export const DESCRIPTION = path.join(DEMO, 'content', 'description.md');
@@ -17,7 +17,7 @@ export const inline = (s) => esc(s)
   .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, t, u) => `<a href="${u}">${t}</a>`)
   .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
   .replace(/\*([^*]+)\*/g, '<em>$1</em>');
-const paras = (md) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => `<p>${inline(p.replace(/\s*\n\s*/g, ' '))}</p>`).join('\n');
+const paras = (md) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean).map((p) => (/^###\s+/.test(p) ? `<h3>${inline(p.replace(/^###\s+/, ''))}</h3>` : `<p>${inline(p.replace(/\s*\n\s*/g, ' '))}</p>`)).join('\n');
 
 /** The widget names the page frames (served by the edge at /_fallback/w/<name>), in page order; images are inlined instead. */
 export const FRAMED = [...sections(DESCRIPTION).intro.matchAll(/^<!--\s*figure:([\w-]+)\s*-->/gm)].map((m) => FIGURES[m[1]]?.[0]).filter((f) => f && f.endsWith('.html')).map((f) => f.replace(/\.html$/, ''));
@@ -40,8 +40,11 @@ export function boxes(s = sections(DESCRIPTION)) {
     return { n: m[1], line: m[2].trim(), parts: bits.map((b, i) => (i % 2 ? figure(b) : paras(b))) };
   });
 }
-/** The copy before the first section, without the top install block (the page has its own). */
-const preface = (s) => s.intro.split(/^<details/m)[0].replace(/^<!--[^>]*-->\s*$/gm, '').replace(/^Install:\s*$/m, '');
+/** The copy before the first section, with the top install block where the copy places it, the same as the live answer. */
+const preface = (s) => s.intro.split(/^<details/m)[0].replace(/^<!--\s*install-block\s*-->\s*$/m, '\n\n@@INSTALL@@\n\n').replace(/^<!--[^>]*-->\s*$/gm, '');
+const codeBlock = (code) => `<div class="code"><pre>${esc(code.replace(/^```\w*\n?|\n?```$/g, '').trim()).replace(/(https:\/\/[^\s<]+)/g, '<a href="$1">$1</a>')}</pre></div>`;
+/** A lead paragraph: a run of `- item` lines is a list, anything else a subtitle line. */
+const leadPara = (p) => (/^-\s/.test(p) ? `<ul class="sub">${p.split(/\n/).map((l) => `<li>${inline(l.replace(/^-\s+/, ''))}</li>`).join('')}</ul>` : `<p class="sub">${inline(p)}</p>`);
 
 export function renderFallback() {
   const s = sections(DESCRIPTION);
@@ -49,8 +52,9 @@ export function renderFallback() {
   const install = /^([\s\S]*?)```\s*\n([\s\S]*?)\n```/.exec(s.install);
   if (!title || !install) throw new Error('content/description.md lacks its lead or its install block');
   const fill = {
-    lead: `<h1>${inline(title)}</h1>\n${sub.map((p) => `<p class="sub">${inline(p)}</p>`).join('\n')}`,
-    intro: paras(preface(s)),
+    head: `<title>tophat: ${esc(plainLead(title).replace(/[.!?]$/, ''))}</title>\n${metaTags(DESCRIPTION)}`,
+    lead: `<h1>${inline(title)}</h1>\n${sub.map(leadPara).join('\n')}`,
+    intro: paras(preface(s)).replace('<p>@@INSTALL@@</p>', codeBlock(s.code)),
     boxes: boxes(s).map((b) => `<details class="box" id="f${b.n}">
 <summary><span class="n">${b.n}.</span><span class="line">${inline(b.line)}</span><span class="tog" aria-hidden="true"></span></summary>
 <div class="more">

@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {PasswordManager,totp} from '../src/vault/manager.mjs';
 import {parseImport} from '../src/vault/imports.mjs';
+// Fallback AAD prefixes come from vault.json beside config.json; a wrong-passphrase unlock tries them.
+{const cfg=fs.mkdtempSync(path.join(os.tmpdir(),'tophat-vault-cfg-'));fs.writeFileSync(path.join(cfg,'vault.json'),'{"aadPrefixes":["tophat","older"]}');process.env.TOPHAT_CONFIG=path.join(cfg,'config.json');}
 function fixture(t) {const root=fs.mkdtempSync(path.join(os.tmpdir(),'tophat-vault-test-'));fs.chmodSync(root,0o700);t.after(()=>fs.rmSync(root,{recursive:true,force:true}));return new PasswordManager({directory:path.join(root,'vault'),keyFile:path.join(root,'key')});}
 test('wrapped master key requires unlock after restart, rejects wrong password, locks and expires',t=>{
   const m=fixture(t);m.write('test-value','synthetic');const original=fs.readFileSync(m.keyFile);

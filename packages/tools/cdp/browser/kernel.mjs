@@ -336,13 +336,58 @@ export function refindTarget(job, targets, env = process.env) {
   }
   return null;
 }
-/** Drop entries whose tab is gone, and abandoned claims; the tab itself always stays open. */
-export function reapJobs(targets, { ttl, env = process.env } = {}) {
+/**
+ * Drop entries whose tab is gone, and abandoned claims; the tab of an abandoned claim stays open here (reapIdleTabs
+ * closes it once it has sat unchanged for the tab TTL). `orphans`, when given, collects the tab ids of abandoned
+ * EPHEMERAL claims: their caller promised to release them on exit and did not (killed, timed out), so the tab is garbage.
+ */
+export function reapJobs(targets, { ttl, env = process.env, orphans } = {}) {
   const live = liveById(targets), reaped = [];
   for (const j of allJobs(env)) {
-    if ((!live.has(up(j.targetId)) && !refindTarget(j, targets, env)) || jobIsStale(j, ttl)) { releaseJob(j.job, env); reaped.push(j.job); }
+    const stale = jobIsStale(j, ttl);
+    if ((!live.has(up(j.targetId)) && !refindTarget(j, targets, env)) || stale) {
+      if (stale && j.ephemeral && orphans && live.has(up(j.targetId))) orphans.push(j.targetId);
+      releaseJob(j.job, env); reaped.push(j.job);
+    }
   }
   return reaped;
+}
+
+// Tabs nobody speaks for pile up in the shared agent Chrome: every claimed-and-never-closed tab keeps a renderer
+// (200-400 MB each; 25 pages were 10 GB on 2026-11-18). A page that no live job holds, that is not protected, and whose
+// url+title have not changed for TOPHAT_CDP_TAB_TTL seconds (default 3600; 0 turns this off) is closed. Idle time is
+// measured by this registry (tab-seen.json beside the jobs dir, rewritten atomically), since Chrome keeps no activity time.
+export const tabTtl = (env = process.env) => { const v = envGet(env, 'TOPHAT_CDP_TAB_TTL'); return v === undefined || v === '' ? 3600 : Number(v); };
+export const tabSeenFile = (env = process.env) => path.join(path.dirname(jobsDir(env)), 'tab-seen.json');
+/** Returns the target ids it closed. `close(id)` defaults to closing in the browser at `endpoint`. */
+export async function reapIdleTabs(targets, { endpoint, close, ttl, now = Date.now(), env = process.env, extra = [] } = {}) {
+  ttl = ttl ?? tabTtl(env);
+  if (!(ttl > 0)) return [];
+  const file = tabSeenFile(env);
+  let seen = {};
+  try { const raw = JSON.parse(fs.readFileSync(file, 'utf8')); if (raw && typeof raw === 'object') seen = raw; } catch { /* first run */ }
+  const held = new Set(allJobs(env).map((j) => up(j.targetId))), keep = protectedIds(env);
+  const pages = targets.filter((t) => t.type === 'page'), next = {}, doomed = [];
+  for (const t of pages) {
+    const id = up(t.id), sig = `${t.url}\n${t.title}`, was = seen[id];
+    const since = held.has(id) || !was || was.sig !== sig ? now : was.since;
+    next[id] = { sig, since };
+    if (keep.has(id) || held.has(id)) continue;
+    if (extra.map(up).includes(id) || (now - since) / 1000 > ttl) doomed.push(t);
+  }
+  // never close the last page: Chrome would quit with it
+  const closed = [], spare = pages.length - doomed.length < 1 ? doomed.slice(1) : doomed;
+  for (const t of spare) {
+    const ok = close ? await close(t.id) : await closeTarget(endpoint, t.id);
+    if (ok !== false) { closed.push(t.id); delete next[up(t.id)]; }
+  }
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp.${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(next));
+    fs.renameSync(tmp, file);
+  } catch { /* a read-only state dir only delays the reaping */ }
+  return closed;
 }
 export async function createTarget(endpoint, url, { background = true, newContext = false } = {}) {
   return withBrowser(endpoint, async (c) => {
@@ -378,8 +423,11 @@ export async function navigateJob(endpoint, job, url, timeout = 20) {
 export async function claimJob(endpoint, name, o = {}) {
   const { url, targetId, steal, background = true, newContext, fresh, ephemeral, expectPrefix, tool = 'tophat-cdp', navigate = true, env = process.env } = o;
   checkJobName(name);
-  const targets = await listTargets(endpoint);
-  reapJobs(targets, { env });
+  let targets = await listTargets(endpoint);
+  const orphans = [];
+  reapJobs(targets, { env, orphans });
+  const closedTabs = new Set((await reapIdleTabs(targets, { endpoint, env, extra: orphans }).catch(() => [])).map(up));
+  if (closedTabs.size) targets = targets.filter((t) => !closedTabs.has(up(t.id)));
   const rec = (id, extra) => newJobRecord(name, id, { ephemeral, expectPrefix: expectPrefix ?? null, tool, ...extra });
   if (targetId) {
     const t = pickTarget(targets, targetId);

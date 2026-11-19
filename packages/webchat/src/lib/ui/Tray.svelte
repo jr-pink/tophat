@@ -16,6 +16,8 @@
     label = '',
     count = 0,
     countWhenClosed = true,   // false: the number shows only while the tray is open
+    badge = true,             // false: no number at all; count only decides whether the tray shows
+    onnearend = null,         // called when the open body scrolls within about a screen of its end
     open = false,
     onopen = () => {},
     icon = null,
@@ -39,11 +41,12 @@
       <span class="caret" class:down={open}><Icon name="chevron" size={12} /></span>
       {#if icon}<span class="glyph"><Icon name={icon} size={12} /></span>{/if}
       <span class="label">{label}</span>
-      {#if open || countWhenClosed}<span class="count">{count}</span>{/if}
+      {#if badge && (open || countWhenClosed)}<span class="count">{count}</span>{/if}
       {#if note}<span class="note">{note}</span>{/if}
     </button>
     {#if open}
-      <div class="scroller body" data-testid={listtestid || `${testid}-list`}>
+      <div class="scroller body" data-testid={listtestid || `${testid}-list`}
+        onscroll={onnearend ? (e) => { const el = e.currentTarget; if (el.scrollHeight - el.scrollTop - el.clientHeight < el.clientHeight) onnearend(); } : undefined}>
         {@render children?.()}
       </div>
     {/if}

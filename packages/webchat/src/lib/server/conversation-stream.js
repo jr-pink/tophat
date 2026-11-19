@@ -10,10 +10,8 @@ import { eventStream } from './sse.js';
 export function conversationView(store, id) {
   return new Proxy(store, {
     get(target, prop) {
-      // Backlog pages come from the conversation's own index, so a page is always full while more exists (a global page filtered
-      // afterwards would look short and end the catch-up early).
-      // The head of THIS chat, not of the store: eventStream measures how far behind a reader is against it, and a chat that has just begun
-      // on a host whose store holds 40,000 other events is not "40,000 behind" (the reader was told to resync, got no backlog and lost the run).
+      // Backlog pages come from the conversation's own index, so a page is always full while more exists (a global page filtered afterwards
+      // would look short and end the catch-up early).
       if (prop === 'cursor') return () => target.conversationEvents(id, { newest: true, limit: 1 }).at(-1)?.cursor ?? 0;
       if (prop === 'behind') return (after, cap) => target.conversationEvents(id, { after, limit: cap }).length;
       if (prop === 'since') return (after, limit) => target.conversationEvents(id, { after, limit });

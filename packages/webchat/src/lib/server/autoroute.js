@@ -176,6 +176,7 @@ export async function askForHost({ title, transcript, hosts }, { fetchImpl = fet
   const listing = hosts.map((h) => `Host "${h.id}" (${h.label}): ${h.description}`).join('\n');
   const reply = await complete({ system: HOST_PROMPT, user: `${listing}\n\nNew chat, titled "${title || '(untitled)'}":\n${transcript}`, maxTokens: 1500, fetchImpl, apiKey });
   const cleaned = reply.replace(/^["'`\s]+|["'`\s.]+$/gu, '').toLowerCase();
+  console.log(`[autoroute] ${JSON.stringify({ event: 'host-pick-reply', title: title || null, reply: reply.slice(0, 200), transcript: transcript.slice(0, 600) })}`);
   return hosts.find((h) => h.id.toLowerCase() === cleaned)?.id || null;
 }
 

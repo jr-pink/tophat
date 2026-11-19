@@ -478,7 +478,7 @@ export function createRemoteRuntimes({
           const hostChat = twin.remoteId || id;
           // The door back into this host's folder for the turn (host-door.js): its address rides in what the host's model reads.
           let doorText = '';
-          if (door) { try { doorText = await door.open(id, twin.runtime, config()[twin.runtime]); } catch (cause) { log(`[remote-runtime] door for ${id}: ${cause?.message || cause}`); } }
+          if (door) { try { doorText = await door.open(id, twin.runtime, config()[twin.runtime], doorHooks(id)); } catch (cause) { log(`[remote-runtime] door for ${id}: ${cause?.message || cause}`); } }
           const payload = { text: wire.display, wire: doorText ? `${wire.text}\n\n${doorText}` : wire.text, writer: writerOf(), title };
           if (forkOf) await postAction(twin.runtime, { op: ACTIONS.FORK, conversationId: hostChat, actionId: item.itemId, payload: { ...payload, parentId: forkOf.parentId, settings: sideSettings(conversation), sidechat: conversation.sidechat || {} } });
           else await postAction(twin.runtime, { op: ACTIONS.SEND, conversationId: hostChat, actionId: item.itemId, payload });
@@ -582,7 +582,7 @@ export function createRemoteRuntimes({
     }
     // The door back into this host stays open while this turn's work runs on the host (subagents, background turns, jobs it started)
     // and closes after a grace once none is left (host-door.js): the host is asked per grant, not about the chat as a whole.
-    door?.turnEnded?.(id, { probe: (grant) => doorProbe(twin, grant) });
+    door?.turnEnded?.(id, { probe: (grant, opts) => doorProbe(twin, grant, opts) });
     hostedMemory?.flush(id, twin, { hostLabel: labelOf(twin.runtime), group: config()[twin.runtime]?.group || null }).then(save).catch(() => {});
     if (onTurnEnd) { try { onTurnEnd(id); } catch { /* a hook never blocks */ } }
   }
@@ -591,9 +591,26 @@ export function createRemoteRuntimes({
    * What of one door grant still runs on the host ({ live, why }; the host's /api/door, door-work.js). A host on a build without that route
    * answers by the chat's busy flag (/api/sync). Throws when the host is unreachable (the door then stays: host-door.js).
    */
-  async function doorProbe(twin, grant) {
+  /**
+   * Who a door caller is, asked of the host's ledger (the same /api/door route, `agent`): { known, live, grant } for a subagent id of this chat. The
+   * door (host-door.js) decides on it; an unreachable host throws, which the door answers "retry", never "allowed".
+   */
+  async function doorAgent(twin, agent) {
+    if (!twin) throw new RemoteError('this chat is not attached to a team host yet', { offline: true });
     const chat = encodeURIComponent(twin.remoteId || '');
-    const asked = await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&grant=${encodeURIComponent(grant)}`, { method: 'GET' });
+    return readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&agent=${encodeURIComponent(agent)}`, { method: 'GET' }));
+  }
+
+  /** The two questions the home host's door asks of a chat's team host, resolved at call time (a restored door asks before the chat is attached: the probe then counts as live). */
+  const doorHooks = (id) => ({
+    probe: (grant, opts) => { const twin = twinOf(id); if (!twin) throw new RemoteError('this chat is not attached to a team host yet', { offline: true }); return doorProbe(twin, grant, opts); },
+    agent: (agent) => doorAgent(twinOf(id), agent)
+  });
+
+  async function doorProbe(twin, grant, { open = null, holder = false } = {}) {
+    const chat = encodeURIComponent(twin.remoteId || '');
+    const extra = open ? `&open=${encodeURIComponent(open.join(','))}${holder ? '&holder=1' : ''}` : '';
+    const asked = await fetchPeer(twin.runtime, `/api/door?conversation=${chat}&grant=${encodeURIComponent(grant)}${extra}`, { method: 'GET' });
     if (asked.response.ok) return readJson(twin.runtime, asked);
     if (asked.response.status !== 401 && asked.response.status !== 404) return readJson(twin.runtime, asked);
     const sync = await readJson(twin.runtime, await fetchPeer(twin.runtime, `/api/sync?conversation=${chat}&after=${Number.MAX_SAFE_INTEGER}`, { method: 'GET' }));
@@ -910,5 +927,5 @@ export function createRemoteRuntimes({
   }
   function stop() { running = false; if (timer) clearTimeout(timer); timer = null; for (const id of [...streams.keys()]) detach(id); }
 
-  return { wrap, route, tick, flush, start, stop, status, probe, call, inject, attach, detach, twins: () => twins, twin: twinOf, isRemoteBusy, runtimes: config, decide };
+  return { wrap, route, tick, flush, start, stop, status, probe, call, inject, attach, detach, doorHooks, twins: () => twins, twin: twinOf, isRemoteBusy, runtimes: config, decide };
 }

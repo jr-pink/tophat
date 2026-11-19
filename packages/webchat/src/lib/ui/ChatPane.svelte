@@ -1,5 +1,5 @@
 <script>
-  import { tick, untrack } from 'svelte';
+  import { setContext, tick, untrack } from 'svelte';
   import { onboard } from '$lib/client/onboarding.js';
   import ChatHeader from './ChatHeader.svelte';
   import FindBar from './FindBar.svelte';
@@ -23,7 +23,7 @@
   import { busyStretch, isLive } from '$lib/core/activity.js';
   import { readDraft, writeDraft } from '$lib/core/attachments.js';
   import { isMacTextBinding, isMod } from '$lib/core/keys.js';
-  import { RAIL_MIN_PANE, railWidthFor, SELECT_GESTURES, SELECT_PILL, collapseThread, focusThread, initialRail, isAbandoned, pruneRail, quoteLine } from '$lib/core/sidechat.js';
+  import { RAIL_MIN_PANE, railWidthFor, SELECT_GESTURES, SELECT_PILL, isAbandoned, quoteLine } from '$lib/core/sidechat.js';
   import { blockAt, offsetsOfNode, offsetsOfRange } from '$lib/core/textrange.js';
   import { makeAnchor } from '$lib/core/sidechat.js';
   import { resolveAnchor as resolveChatAnchor } from '$lib/core/sidechat.js';
@@ -31,6 +31,9 @@
   import { isIncognito } from '$lib/core/incognito.js';
   import { prefsDecl } from '$lib/core/prefs-state.js';
   import { findDecl } from '$lib/core/find-state.js';
+  import { collapsedOf, sidechatDecl } from '$lib/core/sidechat-state.js';
+  import { highlightsFor, threadFocus } from '../../../../runner/tools/docstore-kit/lib/intent.js';
+  import { intentStore } from '$lib/client/intent.js';
   import { uiApp } from '$lib/client/ui-app.js';
   import { cardSide, chatNotesDecl, deletePress, markHit, notesOf } from '$lib/core/chat-notes-state.js';
   import { createChatNotes } from '$lib/client/chat-notes.js';
@@ -42,6 +45,8 @@
     status,
     conversationId,
     pane = null,
+    // The pane group's key in the layout: the address focus is kept under (kit intent record).
+    groupKey = null,
     onpane = () => {},
     onpath = () => {},
     onselect = () => {},
@@ -98,8 +103,20 @@
   let dropping = $state(false);
   let paneWidth = $state(1200);
   let railRef = $state(null);
-  let rail = $state(initialRail());
-  let autofocusThread = $state(null);
+  // Focus is the kit intent record's (tools/docstore-kit/lib/intent.js, one owner for every pane, side thread and document): which
+  // thread holds the caret, whether this pane is the active one and what the passage highlight paints are projections of it. The
+  // rail's folds are kit state too (core/sidechat-state.js). Nothing here focuses an element or keeps a focus flag of its own.
+  const intent = intentStore();
+  setContext('focus-pane', () => focusKey);
+  const sideStore = uiApp().use(sidechatDecl);
+  const focusKey = $derived(groupKey || `chat:${conversationId}`);
+  const collapsedThreads = $derived(conversationId ? collapsedOf($sideStore, conversationId) : []);
+  const focusedThread = $derived(threadFocus($intent, focusKey));
+  const rail = $derived({ focused: focusedThread, collapsed: collapsedThreads });
+  const sideDo = (type, payload = {}) => { if (conversationId) sideStore.dispatch(type, { key: conversationId, ...payload }); };
+  const composerAt = { kind: 'composer', id: null };
+  const focusComposerNow = () => intent.dispatch('focus', { pane: focusKey, at: composerAt });
+  const focusThreadNow = (id) => { sideDo('thread.expand', { id }); intent.dispatch('openThread', { pane: focusKey, id }); };
   let hovered = $state(null);
 
   const threads = $derived(
@@ -109,11 +126,12 @@
   const wideEnough = $derived(paneWidth >= RAIL_MIN_PANE);
   const railOpen = $derived(wideEnough && openThreads.length > 0);
   const railWidth = $derived(railWidthFor(paneWidth));
+  const highlights = $derived(highlightsFor($intent, focusKey, threads.map((thread) => thread.id), { fallback: primary }));
   const sheet = $derived(!wideEnough ? openThreads.find((thread) => thread.id === rail.focused) || null : null);
 
   $effect(() => {
-    const next = pruneRail(rail, threads.map((thread) => thread.id));
-    if (next !== rail) rail = next;
+    const ids = threads.map((thread) => thread.id);
+    untrack(() => sideDo('thread.prune', { ids }));
   });
 
   $effect(() => {
@@ -172,8 +190,7 @@
     const settings = { ...($state.snapshot(conversation?.settings) || {}), fastMode: true, reasoningEffort: 'low' };
     session.fork(id, { parentId: conversationId, title: `↳ ${label}`, sidechat: anchor, settings });
     const leaving = rail.focused;
-    rail = focusThread(rail, id);
-    autofocusThread = id;
+    focusThreadNow(id);
     if (leaving && leaving !== id) discardIfAbandoned(leaving);
     globalThis.getSelection?.()?.removeAllRanges();
     return id;
@@ -254,21 +271,10 @@
 
 
 
-  function releaseComposer() {
-    if (!SELECT_GESTURES) return;
-    if (!selectionInTranscript()) return;
-    const active = globalThis.document?.activeElement;
-    if (active && paneEl?.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) {
-      active.blur();
-    }
-    if (autofocusThread) autofocusThread = null;
-  }
-
   $effect(() => {
     if (typeof document === 'undefined') return;
     let frame = 0;
     const onchange = () => {
-      releaseComposer();
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(refreshSelection);
     };
@@ -371,7 +377,7 @@
   }
   $effect(() => {
     if (!quick || !quickBox) return;
-    quickBox.focus();
+    intent.dispatch('focus', { pane: focusKey, at: { kind: 'note', id: null } });
     growQuick();
   });
 
@@ -630,7 +636,6 @@
     if (!thread) return false;
     if (!isAbandoned(thread, { turns: conversationItems(chatState, id), draft: readDraft(id) })) return false;
     writeDraft(id, '');
-    if (autofocusThread === id) autofocusThread = null;
     session.archive(id, true);
     return true;
   }
@@ -638,8 +643,7 @@
   function focusThreadAt(x, y) {
     const id = railRef?.threadAtPoint(x, y);
     if (!id) return false;
-    rail = focusThread(rail, id);
-    autofocusThread = id;
+    focusThreadNow(id);
     return true;
   }
 
@@ -649,8 +653,7 @@
     if (selection && !selection.isCollapsed) return;
     if (peekAt(event)) return;
     if (focusThreadAt(event.clientX, event.clientY)) return;
-    if (event.target?.closest?.('[data-sidechat], [data-testid="sidechat-rail"], [data-testid="sidechat-sheet"], [data-testid="selection-bar"]')) return;
-    leaveThread();
+    // A press outside the card is a `press` on the intent record (its pointerdown listener), which takes the thread's focus away.
   }
 
   
@@ -660,54 +663,25 @@
 
 
 
-  function paneFocusIn(event) {
-    if (!rail.focused) return;
-    const target = event.target;
-    if (!target?.closest) return;
-    if (target.closest('[data-sidechat], [data-testid="sidechat-rail"], [data-testid="sidechat-sheet"]')) return;
-    if (target.tagName !== 'TEXTAREA' && target.tagName !== 'INPUT') return;
-    leaveThread();
-  }
-
-  
-  function leaveThread() {
-    const leaving = rail.focused;
-    if (!leaving) return;
-    rail = focusThread(rail, null);
-    discardIfAbandoned(leaving);
-  }
-
-  
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  // Leaving a thread INSIDE this pane (a press on the transcript, another box focused) discards one he opened and never wrote in,
+  // as it always did (the old leaveThread). Focus moving to another pane or out of every pane takes the colour away and nothing else:
+  // the card stays where it is.
+  let lastThread = null;
+  $effect(() => {
+    const now = focusedThread;
+    const before = lastThread;
+    lastThread = now;
+    if (!before || before === now) return;
+    const here = untrack(() => $intent);
+    if (here.pane === focusKey && here.at && here.at.kind !== 'chrome') untrack(() => discardIfAbandoned(before));
+  });
 
   function dismissThread(id) {
-    if (!discardIfAbandoned(id)) rail = collapseThread(rail, id);
-    if (autofocusThread === id) autofocusThread = null;
+    if (!discardIfAbandoned(id)) sideDo('thread.collapse', { id });
     globalThis.getSelection?.()?.removeAllRanges();
     selection = null;
-    // The composer focus is behind tick() because the card's textarea still holds the keyboard here.
-    tick().then(() => composer?.focus());
+    // Putting a thread away hands the caret to the composer: one transition, applied by the kit's effect once the card is gone.
+    intent.dispatch('blurThread', { pane: focusKey, id });
   }
 
   const TRIPLE_CLICK_MS = 450;
@@ -726,8 +700,7 @@
     if (stale) return;
     if (String(readDraft(id) ?? '').trim()) return;
     if (conversationItems(chatState, id).some((item) => item?.type === 'user' && String(item.text ?? '').trim())) return;
-    if (rail.focused === id) rail = focusThread(rail, null);
-    if (autofocusThread === id) autofocusThread = null;
+    if (rail.focused === id) intent.dispatch('blurThread', { pane: focusKey, id });
     writeDraft(id, '');
     session.archive(id, true);
   }
@@ -822,7 +795,7 @@
     // `Composer.insert` appends to whatever is already in the draft rather than replacing it,
     // so a refusal answered while he is mid-sentence costs him neither text.
     if (entry.text) composer?.insert(entry.text);
-    composer?.focus();
+    focusComposerNow();
   }
 
   function discardRejected(entry) {
@@ -1012,7 +985,7 @@
   const prefs = uiApp().use(prefsDecl);
 
   export function openFind() { setFinding(true); }
-  export function focusComposer() { composer?.focus(); }
+  export function focusComposer() { focusComposerNow(); }
   /** ⌘A away from a text field: this chat's whole transcript, rather than everything on the page (tophat-md/tophat#5). */
   export async function selectTranscript() {
     const id = conversationId;
@@ -1124,7 +1097,7 @@
     collapsed={rail.collapsed}
     wide={wideEnough}
     {railWidth}
-    autofocusId={autofocusThread}
+    {highlights}
     hoverBlock={hovered}
     oncomment={() => openThread(anchorFromBlock(hovered))}
     {selection}
@@ -1141,11 +1114,6 @@
     onquickkey={quickKey}
     onquickbeforeinput={quickBeforeInput}
     onquickbox={(el) => (quickBox = el)}
-    onfocus={(id) => {
-      const leaving = rail.focused;
-      rail = focusThread(rail, id);
-      if (leaving && leaving !== id) discardIfAbandoned(leaving);
-    }}
     oncollapse={(id) => dismissThread(id)}
     {onnewchat}
   />
@@ -1154,11 +1122,11 @@
 
 <section
   class="pane"
+  data-focus-pane={focusKey}
   class:secondary={!primary}
   bind:this={paneEl}
   bind:clientWidth={paneWidth}
   onpointerdowncapture={onfocus}
-  onfocusincapture={paneFocusIn}
   data-testid={primary ? 'pane-primary' : 'pane-secondary'}
 >
   <ChatHeader
@@ -1199,6 +1167,7 @@
     
     <div
       class="reading"
+      data-focus-at="transcript"
       onclick={transcriptClick}
       ondblclick={transcriptDblClick}
       onpointermove={transcriptPointerMove}
@@ -1275,8 +1244,6 @@
           {chatState}
           thread={sheet}
           focused
-          autofocus={autofocusThread === sheet.id}
-          onfocus={() => { rail = focusThread(rail, sheet.id); }}
           oncollapse={() => dismissThread(sheet.id)}
           {onnewchat}
         />
@@ -1339,7 +1306,7 @@
     speed={$prefs.voice.speed}
     handsFree={$prefs.voice.handsFree}
     onsettings={(change) => prefs.dispatch('voice.set', change)}
-    onclosed={() => composer?.focus()}
+    onclosed={focusComposerNow}
   />
   {/if}
 </section>

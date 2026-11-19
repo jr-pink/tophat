@@ -111,10 +111,17 @@ test('an OAuth grant is stored with its issuer, account, scopes and expiry', t =
   assert.equal(value.clientId, null);
 });
 
-test('an OAuth grant without any token, issuer or account is refused', t => {
+test('an OAuth grant needs no issuer; a missing or blank one is stored as null', t => {
+  const m = fixture(t);
+  assert.equal(m.save(grant({issuer: undefined})).issuer, null);
+  assert.equal(m.save({...grant({issuer: '  '}), id: 'service-blank'}).issuer, null);
+  assert.equal(m.value(m.entry(m.catalog(), 'service')).issuer, null);
+  assert.throws(() => m.save({...grant({issuer: 42}), id: 'service-bad'}), /issuer/);
+});
+
+test('an OAuth grant without any token or account is refused', t => {
   const m = fixture(t);
   assert.throws(() => m.save(grant({accessToken: null, refreshToken: null})), /access or refresh token/);
-  assert.throws(() => m.save(grant({issuer: ''})), /issuer/);
   assert.throws(() => m.save(grant({account: '  '})), /account/);
   assert.throws(() => m.save(grant({expiresAt: 'whenever'})), /expiry/);
   assert.throws(() => m.save(grant({scopes: ['ok', 42]})), /scopes/);

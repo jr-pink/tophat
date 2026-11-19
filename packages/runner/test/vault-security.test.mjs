@@ -117,11 +117,14 @@ test('an entry without a real id is refused rather than written as the string un
 test('generated passwords are long, unique and bounded',()=>{
   const sample=Array.from({length:200},()=>generatePassword());
   assert.equal(new Set(sample).size,200);
-  assert(sample.every(p=>/^[a-zA-Z2-9]{6}-[a-zA-Z2-9]{6}-[a-zA-Z2-9]{6}$/.test(p)&&(p.match(/[A-Z]/g)||[]).length===1&&(p.match(/[2-9]/g)||[]).length===1));
-  assert(Array.from({length:50},()=>generatePassword(24)).every(p=>p.length===24&&/^[\x21-\x7e]+$/.test(p)));
-  assert.equal(generatePassword(64).length,64);
-  assert.throws(()=>generatePassword(8),/12 to 128/);
-  assert.throws(()=>generatePassword(1.5),/12 to 128/);
+  assert(sample.every(p=>/^[A-Za-z0-9]{6}-[A-Za-z0-9]{6}-[A-Za-z0-9]{6}$/.test(p)&&(p.match(/[A-Z]/g)||[]).length===1&&(p.match(/[2-9]/g)||[]).length===1));
+  // a bare length never silently changes the shape (2026-11-17: --length 24 made a symbol password)
+  assert.throws(()=>generatePassword(24),/Apple style/);
+  assert.throws(()=>generatePassword({length:24}),/Apple style/);
+  assert(Array.from({length:50},()=>generatePassword({dense:24})).every(p=>p.length===24&&/^[\x21-\x7e]+$/.test(p)));
+  assert.equal(generatePassword({dense:64}).length,64);
+  assert.throws(()=>generatePassword({dense:8}),/12 to 128/);
+  assert.throws(()=>generatePassword({dense:1.5}),/12 to 128/);
 });
 
 test('an expired unlock zeroes the master key without waiting for the next call',async t=>{

@@ -94,6 +94,8 @@ A dead pid alone is deliberately NOT the test: every tophat-cdp invocation is it
 
 **Reaping releases the NAME and leaves the TAB open.** Nothing an agent opened disappears under its owner; the tab simply stops being spoken for and the next `job claim` can adopt it.
 
+**Tabs nobody holds are closed after an idle hour.** Left alone, abandoned tabs pile up in the shared Chrome (25 pages were 10 GB on 2026-11-18). Every reap (`job list`, `job claim`, auto-claim, `job reap`) also closes a page that no live job holds, that is not protected, and whose url and title have not changed for `$TOPHAT_CDP_TAB_TTL` seconds (default 3600; `0` turns it off). The registry keeps its own idle clock in `tab-seen.json` beside the jobs directory, because Chrome keeps none. An abandoned `--ephemeral` claim (its caller was killed before `job release --close`) has its tab closed at once; the last open page is never closed. `job reap` prints `closedTabs`.
+
 ### The failure this exists for
 
 

@@ -1,7 +1,9 @@
 <script>
-  import { tick } from 'svelte';
+  import { getContext, tick } from 'svelte';
+  import { intentStore } from '$lib/client/intent.js';
   import { filesFromPaste, pendingAttachment, readDraft, reportUploadFailure, reservePaths, stillTransferring, uploadFile, uploadPercent, withAttachments, writeDraft } from '$lib/core/attachments.js';
   import { activeUploads, uploadJournal } from '$lib/client/upload-journal.js';
+  const PENDING = 'pending:';
   import { committedDraft, narrowWrite, nextCaret, nextDraftRuns, runIntact } from '$lib/services/voice/core/dictation.js';
   import { PAD_SEC } from '$lib/services/voice/core/alternatives.js';
   import { fitReplacement, phraseForRange, wordRangeAt } from '$lib/services/voice/core/tapword.js';
@@ -25,6 +27,8 @@
     online = true,
     placeholder = 'Message…',
     autofocus = false,
+    // The pane this composer sits in, for a host that is not a ChatPane (a ChatPane provides it by context).
+    focusPane = null,
     pending = false,
     note = null,
     noteAt = null,
@@ -132,12 +136,14 @@
     for (const [index, file] of list.entries()) {
       const entry = entries[index];
       const path = reserved[index]?.path || null;
+      const record = { key: entry.key, name: entry.name, size: entry.size, lastModified: file.lastModified || null, type: file.type || '', owner: draftKey };
       if (path) {
         patchAttachment(entry.key, { path });
-        uploadJournal().start({
-          path, key: entry.key, name: entry.name, size: entry.size,
-          lastModified: file.lastModified || null, type: file.type || '', owner: draftKey
-        }, file);
+        uploadJournal().start({ path, ...record }, file);
+      } else {
+        // Offline (or the server is down): journal the file under a provisional path now, so a reload
+        // keeps it queued; uploadFile reserves a real path when it can and moves the record.
+        uploadJournal().start({ path: `${PENDING}${entry.key}`, ...record }, file);
       }
       queueUpload(() => runUpload(entry, file, path));
     }
@@ -152,11 +158,18 @@
       patchAttachment(entry.key, patch);
       onuploadprogress?.(entry.key, { name: entry.name, size: entry.size, ...patch });
     };
-    if (path) activeUploads.add(path);
+    activeUploads.add(path || `${PENDING}${entry.key}`);
     report({ state: 'uploading', loaded: 0, total: entry.size || 0, retrying: null });
     return uploadFile(file, {
       path,
       journal: uploadJournal(),
+      onreserve: async (reservedPath) => {
+        patchAttachment(entry.key, { path: reservedPath });
+        activeUploads.add(reservedPath);
+        path = reservedPath;
+        await uploadJournal().start({ path: reservedPath, key: entry.key, name: entry.name, size: entry.size, lastModified: file.lastModified || null, type: file.type || '', owner: draftKey }, file);
+        await uploadJournal().done(`${PENDING}${entry.key}`);
+      },
       onprogress: ({ loaded, total }) => report({ state: 'uploading', loaded, total }),
       onstatus: ({ retrying, reason }) => report({ retrying: `retry ${retrying}: ${reason}` })
     })
@@ -174,10 +187,10 @@
         }
         report({ state: 'failed', error: reason, retrying: null });
         onuploadfail?.(entry.key, { name: entry.name, error: reason });
-        uploadJournal().done(path);
+        uploadJournal().done(path || `${PENDING}${entry.key}`);
         reportUploadFailure({ path, name: entry.name, reason, conversationId: draftKey });
       })
-      .finally(() => { if (path) activeUploads.delete(path); });
+      .finally(() => { if (path) activeUploads.delete(path); activeUploads.delete(`${PENDING}${entry.key}`); });
   }
 
   // Uploads a reload interrupted, for this chat: picked up from the journal and continued from the
@@ -191,7 +204,8 @@
       for (const record of records) {
         if (!record?.path || activeUploads.has(record.path)) continue;
         const file = record.stored ? await uploadJournal().file(record.path) : null;
-        const entry = { ...pendingAttachment({ name: record.name, size: record.size }), key: record.key || record.path, path: record.path, resumed: true, sent: !!record.sent };
+        const unreserved = record.path.startsWith(PENDING);
+        const entry = { ...pendingAttachment({ name: record.name, size: record.size }), key: record.key || record.path, path: unreserved ? null : record.path, resumed: true, sent: !!record.sent };
         attachments = [...attachments, entry];
         if (!file) {
           const reason = 'the page reloaded before it finished uploading, and the file was too large to keep for resuming; attach it again';
@@ -202,7 +216,7 @@
           continue;
         }
         const named = file instanceof File ? file : new File([file], record.name, { type: record.type || '' });
-        queueUpload(() => runUpload(entry, named, record.path, { resumed: !!record.sent }));
+        queueUpload(() => runUpload(entry, named, unreserved ? null : record.path, { resumed: !!record.sent }));
       }
     });
   });
@@ -214,7 +228,7 @@
     const files = [...(event.dataTransfer?.files || [])];
     if (!files.length) return;
     take(files);
-    field?.focus();
+    takeFocus();
   }
 
   let depth = 0;
@@ -469,7 +483,7 @@
       const caret = Number.isFinite(result.write.caret) ? result.write.caret : null;
       const place = () => {
         if (!field) return;
-        field.focus({ preventScroll: true });
+        takeFocus();
         if (caret === null) return;
         const at = Math.min(caret, field.value.length);
         try { field.setSelectionRange(at, at); } catch {  }
@@ -724,7 +738,7 @@
     if (runs.length) runStep({ type: 'typed' });
     tick().then(measureGhost);
     measure('dictation_alternative', { token: open.token, from: open.range.text, to: replacement });
-    field.focus({ preventScroll: true });
+    takeFocus();
     return true;
   }
 
@@ -890,14 +904,22 @@
     if (event.key === 'Escape' && running) { event.preventDefault(); oninterrupt(); }
   }
 
-  $effect(() => { if (autofocus && field) field.focus(); });
+  // Focus is the kit intent record's (tools/docstore-kit/lib/intent.js): asking for the caret is one `focus` transition, applied by
+  // the kit's one DOM effect; this component never touches focus itself.
+  const intent = intentStore();
+  const paneContext = getContext('focus-pane');
+  function takeFocus() {
+    const pane = focusPane || paneContext?.() || null;
+    if (pane) intent.dispatch('focus', { pane, at: { kind: 'composer', id: null } });
+  }
+  $effect(() => { if (autofocus && field) takeFocus(); });
 
   $effect(() => {
     if (!provenance || !field) return;
     try { return provenance.attach(field); } catch { return undefined; }
   });
 
-  export function focus() { field?.focus(); }
+  export function focus() { takeFocus(); }
   export function textField() { return field; }
   export function draftText() { return text; }
   export function staged() { return attachments; }
@@ -905,7 +927,7 @@
     const list = [...(files || [])];
     if (!list.length) return;
     take(list);
-    field?.focus();
+    takeFocus();
   }
 
   
@@ -924,7 +946,7 @@
     tick().then(() => {
       if (!field) return;
       if (!focus) return;
-      field.focus({ preventScroll: true });
+      takeFocus();
       const at = field.value.length;
       field.setSelectionRange(at, at);
     });
@@ -989,6 +1011,7 @@
   class:dragging
   role="group"
   bind:this={composerEl}
+  data-focus-pane={focusPane}
 >
   <input bind:this={filePicker} type="file" multiple hidden onchange={pickFiles} data-testid="file-picker" />
   <button type="button" class="attach press focus-ring" onclick={() => filePicker?.click()} aria-label="Attach files" title="Attach files">
@@ -1010,6 +1033,8 @@
     {placeholder}
     rows="1"
     data-testid="composer"
+    data-focus-at="composer"
+    data-focus-field
     aria-label="Message"
   ></textarea>
   {#if ghost}

@@ -1,9 +1,10 @@
 <script>
-  import { onMount, tick, setContext } from 'svelte';
+  import { onMount, tick, setContext, untrack } from 'svelte';
   import { afterNavigate, replaceState as navReplaceState } from '$app/navigation';
   import Nav from '$lib/ui/Nav.svelte';
   import BackgroundChat from '$lib/ui/BackgroundChat.svelte';
   import Sidebar from '$lib/ui/Sidebar.svelte';
+  import { freezePhotos } from '$lib/ui/photo-freeze.js';
   import ChatPane from '$lib/ui/ChatPane.svelte';
   import Quicklook from '$lib/ui/Quicklook.svelte';
   import SearchPalette from '$lib/ui/SearchPalette.svelte';
@@ -18,6 +19,7 @@
   import { scopeForNewChat } from '$lib/core/scopes.svelte.js';
   import { pruneFolds } from '$lib/client/fold-store.js';
   import { documentTitle, automatedTitle } from '$lib/core/title.js';
+  import { queueStyle as queueTitleStyle, readStyle as readTitleStyle, sync as syncTitleStyle } from '$lib/core/title-style.js';
   import TabStrip from '$lib/ui/TabStrip.svelte';
   import { dropTarget, landingIndex } from '$lib/core/tab-drag.js';
   import { languageOf, warmTokens } from '$lib/core/highlight.js';
@@ -42,6 +44,7 @@
   import { isIncognito } from '$lib/core/incognito.js';
   import { sidebarDecl } from '$lib/core/sidebar-state.js';
   import { uiApp } from '$lib/client/ui-app.js';
+  import { intentStore } from '$lib/client/intent.js';
 
   const session = createSession();
 
@@ -160,12 +163,16 @@
 
   const sidebarShown = $derived(wide ? !sidebarHidden : sidebarOpen);
   const navInSidebar = $derived(wide && sidebarShown);
+  let titleStyle = $state(readTitleStyle());
+  const refreshTitleStyle = () => syncTitleStyle().then((style) => { titleStyle = style; });
   const navItems = $derived([
     { id: 'chatlist', label: sidebarShown ? 'Hide chat list' : 'Show chat list' },
     { id: 'search', label: 'Search everything' },
     { id: 'incognito', label: 'Incognito chat' },
     
     { id: 'voice', label: 'Voice mode' },
+    // How the titler names chats (core/title-style.js): what each is about, or what each is doing now.
+    { id: 'titles', label: titleStyle === 'actions' ? 'Title chats by subject' : 'Title chats by current action' },
     { id: 'onboarding', label: 'Replay tour' }
   ]);
   let replayRequest = $state(0);
@@ -225,6 +232,10 @@
     if (id === 'incognito') newIncognitoChat();
     if (id === 'voice') paneRefs[layout.focused]?.openVoice?.();
     if (id === 'onboarding') replayRequest += 1;
+    if (id === 'titles') {
+      titleStyle = queueTitleStyle(titleStyle === 'actions' ? 'subjects' : 'actions');
+      refreshTitleStyle();
+    }
   }
 
   onMount(() => {
@@ -240,6 +251,7 @@
         chatInUrl: new URLSearchParams(location.search).get('chat'), opener: window.opener, seen
       }));
     } catch { /* storage refused: the list stays where it was */ }
+    refreshTitleStyle();
     const unsubscribeIncognito = incognito.session.subscribe((next, nextStatus) => {
       incognitoState = next;
       incognitoStatus = nextStatus;
@@ -480,8 +492,12 @@
     }, { silent: archived });
     lastHoveredChat = null;
     if (!archived || !open) return;
-    // With other tabs open, archiving a chat on screen closes its tab. Alone, the chat is replaced by the next one down
-    // the sidebar, else the blank chat.
+    closeChatTab(id, next);
+  }
+
+  // The one way a chat he has put away leaves the screen. With other tabs open its tab is dropped. Alone, the pane is
+  // first given the next chat down the sidebar, else the blank chat, so it never holds something he has put away.
+  function closeChatTab(id, next) {
     if (openChatIds.length > 1) { pane('pane.drop', { ids: [id] }); return settlePanes(); }
     if (next) select(next);
     else if (!transientId) openTransient();
@@ -519,10 +535,17 @@
     if (event.key.toLowerCase() === 'e' && (command || plain) && !event.isComposing
         && !searching && !quicklook && !insideModal(event.target)) {
       const id = hoveredChat || activeId;
-      if (!id || state.conversations[id]?.archived) return;
+      if (!id) return;
+      const archivedNow = Boolean(state.conversations[id]?.archived);
+      // Cmd-E on a chat that is already archived has nothing to archive, but if its tab is still open it closes it, as the
+      // archive would have. No archive call and no undo entry; a chat that is not open is left alone.
+      if (archivedNow && !openChatIds.includes(id)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (!event.repeat) archiveChat(id, true);
+      if (!event.repeat) {
+        if (archivedNow) closeChatTab(id, nextAfterArchive(sidebarOrder(), id, { hovered: lastHoveredChat, hoveredAt: lastHoveredAt }));
+        else archiveChat(id, true);
+      }
       hoveredChat = null;
       return;
     }
@@ -557,7 +580,7 @@
     const to = paneNeighbour(layout, key === 'h' ? -1 : 1);
     if (to === null) return;
     focusPane(to);
-    tick().then(() => paneRefs[to]?.focusComposer());
+    focusComposerOf(to);
   }
 
   // Ctrl-Q, then one key, works the panes and their tabs as a tmux prefix does. The key after the prefix is always taken, so
@@ -604,7 +627,7 @@
     if (chord === 'search') { searching = true; return; }
     if (chord === 'cycle-list') {
       if (wide && sidebarShown && !sidebarRef?.hasListFocus?.()) { sidebarRef?.focusList?.(); return; }
-      tick().then(() => paneRefs[layout.focused]?.focusComposer());
+      focusComposerOf(layout.focused);
       return;
     }
     if (chord === 'split-tab') splitActiveTab();
@@ -631,7 +654,7 @@
     // The pane focused afterwards takes the keyboard, as Ctrl-H and Ctrl-L leave it. A close can leave the focus on a
     // folded pane (a rail), which has no composer: the nearest open pane takes it instead.
     if (layout.panels.length && layout.collapsed[layout.focused]) focusPane(paneNeighbour(layout, 1) ?? paneNeighbour(layout, -1) ?? layout.collapsed.indexOf(false));
-    if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
+    if (wide) focusComposerOf(layout.focused);
   }
 
   // The prefix, its second key, Ctrl-Shift-U / Ctrl-Shift-D and a Mac's Ctrl-C, in the capture phase ahead of every other
@@ -718,10 +741,7 @@
       }
       return;
     }
-    if (!event.metaKey && !event.ctrlKey && !event.altKey && !searching && !quicklook
-        && event.key.length === 1 && !typingInAField(event.target) && !insideModal(event.target)) {
-      paneRefs[layout.focused]?.focusComposer();
-    }
+    // Typing with nothing focused is the intent record's `typeToFocus` (kit intent-dom.js): it goes to the owner box, a side thread included.
   }
 
   // `preview` (a plain click in the sidebar): the chat opens as the focused group's preview tab, replacing the untouched one
@@ -765,6 +785,22 @@
     for (const panel of layout.panels) session.hydrate(panel);
     replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
   }
+
+  // Where his attention goes is the kit intent record (tools/docstore-kit/lib/intent.js), one owner for every pane, side thread and
+  // document. A pane opened, switched to or typed into carries focus INTO its composer by one transition; the kit's DOM effect waits
+  // for a pane that has not mounted yet, so a new pane takes the next keystroke.
+  const intent = intentStore();
+  const focusComposerOf = (index) => { const key = paneStore.get().layout.keys[index]; if (key) intent.dispatch('openPane', { pane: key }); };
+  // The layout's focused group follows the record: a press or move that put the intent in another pane makes it the focused one.
+  // Only a change of the RECORD drives this (the layout is read untracked): a layout change that has not reached the record yet, a
+  // pane just opened, must not be undone by the record's old value.
+  $effect(() => {
+    const key = $intent.pane;
+    untrack(() => {
+      const at = key ? layout.keys.indexOf(key) : -1;
+      if (at >= 0 && at !== layout.focused) pane('pane.focus', { index: at });
+    });
+  });
 
   function focusPane(index) {
     pane('pane.focus', { index });
@@ -861,13 +897,13 @@
     settlePanes();
     const now = layout.panels[layout.focused];
     if (now && now !== before) session.touch(now);
-    if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
+    if (wide) focusComposerOf(layout.focused);
   }
 
   // Split the active tab into a group on its right (Cmd-\).
   function activateAfter() {
     settlePanes();
-    if (wide) tick().then(() => paneRefs[layout.focused]?.focusComposer());
+    if (wide) focusComposerOf(layout.focused);
   }
   function splitActiveTab() {
     const group = layout.keys[layout.focused];
@@ -1044,6 +1080,8 @@
       }
     }
     document.querySelector('main')?.classList.add('resizing');
+    const main = document.querySelector('main');
+    const unfreezePhotos = main ? freezePhotos(main, (img) => img.closest('.vrow')?.style.contentVisibility !== 'hidden') : () => {};
     let lastX = dragFromX;
     let pending = null;
     let frame = 0;
@@ -1069,6 +1107,7 @@
       window.removeEventListener('pointercancel', onUp);
       cancelAnimationFrame(frame);
       document.querySelector('main')?.classList.remove('resizing');
+      unfreezePhotos();
       for (const row of skipped) { row.style.contentVisibility = ''; }
     };
   });
@@ -1115,7 +1154,7 @@
   // is done: landing in this chat is only useful if he can type into it straight away.
   afterNavigate(() => {
     if (!transientId || !wide) return;
-    tick().then(() => paneRefs[layout.focused]?.focusComposer());
+    focusComposerOf(layout.focused);
   });
 
   // Leaving the transient chat for any other chat ends it. Empty, it is dropped and no server
@@ -1162,7 +1201,7 @@
     incognito.open(id, newChatSettings());
     replaceState(location.pathname, {});
     await tick();
-    paneRefs[layout.focused]?.focusComposer();
+    focusComposerOf(layout.focused);
   }
 
   // An incognito chat that is in no pane, nor under a chat that is (a fork or side thread of one), is over: the
@@ -1198,7 +1237,7 @@
     });
     if (reuse) {
       await tick();
-      paneRefs[layout.focused]?.focusComposer();
+      focusComposerOf(layout.focused);
       return;
     }
     const id = session.newConversationId();
@@ -1210,7 +1249,7 @@
     sidebarOpen = false;
     replaceState(`?chat=${encodeURIComponent(activeId)}`, {});
     await tick();
-    paneRefs[layout.focused]?.focusComposer();
+    focusComposerOf(layout.focused);
   }
 
   let quicklookTrail = $state([]);
@@ -1432,6 +1471,7 @@
             chatState={stateFor(panelId)}
             status={statusFor(panelId)}
             conversationId={panelId}
+            groupKey={layout.keys[index]}
             primary={index === layout.focused}
             autofocus={wide && panelId === transientId}
             pane={wide ? { index, count: layout.panels.length, max: MAX_PANELS, tabs: layout.tabs[index].length, zoomed: layout.panels.length > 1 && layout.collapsed.every((shut, i) => i === index || shut) } : null}

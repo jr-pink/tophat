@@ -70,7 +70,7 @@ export function placeMenu({ x, y, w, h, vw, vh, margin = 4 }) {
   let left = x, top = y;
   if (left + w + margin > vw) left = Math.max(margin, x - w);
   if (top + h + margin > vh) top = Math.max(margin, vh - h - margin);
-  return { left: Math.max(margin, left), top: Math.max(margin, top) };
+  return { left: Math.max(margin, Math.min(left, vw - w - margin)), top: Math.max(margin, top) }; // flipped, then held inside the window (a point past its edge)
 }
 
 /** Where a submenu sits beside its parent row (a DOMRect-like box): to the right, else to the left. */

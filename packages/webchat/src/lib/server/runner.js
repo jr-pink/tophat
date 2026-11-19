@@ -1874,7 +1874,7 @@ export function createRunner({
     
     
     
-    send(conversationId, text, { itemId = newId(), display = text, attribution = null,
+    send(conversationId, text, { itemId = newId(), display = text, cards = null, attribution = null,
       userTimestamp = null, lineage = null, participantId = null, recovery = false, writer = null } = {}) {
       const conversation = store.conversation(conversationId);
       if (!conversation) throw new Error(`Unknown conversation ${conversationId}`);
@@ -1890,6 +1890,7 @@ export function createRunner({
       const priorProviderActivity = live.has(conversationId);
       const wasRunning = live.get(conversationId)?.machine.phase === PHASES.RUNNING;
       if (!recovery) emit(conversationId, null, 'message.user', { itemId, text: display,
+        ...(cards?.length ? { cards } : {}), // the rendered card of an automated event (core/event-cards.js); display only, never sent to the model
         ...(participantId ? { participantId } : {}),
         ...(writer ? { writer } : {}), // who wrote it: a member of the group on a hosted chat (core of rev6/base/writer-scope.mjs)
         ...(beforeDispatch ? { attribution, userTimestamp, lineage, evaluationCapture: 'pending' } : {}) });
