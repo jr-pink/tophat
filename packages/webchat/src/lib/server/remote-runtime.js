@@ -79,7 +79,7 @@ export function seedTranscript(events, { after = 0, exclude = null, cap = SEED_C
   for (const e of events) {
     if (e.cursor <= after) continue;
     const c = e.content || {};
-    if (exclude && c.itemId === exclude) continue;
+    if (exclude && (Array.isArray(exclude) ? exclude.includes(c.itemId) : c.itemId === exclude)) continue;
     if (e.kind === 'message.user' && c.text) {
       const own = unseeded(c.text);
       if (own && !(lastOwner === own && !spoke && String(c.itemId || '').startsWith('rt:'))) { lines.push(`Owner: ${own}`); lastOwner = own; spoke = false; }
@@ -412,20 +412,26 @@ export function createRemoteRuntimes({
 
   function sendRemote(id, wire, { itemId, display = wire, runtimeId, reason }) {
     let twin = twins[id];
+    let carried = [];
     if (twin && twin.runtime !== runtimeId) {
       // The chat moved to another host: a new twin there. A turn still running on the old host runs on in the background: its twin is kept
       // under its own key with its own stream, so its output keeps landing here (the same as a local turn left running).
       detach(id);
-      if (twin.busy && twin.remoteId && !twin.pending.length) { twins[retiredKey(id, twin)] = twin; delete twins[id]; attach(retiredKey(id, twin)); }
+      // Messages of his the old host has not been given yet follow him to the new one, in order and before this one (a twin is flushed
+      // under the chat's id only, so they cannot be left behind on a retired twin, and dropping them lost them silently).
+      carried = twin.pending.splice(0).map((p) => ({ ...p, text: unseeded(p.text) }));
+      if (twin.busy && twin.remoteId) { twin.pending = []; twins[retiredKey(id, twin)] = twin; delete twins[id]; attach(retiredKey(id, twin)); }
       twin = null;
     }
     if (!twin) twin = twins[id] = newTwin(runtimeId, id);
     if (twin.sentIds.includes(itemId) || twin.pending.some((p) => p.itemId === itemId)) return { queued: false, injected: false, duplicate: true };
     if (twin.localSeen == null) twin.localSeen = store.cursor();
     // What the host has not seen: everything after the last turn it ran (the whole chat on the first send).
-    const seed = seedTranscript(store.allConversationEvents(id), { after: twin.remoteSeen, exclude: itemId });
-    const text = withSeed(seed, wire, twin.remoteId ? 'elsewhere' : 'on another host');
+    const seed = seedTranscript(store.allConversationEvents(id), { after: twin.remoteSeen, exclude: [itemId, ...carried.map((p) => p.itemId)] });
+    // The seed rides on the first message the host will read; carried messages (already unseeded) go first.
+    const text = carried.length ? wire : withSeed(seed, wire, twin.remoteId ? 'elsewhere' : 'on another host');
     const wasBusy = twin.busy;
+    carried.forEach((p, i) => twin.pending.push({ ...p, text: i === 0 ? withSeed(seed, p.text, 'on another host') : p.text }));
     twin.pending.push({ itemId, text, display, at: now() });
     twin.busy = true;
     twin.sentAt = now();

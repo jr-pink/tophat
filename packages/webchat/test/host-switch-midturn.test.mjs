@@ -56,3 +56,41 @@ test('a turn on one peer while another peer is picked: the send goes to the pick
   const { rr } = setup(t, { host: 'other', twin: busyTwin('peer') });
   assert.equal(rr.route('c1').runtime, 'other');
 });
+
+// The composition the browser reaches: the runner the app sends through is wrap(local). A message after a host pick while a turn runs
+// must reach the picked host, never the busy runner of the old one (where it would be steered into the running turn).
+function wrapped(t, { host = null, twin = null, localBusy = false } = {}) {
+  const { rr, conv } = setup(t, { host, twin });
+  const calls = [];
+  const local = {
+    isBusy: () => localBusy, phase: () => (localBusy ? 'running' : 'idle'), interrupt: () => false, warm: () => false,
+    send: (id, text, options) => { calls.push({ id, text, options }); return { queued: false, injected: localBusy }; }
+  };
+  return { runner: rr.wrap(local), rr, conv, calls };
+}
+
+test('wrap.send: local turn running, host switched to the peer: the message does not reach the local runner', (t) => {
+  const { runner, conv, calls, rr } = wrapped(t, { host: null, localBusy: true });
+  conv.host = 'peer'; // the browser's set_host landed first
+  runner.send('c1', 'hello', { itemId: 'm1' });
+  assert.equal(calls.length, 0, 'steered into the busy local turn instead of going to the peer');
+  assert.equal(rr.twin('c1')?.runtime, 'peer');
+  assert.equal(rr.twin('c1').pending.length, 1);
+});
+
+test('wrap.send: peer turn running, host switched to this host: the message reaches the local runner as a new turn', (t) => {
+  const { runner, conv, calls } = wrapped(t, { host: 'peer', twin: busyTwin('peer'), localBusy: false });
+  conv.host = null;
+  const out = runner.send('c1', 'hello', { itemId: 'm1' });
+  assert.equal(calls.length, 1);
+  assert.equal(out.injected, false);
+});
+
+test('wrap.send: a send to a second peer while the first peer\'s message is still unforwarded does not drop the first', (t) => {
+  const first = { ...busyTwin('peer'), remoteId: null, pending: [{ itemId: 'm0', text: 'first', display: 'first', at: 0 }] };
+  const { runner, conv, rr } = wrapped(t, { host: 'peer', twin: first });
+  conv.host = 'other';
+  runner.send('c1', 'second', { itemId: 'm1' });
+  const all = Object.values(rr.twins()).flatMap((x) => x.pending.map((p) => p.itemId));
+  assert.deepEqual(all.sort(), ['m0', 'm1'], 'the unforwarded first message was lost with its twin');
+});
