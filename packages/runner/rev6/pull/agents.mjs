@@ -12,6 +12,17 @@ import { progressDigest } from './progress.mjs';
 import { isBackgroundTurn } from './background.mjs';
 import { doorOf, withDoorNotice } from '../base/door-tag.mjs';
 
+// A forking child starts as a real copy of the parent's session (ledger.fork: same rows, same compaction marks, so the replayed history is byte
+// for byte the parent's and the provider's prompt cache can serve it). Tool calls the parent has not answered yet (the Agent call being made,
+// and its siblings in the same message) get a result in the child's first user turn, which also carries the new task.
+export function forkOpening(rows, prompt) {
+  const answered = new Set();
+  for (const r of rows) if (r.role === 'user') for (const p of r.content) if (p.type === 'tool_result') answered.add(p.tool_use_id);
+  const open = rows.flatMap((r) => (r.role === 'assistant' ? r.content.filter((p) => p.type === 'tool_use' && !answered.has(p.id)) : []));
+  return [...open.map((p) => ({ type: 'tool_result', tool_use_id: p.id, content: p.name === 'Agent' ? 'Subagent started: you are it, a fork of this conversation. Your task is in the next block.' : '[pending in the parent when the fork was taken; its outcome is not part of your task]' })),
+    { type: 'text', text: String(prompt) }];
+}
+
 export function checkInInterval(env = process.env) {
   const given = env.TOPHAT_RUNNER_AGENT_CHECKIN_MS;
   if (given === undefined || String(given).trim() === '') return 180_000;
@@ -207,7 +218,7 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
   return {
     resumeInterrupted,
     interruptedCount: () => interrupted.length,
-    async spawn({ description, prompt, model: wanted, wait = false, check_in_seconds: checkIn, kind, expected_minutes: expected }, callId) {
+    async spawn({ description, prompt, model: wanted, wait = false, check_in_seconds: checkIn, kind, expected_minutes: expected, fork = true }, callId) {
       if (runningCount() >= limits.concurrent) return { error: `${runningCount()} subagents are already running (limit ${limits.concurrent}); wait for one with agent_wait or cancel one` };
       if (!prompt || !description) return { error: 'description and prompt are required' };
       const id = `agent_${randomUUID().slice(0, 8)}`, session = `${parentSessionId}/agent/${id}`;
@@ -218,7 +229,9 @@ export function createAgents({ ledger, parentSessionId, cwd, roots = [], env = p
       q('INSERT INTO agents (id, parent_session, session_id, spawn_call, description, prompt, model, status, created_at, checkin_ms, owner_pid, caller, expected_minutes, door) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(id, parentSessionId, session, callId || null, String(description).slice(0, 200), brief, wanted || model, 'running', now(), checkinMs, process.pid, kind === 'search' ? 'subagent-search' : 'subagent-build', expectedMinutes, turnDoor?.grant || '');
       ledger.ensureSession(session, { model: wanted || model, cwd, forkedFrom: parentSessionId, at: now() });
-      ledger.append(session, 'user', 'owner', [{ type: 'text', text: brief }], now());
+      const forking = fork !== false && fork !== 'false';
+      if (forking) ledger.fork(parentSessionId, session);
+      ledger.append(session, 'user', 'owner', forking ? forkOpening(ledger.active(session), brief) : [{ type: 'text', text: brief }], now());
       launch(id);
       if (!wait) return { agent_id: id, status: 'running', note: 'running in the background; its report arrives on its own when it ends, waking this conversation if nothing else is happening, or ask with agent_wait' };
       const [done] = await waitFor([id], limits.waitMs);
