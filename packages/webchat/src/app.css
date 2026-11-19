@@ -11,10 +11,10 @@
   --ink: #e8e6e3;
   --ink-dim: #a1a09c;
   --ink-faint: #6d6c69;
-  --accent: #8bace4;
-  --accent-soft: #8bace422;
+  --accent: #e6a0a6;
+  --accent-soft: #e6a0a622;
   --live: #6fbf8b;
-  --warn: #e5484d;
+  --warn: #d9695c;
   --sans: ui-sans-serif, -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
   --serif: 'Iowan Old Style', 'Charter', 'Source Serif 4', Georgia, serif;
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
@@ -50,10 +50,10 @@
     --ink: #1b1a18;
     --ink-dim: #56544f;
     --ink-faint: #8b8880;
-    --accent: #4468a7;
-    --accent-soft: #4468a71a;
+    --accent: #b45c6e;
+    --accent-soft: #b45c6e1a;
     --live: #2f7d4f;
-    --warn: #c62828;
+    --warn: #b03b2c;
     color-scheme: light;
   }
 }
@@ -113,7 +113,7 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 
 .prose ul, .prose ol { padding-left: 1.4em; }
 .prose ul { list-style: disc outside; }
-.prose ol { list-style: decimal outside; padding-left: 2.5em; } /* room for 3-digit outside markers */
+.prose ol { list-style: decimal outside; }
 .prose ul ul { list-style: circle outside; }
 .prose ul ul ul { list-style: square outside; }
 .prose li { margin-bottom: 0.3em; }
